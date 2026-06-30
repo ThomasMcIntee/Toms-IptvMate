@@ -11,7 +11,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 const RELAY_PATH = "/__stream";
 const TRANSCODE_PATH = "/__transcode";
 const REDIRECT_LIMIT = 5;
-const CURRENT_TRANSCODE_PROFILE = "mpegts-v18";
+const CURRENT_TRANSCODE_PROFILE = "mpegts-v20";
 const TRANSCODE_MANIFEST_WAIT_MS = 60000;
 const TRANSCODE_INIT_WAIT_MS = 60000;
 const TRANSCODE_SEGMENT_WAIT_MS = 30000;
@@ -40,6 +40,7 @@ type TranscodeSession = {
   audioMode: AudioMode;
   audioPipeline: "aac-transcode" | "aac-copy" | null;
   profile: string;
+  movieInputAttempts: string[];
   baseDir: string;
   dir: string;
   playlistPath: string;
@@ -81,11 +82,16 @@ function reapStaleTranscodeSessions() {
   }
 }
 
-function getTranscodeSessionId(sourceUrl: string, audioEnabled: boolean, audioMode: AudioMode): string {
+function getTranscodeSessionId(
+  sourceUrl: string,
+  audioEnabled: boolean,
+  audioMode: AudioMode,
+  sessionKeySalt = ""
+): string {
   const avLabel = audioEnabled ? "av" : "video-only";
   return crypto
     .createHash("sha1")
-    .update(`${CURRENT_TRANSCODE_PROFILE}|${avLabel}|${audioEnabled ? audioMode : "na"}|${sourceUrl}`)
+    .update(`${CURRENT_TRANSCODE_PROFILE}|${avLabel}|${audioEnabled ? audioMode : "na"}|${sourceUrl}|${sessionKeySalt}`)
     .digest("hex")
     .slice(0, 16);
 }
@@ -262,19 +268,46 @@ function normalizeProblematicLiveSourceUrl(sourceUrl: string): string {
   return sourceUrl;
 }
 
+function normalizeProblematicVodSourceUrl(sourceUrl: string): string {
+  // Some Xtream VOD providers block .m3u8 requests but serve .mkv or .mp4 directly.
+  // Try .mkv container format instead of HLS manifest (.m3u8) for better provider compatibility.
+  if (/\/(movie|series)\/[^/]+\/[^/]+\/\d+\.m3u8(?:\?|$)/i.test(sourceUrl)) {
+    return sourceUrl.replace(/\.m3u8(?=\?|$)/i, ".mkv");
+  }
+
+  return sourceUrl;
+}
+
 function shouldPreferRelayInput(sourceUrl: string): boolean {
-  // Some VOD movie endpoints return upstream 5xx when FFmpeg connects directly,
-  // while the same URL works through the local relay path.
-  return /\/movie\/[^/]+\/[^/]+\/\d+\.[a-z0-9]+(?:\?|$)/i.test(sourceUrl);
+  // Temporarily disabled relay for VOD to test direct FFmpeg input
+  const isLiveLike = /\/(live)\/[^/]+\/[^/]+\/\d+\.[a-z0-9]+(?:\?|$)/i.test(sourceUrl);
+  return isLiveLike;
+}
+
+function buildDirectInputHeaderArgs(inputUrl: string): string[] {
+  try {
+    const parsed = new URL(inputUrl);
+    const origin = `${parsed.protocol}//${parsed.host}`;
+    const headers = `Referer: ${origin}/\r\nOrigin: ${origin}\r\n`;
+    return ["-headers", headers];
+  } catch {
+    return [];
+  }
 }
 
 function startTranscoder(session: TranscodeSession) {
   const now = Date.now();
+  const isVodSession = /\/(movie|series)\//i.test(session.sourceUrl);
+  const attemptedMovieInputs =
+    Array.isArray(session.movieInputAttempts) && session.movieInputAttempts.length > 0
+      ? session.movieInputAttempts
+      : [session.sourceUrl];
+  session.movieInputAttempts = attemptedMovieInputs;
 
   if (!session.proc || session.proc.killed) {
     // If this session already has a playable playlist+segment set, avoid
     // needlessly respawning ffmpeg on subsequent requests.
-    if (sessionHasPlayableOutput(session)) {
+    if (!isVodSession && sessionHasPlayableOutput(session)) {
       session.nextSpawnAllowedAt = 0;
       return;
     }
@@ -298,9 +331,11 @@ function startTranscoder(session: TranscodeSession) {
   }
 
   const shouldUseRelayFirst = shouldPreferRelayInput(session.sourceUrl);
-  const allowDirectFallback = !shouldUseRelayFirst;
+  // Even when relay-first is preferred, allow fallback to direct input when relay
+  // still returns persistent upstream 5xx responses for a given provider.
+  const allowDirectFallback = true;
   if (shouldUseRelayFirst && session.inputMode !== "relay") {
-    // Enforce relay-first ingest for movie VOD URLs even on reused sessions.
+    // Enforce relay-first ingest for live-style sources on reused sessions.
     // If a stale direct worker is active, recycle it so the next spawn uses relay.
     session.inputMode = "relay";
     session.hasTriedDirectInputFallback = false;
@@ -315,6 +350,14 @@ function startTranscoder(session: TranscodeSession) {
     }
   }
 
+  if (!shouldUseRelayFirst && session.inputMode !== "direct" && !session.hasTriedRelayInputFallback) {
+    // Non-live sources (movie/series VOD) should start direct-first, but once
+    // relay fallback is selected for this session we must preserve relay mode.
+    session.inputMode = "direct";
+    session.hasTriedDirectInputFallback = true;
+    session.hasTriedRelayInputFallback = false;
+  }
+
   if (session.proc && !session.proc.killed) {
     return;
   }
@@ -327,50 +370,25 @@ function startTranscoder(session: TranscodeSession) {
   const effectiveInputMode: "relay" | "direct" = shouldUseRelayFirst ? "relay" : session.inputMode;
   const inputUrl = effectiveInputMode === "direct" ? session.sourceUrl : session.relaySourceUrl;
 
+  const sourceForModeCheck = (() => {
+    try {
+      return decodeURIComponent(session.sourceUrl);
+    } catch {
+      return session.sourceUrl;
+    }
+  })();
+  const isLiveLikeSource = /\/live\//i.test(sourceForModeCheck) || /%2Flive%2F/i.test(session.sourceUrl);
+  const isVodLikeSource = /\/(movie|series)\//i.test(sourceForModeCheck) || /%2F(movie|series)%2F/i.test(session.sourceUrl);
   const useFmp4Segments = false;
+  const useOpusAudio = false;
   const segmentPattern = path.join(session.dir, useFmp4Segments ? "seg_%06d.m4s" : "seg_%06d.ts");
   const preferredAudioStreamOrder = session.probeInfo.preferredAudioStreamOrder;
-  const audioMap =
-    typeof preferredAudioStreamOrder === "number" ? `0:a:${preferredAudioStreamOrder}?` : "0:a:0?";
-  const shouldCopyAacAudio = false;
-  session.audioPipeline = session.audioEnabled ? "aac-transcode" : null;
+  const audioMap = typeof preferredAudioStreamOrder === "number"
+    ? `0:a:${preferredAudioStreamOrder}?`
+    : "0:a:0?";
+  const useMp3Audio = false;
   const audioSampleRate = "48000";
-  const audioBitrate = session.audioMode === "safe" ? "64k" : session.audioMode === "compat" ? "96k" : "128k";
-  const audioArgs = session.audioEnabled
-    ? shouldCopyAacAudio
-      ? [
-          "-map",
-          audioMap,
-          "-c:a",
-          "copy",
-          "-bsf:a",
-          "aac_adtstoasc",
-          "-disposition:a:0",
-          "default",
-          "-metadata:s:a:0",
-          "language=eng"
-        ]
-      : [
-          "-map",
-          audioMap,
-          "-c:a",
-          "aac",
-          "-profile:a",
-          "aac_low",
-          "-b:a",
-          audioBitrate,
-          "-ac",
-          "2",
-          "-ar",
-          audioSampleRate,
-          "-af",
-          `aresample=async=1:first_pts=0:osr=${audioSampleRate}`,
-          "-disposition:a:0",
-          "default",
-          "-metadata:s:a:0",
-          "language=eng"
-        ]
-    : ["-an"];
+  const audioBitrate = "128k";
   const videoArgs = [
     "-c:v",
     "libx264",
@@ -406,15 +424,54 @@ function startTranscoder(session: TranscodeSession) {
           "15000000"
         ]
       : [];
-  const sourceForModeCheck = (() => {
-    try {
-      return decodeURIComponent(session.sourceUrl);
-    } catch {
-      return session.sourceUrl;
-    }
-  })();
-  const isLiveLikeSource = /\/live\//i.test(sourceForModeCheck) || /%2Flive%2F/i.test(session.sourceUrl);
-  const isVodLikeSource = /\/(movie|series)\//i.test(sourceForModeCheck) || /%2F(movie|series)%2F/i.test(session.sourceUrl);
+  const directInputHeaderArgs = effectiveInputMode === "direct" ? buildDirectInputHeaderArgs(inputUrl) : [];
+  const probeArgs = isVodLikeSource
+    ? [
+        "-analyzeduration",
+        "15000000",
+        "-probesize",
+        "15000000"
+      ]
+    : [
+        "-analyzeduration",
+        "2000000",
+        "-probesize",
+        "2000000"
+      ];
+  const sourceIsAac = session.probeInfo.audioCodecName === "aac";
+  const shouldCopyAacAudio = false; // Always transcode audio for consistent output
+  session.audioPipeline = session.audioEnabled ? (useOpusAudio ? "opus" : shouldCopyAacAudio ? "aac-copy" : "aac-transcode") : null;
+  const audioArgs = session.audioEnabled
+    ? useOpusAudio
+      ? [
+          "-map",
+          audioMap,
+          "-c:a",
+          "libopus",
+          "-b:a",
+          "128k",
+          "-ac",
+          "2",
+          "-ar",
+          "48000",
+          "-vbr",
+          "on"
+        ]
+      : [
+          "-map",
+          audioMap,
+          "-c:a",
+          "aac",
+          "-b:a",
+          audioBitrate,
+          "-ac",
+          "2",
+          "-ar",
+          audioSampleRate,
+          "-metadata:s:a:0",
+          "language=eng"
+        ]
+    : ["-an"];
   const hlsOutputArgs = (isVodLikeSource && !isLiveLikeSource)
     ? [
         "-hls_time",
@@ -460,11 +517,9 @@ function startTranscoder(session: TranscodeSession) {
     "error",
     "-user_agent",
     "Mozilla/5.0 IPTVmate Relay",
+    ...directInputHeaderArgs,
     ...transportArgs,
-    "-analyzeduration",
-    "2000000",
-    "-probesize",
-    "2000000",
+    ...probeArgs,
     "-err_detect",
     "ignore_err",
     "-fflags",
@@ -501,6 +556,7 @@ function startTranscoder(session: TranscodeSession) {
   let relaySocketErrorCount = 0;
   let requestedDirectFallback = false;
   let sawDirectServer5xx = false;
+  let requestedDirectVariantRetry = false;
   let requestedRelayFallback = false;
   let directSocketErrorCount = 0;
   let requestedDirectRestart = false;
@@ -551,7 +607,41 @@ function startTranscoder(session: TranscodeSession) {
 
         if (!session.hasTriedRelayInputFallback && !requestedRelayFallback) {
           requestedRelayFallback = true;
-          console.warn(`[transcode] session=${session.id} direct input returned upstream 5xx, retrying via relay input`);
+          console.warn(
+            `[transcode] session=${session.id} direct input returned upstream 5xx, switching to relay before direct variant retries`
+          );
+          try {
+            ff.kill();
+          } catch {
+            // If kill fails, natural process exit path may still trigger fallback.
+          }
+          return;
+        }
+      }
+
+      if (
+        effectiveInputMode === "direct" &&
+        /Stream ends prematurely/i.test(message) &&
+        !session.hasTriedRelayInputFallback &&
+        !requestedRelayFallback
+      ) {
+        requestedRelayFallback = true;
+        console.warn(`[transcode] session=${session.id} direct input ended prematurely, switching to relay input`);
+        try {
+          ff.kill();
+        } catch {
+          // If kill fails, natural process exit path may still trigger fallback.
+        }
+      }
+
+      if (
+        effectiveInputMode === "relay" &&
+        allowDirectFallback &&
+        (/Server returned 5XX Server Error reply/i.test(message) || /Server returned 5\d\d/i.test(message))
+      ) {
+        if (!session.hasTriedDirectInputFallback && !requestedDirectFallback) {
+          requestedDirectFallback = true;
+          console.warn(`[transcode] session=${session.id} relay path returned upstream 5xx, retrying with direct input`);
           try {
             ff.kill();
           } catch {
@@ -594,6 +684,15 @@ function startTranscoder(session: TranscodeSession) {
       return;
     }
 
+    if (requestedDirectVariantRetry && session.inputMode === "direct") {
+      session.lastError = null;
+      session.proc = null;
+      setTimeout(() => {
+        startTranscoder(session);
+      }, 150);
+      return;
+    }
+
     if (
       (sawDirectServer5xx || requestedRelayFallback) &&
       session.inputMode === "direct" &&
@@ -633,11 +732,12 @@ function getOrCreateTranscodeSession(
   sourceUrl: string,
   audioEnabled: boolean,
   audioMode: AudioMode,
-  host: string | undefined
+  host: string | undefined,
+  sessionKeySalt?: string
 ): TranscodeSession {
   sourceUrl = normalizeProblematicLiveSourceUrl(sourceUrl);
   const preferRelayInput = shouldPreferRelayInput(sourceUrl);
-  const id = getTranscodeSessionId(sourceUrl, audioEnabled, audioMode);
+  const id = getTranscodeSessionId(sourceUrl, audioEnabled, audioMode, sessionKeySalt);
   const existing = transcodeSessions.get(id);
   if (existing) {
     if (
@@ -662,10 +762,16 @@ function getOrCreateTranscodeSession(
 
     // Re-apply input preference for resumed sessions.
     if (!existing.proc || existing.proc.killed) {
+      const sourceChanged = existing.sourceUrl !== sourceUrl;
       existing.sourceUrl = sourceUrl;
       existing.inputMode = preferRelayInput ? "relay" : "direct";
       existing.hasTriedDirectInputFallback = preferRelayInput ? false : true;
       existing.hasTriedRelayInputFallback = preferRelayInput ? true : false;
+      if (sourceChanged) {
+        existing.movieInputAttempts = [sourceUrl];
+      } else if (!existing.movieInputAttempts.length) {
+        existing.movieInputAttempts = [sourceUrl];
+      }
     }
     existing.directInputRestartCount = 0;
     existing.relaySourceUrl = toRelayInputUrl(host, sourceUrl);
@@ -689,6 +795,7 @@ function getOrCreateTranscodeSession(
     audioMode,
     audioPipeline: null,
     profile: CURRENT_TRANSCODE_PROFILE,
+    movieInputAttempts: [sourceUrl],
     baseDir,
     dir,
     playlistPath,
@@ -770,7 +877,7 @@ function isLikelyManifest(contentType: string | string[] | undefined, targetUrl:
   return /\.m3u8(\?|$)/i.test(targetUrl);
 }
 
-function getMovieVariantFallbackUrls(targetUrl: string): string[] {
+function getMovieVariantFallbackUrls(targetUrl: string, statusCode?: number): string[] {
   let parsed: URL;
   try {
     parsed = new URL(targetUrl);
@@ -784,16 +891,26 @@ function getMovieVariantFallbackUrls(targetUrl: string): string[] {
 
   const [, basePath, currentExtRaw] = match;
   const currentExt = currentExtRaw.toLowerCase();
-  // Prefer transport/HLS variants first; keep MKV as final rescue path for
-  // providers where only MKV returns playable bytes for specific movie IDs.
-  const extensionOrder = ["ts", "m3u8", "mkv", "mp4"];
+  // For VOD, providers more commonly serve file-container variants (mkv/mp4)
+  // than transport/HLS endpoints. Try those first to reduce upstream 5xx/551 loops.
+  // Some providers return 551 specifically for HLS probes; in that case skip m3u8.
+  const extensionOrder = statusCode === 551
+    ? ["mkv", "mp4", "ts"]
+    : ["mkv", "mp4", "ts", "m3u8"];
   const alternatives = extensionOrder.filter((ext) => ext !== currentExt);
 
-  return alternatives.map((ext) => {
+  const variantUrls = alternatives.map((ext) => {
     const next = new URL(parsed.toString());
     next.pathname = `${basePath}.${ext}`;
     return next.toString();
   });
+
+  // Some Xtream providers accept extension-less movie paths for VOD where
+  // extension-specific routes return upstream 55x.
+  const extensionless = new URL(parsed.toString());
+  extensionless.pathname = basePath;
+
+  return [...variantUrls, extensionless.toString()];
 }
 
 function parseMovieVariant(targetUrl: string): { basePath: string; ext: string; url: URL } | null {
@@ -876,8 +993,11 @@ async function fetchAndRelay(
       secureOptions: crypto.constants.SSL_OP_LEGACY_SERVER_CONNECT,
       servername: parsed.hostname,
       headers: {
-        "user-agent": "Mozilla/5.0 IPTVmate Relay",
-        accept: "*/*"
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 IPTVmate/1.0",
+        accept: "*/*",
+        "accept-language": "en-US,en;q=0.9",
+        referer: `${parsed.protocol}//${parsed.host}/`,
+        origin: `${parsed.protocol}//${parsed.host}`
       }
     },
     (upstreamRes) => {
@@ -892,7 +1012,7 @@ async function fetchAndRelay(
       }
 
       if (status >= 500) {
-        const fallbacks = getMovieVariantFallbackUrls(parsed.toString());
+        const fallbacks = getMovieVariantFallbackUrls(parsed.toString(), status);
         const nextFallback = fallbacks.find((candidate) => !attemptedUrls.has(candidate));
         if (nextFallback) {
           console.warn(`[relay] upstream ${status} for ${parsed.toString()} -> retrying ${nextFallback}`);
@@ -905,7 +1025,9 @@ async function fetchAndRelay(
       if (status >= 200 && status < 300) {
         const resolvedMovieVariant = parseMovieVariant(parsed.toString());
         if (resolvedMovieVariant) {
-          movieVariantCache.set(resolvedMovieVariant.basePath, resolvedMovieVariant.ext);
+          if (resolvedMovieVariant.ext !== "m3u8") {
+            movieVariantCache.set(resolvedMovieVariant.basePath, resolvedMovieVariant.ext);
+          }
         }
       }
 
@@ -950,6 +1072,15 @@ async function fetchAndRelay(
     }
 
     res.end();
+  });
+
+  upstream.setTimeout(30000, () => {
+    upstream.destroy();
+    if (!res.headersSent) {
+      res.statusCode = 504;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Relay upstream timeout");
+    }
   });
 
   upstream.end();
@@ -1031,7 +1162,11 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
       return;
     }
 
-    const sourceUrl = normalizeProblematicLiveSourceUrl(requestedSourceUrl);
+    let sourceUrl = normalizeProblematicLiveSourceUrl(requestedSourceUrl);
+    sourceUrl = normalizeProblematicVodSourceUrl(sourceUrl);
+    const isVodBootstrapTarget = /\/(movie|series)\//i.test(sourceUrl) || /%2F(movie|series)%2F/i.test(sourceUrl);
+    const normalizedAudioMode: AudioMode =
+      audioEnabled && isVodBootstrapTarget && audioMode === "standard" ? "compat" : audioMode;
 
     let parsed: URL;
     try {
@@ -1048,11 +1183,36 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
       return;
     }
 
-    const session = getOrCreateTranscodeSession(sourceUrl, audioEnabled, audioMode, req.headers.host);
+    const sessionKeySalt =
+      audioEnabled && isVodBootstrapTarget
+        ? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+        : undefined;
+    const session = getOrCreateTranscodeSession(
+      sourceUrl,
+      audioEnabled,
+      normalizedAudioMode,
+      req.headers.host,
+      sessionKeySalt
+    );
     if (shouldPreferRelayInput(sourceUrl)) {
       session.inputMode = "relay";
       session.hasTriedDirectInputFallback = false;
       session.hasTriedRelayInputFallback = true;
+    } else {
+      // Reset any stale relay-mode state for non-live sessions so each new
+      // playback attempt starts direct-first.
+      const wasRelay = session.inputMode === "relay";
+      session.inputMode = "direct";
+      session.hasTriedDirectInputFallback = true;
+      session.hasTriedRelayInputFallback = false;
+      if (wasRelay && session.proc && !session.proc.killed) {
+        try {
+          session.proc.kill();
+        } catch {
+          // Ignore kill errors; startTranscoder() will handle current process state.
+        }
+        session.proc = null;
+      }
     }
     session.relaySourceUrl = toRelayInputUrl(req.headers.host, sourceUrl);
     startTranscoder(session);
@@ -1090,6 +1250,24 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
+  const isVodSession = /\/(movie|series)\//i.test(session.sourceUrl) || /%2F(movie|series)%2F/i.test(session.sourceUrl);
+  const isPlaylistFile = safeFile === "master.m3u8" || safeFile === "index.m3u8";
+  if (session.audioEnabled && isVodSession && session.audioMode === "standard" && isPlaylistFile) {
+    const compatSession = getOrCreateTranscodeSession(
+      session.sourceUrl,
+      true,
+      "compat",
+      req.headers.host,
+      `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    );
+    compatSession.relaySourceUrl = toRelayInputUrl(req.headers.host, compatSession.sourceUrl);
+    startTranscoder(compatSession);
+    res.statusCode = 302;
+    res.setHeader("Location", `${TRANSCODE_PATH}/session/${compatSession.id}/${safeFile}`);
+    res.end();
+    return;
+  }
+
   session.relaySourceUrl = toRelayInputUrl(req.headers.host, session.sourceUrl);
   if (shouldPreferRelayInput(session.sourceUrl)) {
     session.inputMode = "relay";
@@ -1107,13 +1285,6 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
   }
 
   session.lastUsed = Date.now();
-  const fullPath = path.join(session.dir, safeFile);
-
-  if (!fullPath.startsWith(session.dir)) {
-    res.statusCode = 403;
-    res.end("Invalid file path");
-    return;
-  }
 
   // Serve a synthetic master playlist that declares both video and audio codecs.
   // This forces hls.js to demux both streams from the transcoded MPEG-TS segments
@@ -1126,11 +1297,16 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
     }
 
     const bandwidth = session.audioMode === "safe" ? 1500000 : session.audioMode === "compat" ? 1700000 : 2000000;
-    const transcodedCodecLine = `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},AVERAGE-BANDWIDTH=${bandwidth},CODECS="avc1.4d4028,mp4a.40.2",FRAME-RATE=30`;
+    // Declare an explicit AUDIO rendition group so stricter TV players bind
+    // audio tracks deterministically instead of relying on implicit muxed-track detection.
+    const transcodedAudioMediaLine =
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Stereo",DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="eng",URI="index.m3u8"';
+    const transcodedCodecLine = `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},AVERAGE-BANDWIDTH=${bandwidth},CODECS="avc1.4d4028,mp4a.40.2",FRAME-RATE=30,AUDIO="audio"`;
     const masterPlaylist = [
       "#EXTM3U",
       "#EXT-X-VERSION:6",
       "#EXT-X-INDEPENDENT-SEGMENTS",
+      transcodedAudioMediaLine,
       transcodedCodecLine,
       "index.m3u8",
       ""
@@ -1146,7 +1322,17 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
 
   const waitUntil = Date.now() + getTranscodeFileWaitMs(safeFile);
   const tryServe = () => {
+    const activeDir = session.dir;
+    const fullPath = path.join(activeDir, safeFile);
+
+    if (!fullPath.startsWith(activeDir)) {
+      res.statusCode = 403;
+      res.end("Invalid file path");
+      return;
+    }
+
     if (fs.existsSync(fullPath)) {
+      console.log(`[transcode-serve] session=${sessionId} file=${safeFile} run=${path.basename(activeDir)} exists=true size=${fs.statSync(fullPath).size}`);
       res.statusCode = 200;
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Content-Type", contentTypeForFile(safeFile));
@@ -1163,7 +1349,22 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
           const firstSegIdx = raw.search(/^seg_/m);
           if (firstSegIdx > 0) {
             const header = raw.slice(0, firstSegIdx).replace(/^#EXT-X-DISCONTINUITY\r?\n/gm, "");
-            const cleaned = header + raw.slice(firstSegIdx);
+            let cleaned = header + raw.slice(firstSegIdx);
+
+            // Some VOD encodes produce ~2.5s segments while FFmpeg keeps
+            // #EXT-X-TARGETDURATION at 2, which can cause clients to reload
+            // playlists without progressing to segment playback.
+            const extInfDurations = Array.from(cleaned.matchAll(/#EXTINF:([0-9]+(?:\.[0-9]+)?)/g))
+              .map((match) => Number(match[1]))
+              .filter((duration) => Number.isFinite(duration) && duration > 0);
+            if (extInfDurations.length > 0) {
+              const normalizedTarget = Math.ceil(Math.max(...extInfDurations));
+              if (/^#EXT-X-TARGETDURATION:\d+/m.test(cleaned)) {
+                cleaned = cleaned.replace(/^#EXT-X-TARGETDURATION:\d+/m, `#EXT-X-TARGETDURATION:${normalizedTarget}`);
+              }
+            }
+
+            console.log(`[transcode-serve] session=${sessionId} file=${safeFile} stripped-discontinuity=true lines=${cleaned.split('\n').length}`);
             res.end(cleaned);
             return;
           }
@@ -1172,10 +1373,14 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
         }
       }
 
+      console.log(`[transcode-serve] session=${sessionId} file=${safeFile} run=${path.basename(activeDir)} piping=${true}`);
       fs.createReadStream(fullPath).pipe(res);
       return;
     }
 
+     if (Date.now() >= waitUntil) {
+      console.log(`[transcode-serve] session=${sessionId} file=${safeFile} run=${path.basename(activeDir)} timeout exists=${fs.existsSync(fullPath)}`);
+     }
     if (Date.now() < waitUntil) {
       setTimeout(tryServe, 60);
       return;
@@ -1195,6 +1400,7 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
 }
 
 export default defineConfig({
+  base: "./",
   plugins: [
     react({ fastRefresh: false }),
     {

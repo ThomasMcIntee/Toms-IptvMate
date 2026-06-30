@@ -7,22 +7,44 @@ import { PlayerOSD } from "./ui/PlayerOSD";
 import { PanelsHost } from "./ui/PanelsHost";
 import { useProfile } from "./profiles/ProfileContext";
 import { initNavigation } from "./core/navigation";
-import { initPlayerEngine, playUrl } from "./core/playerEngine";
+import { initPlayerEngine, playUrl, stopPlayback } from "./core/playerEngine";
 import { GroupList } from "./ui/GroupList";
+import { sortChannelsByName, type ItemSortDirection } from "./ui/groupSorting";
 import {
   getAllChannels,
   getGroups,
+  isFavoriteChannel,
   isChannelVisible,
   isGroupVisible,
+  resetVisibilityForCurrentChannels,
+  restoreChannelsCache,
+  setChannelFavorite,
   setChannelVisible,
   setChannels,
-  setGroupVisible
+  setGroupVisible,
+  setGroupsVisible
 } from "./core/channelStore";
 import NowNextOverlay from "./ui/NowNextOverlay";
 import { loadPlaylists } from "./core/playlistStore";
 import { loadEPGForPlaylist } from "./core/loaders/epgLoader";
+import { getEPG, getEPGForChannel, setEPG } from "./core/epgStore";
 import MainMenuScreen from "./ui/MainMenuScreen";
 import { loadFromAnyPlaylist } from "./core/loaders/playlistLoader";
+import { loadXtreamSeriesEpisodesFromChannel } from "./core/loaders/xtreamLoader";
+import { loadXtreamEPGForStream } from "./core/loaders/xtreamEPG";
+import SeriesEpisodePicker from "./ui/SeriesEpisodePicker";
+
+const ROOT_GROUP = "Favorites";
+const MAX_SERIES_SEARCH_RESULTS = 120;
+const MAX_SERIES_SEARCH_SCAN = 40000;
+const SERIES_SEARCH_MIN_TERM_LENGTH = 3;
+const SERIES_LAST_WATCH_KEY = "iptvmate_series_last_watch";
+const SERIES_SEARCH_KEY_ROWS = [
+  ["A", "B", "C", "D", "E", "F", "G", "H", "I"],
+  ["J", "K", "L", "M", "N", "O", "P", "Q", "R"],
+  ["S", "T", "U", "V", "W", "X", "Y", "Z", "0"],
+  ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+];
 
 export function App() {
   const { profile } = useProfile();
@@ -36,31 +58,83 @@ export function App() {
   const [showNowNext, setShowNowNext] = useState(false);
   const [showOpeningScreen, setShowOpeningScreen] = useState(true);
   const [categoryRefreshTick, setCategoryRefreshTick] = useState(0);
-  const [activeGroup, setActiveGroup] = useState("All");
+  const [activeGroup, setActiveGroup] = useState(ROOT_GROUP);
   const [contentMode, setContentMode] = useState<"tv" | "movies" | "series">("tv");
+  const [showLiveMenu, setShowLiveMenu] = useState(true);
+  const [hasSelectedLiveChannel, setHasSelectedLiveChannel] = useState(false);
+  const [isFullscreenActive, setIsFullscreenActive] = useState(false);
+  const [isLiveFullscreenRequested, setIsLiveFullscreenRequested] = useState(false);
+  const [isSeriesPickerVisible, setIsSeriesPickerVisible] = useState(false);
+  const [seriesPickerLoading, setSeriesPickerLoading] = useState(false);
+  const [seriesPickerError, setSeriesPickerError] = useState<string | null>(null);
+  const [seriesPickerTitle, setSeriesPickerTitle] = useState("");
+  const [seriesPickerEpisodes, setSeriesPickerEpisodes] = useState<any[]>([]);
+  const [seriesPickerSourceChannel, setSeriesPickerSourceChannel] = useState<any | null>(null);
+  const [isSeriesSearchComposerOpen, setIsSeriesSearchComposerOpen] = useState(false);
+  const [seriesMainSearchDraft, setSeriesMainSearchDraft] = useState("");
+  const [seriesMainSearchDebouncedTerm, setSeriesMainSearchDebouncedTerm] = useState("");
+  const [seriesMainSearchResults, setSeriesMainSearchResults] = useState<any[] | null>(null);
+  const [moviesMainSearchTerm, setMoviesMainSearchTerm] = useState("");
+    const [moviesSortDirection, setMoviesSortDirection] = useState<ItemSortDirection>(null);
   const hasPlaylists = loadPlaylists().length > 0;
-  const isLiveTvView = !showOpeningScreen && contentPage === "live" && activePanel === null;
+  const isLiveContentPage = !showOpeningScreen && contentPage === "live";
+  const isLiveTvView = isLiveContentPage && activePanel === null;
   const isMoviesPage = !showOpeningScreen && contentPage === "movies";
   const isSeriesPage = !showOpeningScreen && contentPage === "series";
   const isPlaylistManagerPage = !showOpeningScreen && contentPage === "playlistManager";
   const isPlaylistManagerMoviesMode = isPlaylistManagerPage && contentMode === "movies";
   const isPlaylistManagerSeriesMode = isPlaylistManagerPage && contentMode === "series";
+  const isMainMoviesScreen = !showOpeningScreen && isMoviesPage;
+  const isMainSeriesScreen =
+    !showOpeningScreen && (isSeriesPage || isPlaylistManagerSeriesMode) && !isSeriesPickerVisible;
+  const isEpgSearchPanelOpen = activePanel === "epgSearch";
   const isContentIconsView = isMoviesPage || isSeriesPage || isPlaylistManagerMoviesMode || isPlaylistManagerSeriesMode;
+  const isPlaylistInputPanelOpen = activePanel === "playlist";
   const isMovieOrSeriesSelected =
     !!currentChannel &&
     (matchesContentMode(currentChannel, "movies") || matchesContentMode(currentChannel, "series"));
-  const showContentPreviewWindow =
+  const isVodPlaybackFullscreen =
     !showOpeningScreen &&
     isMovieOrSeriesSelected &&
     (isMoviesPage || isSeriesPage || isPlaylistManagerMoviesMode || isPlaylistManagerSeriesMode);
+  const showContentPreviewWindow =
+    !showOpeningScreen &&
+    isMovieOrSeriesSelected &&
+    (isPlaylistManagerMoviesMode || isPlaylistManagerSeriesMode);
+  const isEffectiveLiveFullscreen =
+    contentPage === "live" && (isFullscreenActive || isLiveFullscreenRequested);
+  const forceLivePreviewLayout = !showOpeningScreen && contentPage === "live" && !hasSelectedLiveChannel;
+  const shouldRenderMainVideo = !isPlaylistInputPanelOpen && !isEpgSearchPanelOpen;
+  const useLivePreviewShell = shouldRenderMainVideo && contentPage === "live";
+  const isLiveChannelPlaying =
+    !showOpeningScreen &&
+    !!currentChannel &&
+    matchesContentMode(currentChannel, "tv") &&
+    contentPage === "live";
   const currentChannelRef = useRef<any | null>(null);
+  const suppressPlayerEventsRef = useRef(false);
+  const seriesLastWatchRef = useRef<Record<string, any>>(loadSeriesLastWatchMap());
   const lastPlayRequestRef = useRef<{ id: string | null; url: string | null; at: number }>({
     id: null,
     url: null,
     at: 0
   });
+  const seriesAutoAdvanceTokenRef = useRef(0);
+  const lastSeriesEndedRef = useRef<{ url: string | null; at: number }>({
+    url: null,
+    at: 0
+  });
+  const guidePrefetchInFlightRef = useRef(false);
+  const guidePrefetchedIdsRef = useRef<Set<string>>(new Set());
+  const guidePrefetchCursorRef = useRef(0);
 
-  const allChannels = useMemo(() => getAllChannels(), [categoryRefreshTick, currentChannel]);
+  const allChannels = useMemo(() => {
+    return getAllChannels().filter((channel) => isChannelRecord(channel));
+  }, [categoryRefreshTick, currentChannel]);
+  const hasPlayableChannels = useMemo(
+    () => allChannels.some((ch) => typeof ch?.url === "string" && ch.url.trim().length > 0),
+    [allChannels]
+  );
   const channelsByMode = useMemo(() => {
     const buckets: Record<"tv" | "movies" | "series", any[]> = {
       tv: [],
@@ -81,9 +155,9 @@ export function App() {
     return channelsByMode[contentMode];
   }, [channelsByMode, contentMode]);
   const groups = useMemo(() => {
-    const groupSet = new Set<string>(["All"]);
+    const groupSet = new Set<string>([ROOT_GROUP]);
     contentChannels.forEach((channel) => {
-      const groupName = channel.group || "Uncategorized";
+      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
       groupSet.add(groupName);
     });
     return Array.from(groupSet);
@@ -93,51 +167,298 @@ export function App() {
   }, [groups, categoryRefreshTick]);
   const visibleChannels = useMemo(() => {
     return contentChannels.filter((c) => {
-      const groupName = c.group || "Uncategorized";
-      return isGroupVisible(groupName) && isChannelVisible(c.id);
+      if (!isChannelRecord(c)) return false;
+      const groupName = (c.group && String(c.group).trim()) || "Uncategorized";
+      return isGroupVisible(groupName) && isChannelVisible(String(c.id || ""));
     });
   }, [contentChannels, categoryRefreshTick]);
+  const visibleTvChannels = useMemo(() => {
+    return channelsByMode.tv.filter((channel) => {
+      if (!isChannelRecord(channel)) return false;
+      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+      return isGroupVisible(groupName) && isChannelVisible(String(channel.id || ""));
+    });
+  }, [channelsByMode, categoryRefreshTick]);
+  const visibleTvGuideChannels = useMemo(() => {
+    return allChannels.filter((channel) => {
+      if (!isChannelRecord(channel)) return false;
+      if (!matchesContentMode(channel, "tv")) return false;
+      const channelId = String(channel.id || "");
+      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+      const epg = getEPGForChannel(channel);
+      return isGroupVisible(groupName) && isChannelVisible(channelId) && Array.isArray(epg) && epg.length > 0;
+    });
+  }, [allChannels, categoryRefreshTick]);
   const groupsForList = useMemo(() => {
-    return isLiveTvView ? visibleGroups : groups;
-  }, [isLiveTvView, visibleGroups, groups]);
+    const useVisibleOnly =
+      isLiveContentPage || isMainMoviesScreen || (isMainSeriesScreen && !isPlaylistManagerPage);
+    return useVisibleOnly ? visibleGroups : groups;
+  }, [isLiveContentPage, isMainMoviesScreen, isMainSeriesScreen, isPlaylistManagerPage, visibleGroups, groups]);
   const channelsForScope = useMemo(() => {
-    return isLiveTvView ? visibleChannels : contentChannels;
-  }, [isLiveTvView, visibleChannels, contentChannels]);
+    return isLiveContentPage ? visibleChannels : contentChannels;
+  }, [isLiveContentPage, visibleChannels, contentChannels]);
   const filteredChannels = useMemo(() => {
-    if (activeGroup === "All") return channelsForScope;
-    return channelsForScope.filter((c) => c.group === activeGroup);
-  }, [channelsForScope, activeGroup]);
+    if (activeGroup === ROOT_GROUP) {
+      return channelsForScope.filter((channel) => {
+        if (!isChannelRecord(channel)) return false;
+        return isFavoriteChannel(String(channel.id || ""));
+      });
+    }
+    return channelsForScope.filter((channel) => {
+      if (!isChannelRecord(channel)) return false;
+      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+      return groupName === activeGroup;
+    });
+  }, [channelsForScope, activeGroup, categoryRefreshTick]);
+  const searchableSeriesChannels = useMemo(() => {
+    if (!isMainSeriesScreen) return [] as any[];
+    return contentChannels.filter((channel) => {
+      if (!isChannelRecord(channel)) return false;
+      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+      return isGroupVisible(groupName);
+    });
+  }, [isMainSeriesScreen, contentChannels, categoryRefreshTick]);
+  const searchableSeriesIndex = useMemo(() => {
+    return searchableSeriesChannels.slice(0, MAX_SERIES_SEARCH_SCAN).map((channel, index) => {
+      const name = String(channel?.name || "").toLowerCase();
+      const group = String(channel?.group || "").toLowerCase();
+      return {
+        key: `${String(channel?.id || "series")}:${index}`,
+        channel,
+        haystack: `${name.slice(0, 180)} ${group.slice(0, 100)}`.trim()
+      };
+    });
+  }, [searchableSeriesChannels]);
+  const filteredChannelsForDisplay = useMemo(() => {
+    if (isMainMoviesScreen) {
+      const term = String(moviesMainSearchTerm || "").trim().toLowerCase();
+      const movies = contentChannels.filter((channel) => isChannelRecord(channel));
+      const visibleMovies = movies.filter((channel) => {
+        const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+        return isGroupVisible(groupName);
+      });
+
+      const scopedMovies =
+        activeGroup === ROOT_GROUP
+          ? visibleMovies.filter((channel) => isFavoriteChannel(String(channel.id || "")))
+          : visibleMovies.filter((channel) => {
+              const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+              return groupName === activeGroup;
+            });
+
+      const filteredMovies = !term
+        ? scopedMovies
+        : visibleMovies.filter((channel) => {
+        const name = String(channel?.name || "").toLowerCase();
+        const group = String(channel?.group || "").toLowerCase();
+        return `${name} ${group}`.includes(term);
+      });
+
+      return sortChannelsByName(filteredMovies, moviesSortDirection);
+    }
+
+    if (!isMainSeriesScreen) return filteredChannels;
+    const visibleSeriesChannels = filteredChannels.filter((channel) => {
+      if (!isChannelRecord(channel)) return false;
+      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+      return isGroupVisible(groupName);
+    });
+    const term = String(seriesMainSearchDebouncedTerm || "").trim().toLowerCase();
+    if (!term) return visibleSeriesChannels;
+    if (term.length < SERIES_SEARCH_MIN_TERM_LENGTH) return [];
+
+    return (seriesMainSearchResults ?? []).filter((channel) => {
+      if (!isChannelRecord(channel)) return false;
+      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+      return isGroupVisible(groupName);
+    });
+  }, [
+    isMainMoviesScreen,
+    moviesMainSearchTerm,
+    contentChannels,
+    activeGroup,
+    categoryRefreshTick,
+    isMainSeriesScreen,
+    filteredChannels,
+    seriesMainSearchDebouncedTerm,
+    seriesMainSearchResults,
+    moviesSortDirection
+  ]);
+  const showIdlePlayerStatus = !showOpeningScreen && !currentChannel && activePanel === null && filteredChannels.length === 0;
+
+  function commitSeriesMainSearch(nextTerm: string) {
+    setSeriesMainSearchDebouncedTerm(nextTerm);
+  }
+
+  function appendSeriesSearchDraft(fragment: string) {
+    setSeriesMainSearchDraft((current) => `${current}${fragment}`.slice(0, 32));
+  }
+
+  function backspaceSeriesSearchDraft() {
+    setSeriesMainSearchDraft((current) => current.slice(0, -1));
+  }
+
+  function applySeriesSearchDraft() {
+    commitSeriesMainSearch(seriesMainSearchDraft);
+    setIsSeriesSearchComposerOpen(false);
+  }
+
+  function exitVodPlayback() {
+    stopPlayback();
+    setCurrentChannel(null);
+    setPlayerError(null);
+    setPlayerStatus(null);
+    setPlayerWarning(null);
+    setShowNowNext(false);
+    setActivePanel(null);
+  }
+
+  function stopCurrentVodPlaybackIfNeeded() {
+    const activeChannel = currentChannelRef.current;
+    if (!activeChannel) return;
+
+    const isVodChannel =
+      matchesContentMode(activeChannel, "movies") || matchesContentMode(activeChannel, "series");
+    if (!isVodChannel) return;
+
+    exitVodPlayback();
+  }
+
+  function exitLiveTvToMenu() {
+    suppressPlayerEventsRef.current = true;
+    stopPlayback();
+
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    if (player) {
+      try {
+        player.pause();
+        player.currentTime = 0;
+        player.removeAttribute("src");
+        player.load();
+      } catch {
+        // Ignore hard-reset errors.
+      }
+    }
+
+    setCurrentChannel(null);
+    setPlayerError(null);
+    setPlayerStatus(null);
+    setPlayerWarning(null);
+    setShowNowNext(false);
+    setActivePanel(null);
+    setShowLiveMenu(true);
+    setHasSelectedLiveChannel(false);
+    setIsLiveFullscreenRequested(false);
+    setShowOpeningScreen(true);
+
+    window.setTimeout(() => {
+      suppressPlayerEventsRef.current = false;
+    }, 3000);
+  }
+
+  function exitAnyFullscreen() {
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element;
+      webkitExitFullscreen?: () => Promise<void>;
+    };
+
+    if (!document.fullscreenElement && !doc.webkitFullscreenElement) return;
+
+    if (document.exitFullscreen) {
+      void document.exitFullscreen().catch(() => {});
+      return;
+    }
+
+    if (doc.webkitExitFullscreen) {
+      void doc.webkitExitFullscreen().catch(() => {});
+    }
+  }
 
   useEffect(() => {
     if (!groupsForList.includes(activeGroup)) {
-      setActiveGroup(groupsForList[0] || "All");
+      setActiveGroup(groupsForList[0] || ROOT_GROUP);
     }
   }, [groupsForList, activeGroup]);
 
   useEffect(() => {
-    if (isLiveTvView && !isGroupVisible(activeGroup) && activeGroup !== "All") {
-      setActiveGroup("All");
+    if (isLiveContentPage && !isGroupVisible(activeGroup) && activeGroup !== ROOT_GROUP) {
+      setActiveGroup(ROOT_GROUP);
     }
-  }, [isLiveTvView, activeGroup, categoryRefreshTick]);
+  }, [isLiveContentPage, activeGroup, categoryRefreshTick]);
+
+  useEffect(() => {
+    const inSeriesContext = isSeriesPage || isPlaylistManagerSeriesMode;
+    if (!inSeriesContext && isSeriesPickerVisible) {
+      setIsSeriesPickerVisible(false);
+      setSeriesPickerLoading(false);
+      setSeriesPickerError(null);
+      setSeriesPickerEpisodes([]);
+      setSeriesPickerTitle("");
+    }
+  }, [isSeriesPage, isPlaylistManagerSeriesMode, isSeriesPickerVisible]);
+
+  useEffect(() => {
+    if (isMainSeriesScreen) return;
+    setIsSeriesSearchComposerOpen(false);
+    setSeriesMainSearchDraft("");
+    setSeriesMainSearchDebouncedTerm("");
+  }, [isMainSeriesScreen]);
+
+  useEffect(() => {
+    if (isMainMoviesScreen) return;
+    setMoviesMainSearchTerm("");
+  }, [isMainMoviesScreen]);
+
+  useEffect(() => {
+    if (!isMainSeriesScreen) {
+      setSeriesMainSearchResults(null);
+      return;
+    }
+
+    const term = String(seriesMainSearchDebouncedTerm || "").trim().toLowerCase();
+    if (!term) {
+      setSeriesMainSearchResults(null);
+      return;
+    }
+    if (term.length < SERIES_SEARCH_MIN_TERM_LENGTH) {
+      setSeriesMainSearchResults([]);
+      return;
+    }
+
+    const matches: any[] = [];
+    for (let index = 0; index < searchableSeriesIndex.length; index += 1) {
+      const entry = searchableSeriesIndex[index];
+      if (entry.haystack.includes(term)) {
+        matches.push(entry.channel);
+        if (matches.length >= MAX_SERIES_SEARCH_RESULTS) {
+          break;
+        }
+      }
+    }
+
+    setSeriesMainSearchResults(matches);
+  }, [isMainSeriesScreen, seriesMainSearchDebouncedTerm, searchableSeriesIndex]);
 
   useEffect(() => {
     initPlayerEngine();
     initNavigation((panel) => {
       if (panel === "vod") {
+        stopCurrentVodPlaybackIfNeeded();
         setContentPage("movies");
         setContentMode("movies");
         setShowOpeningScreen(false);
         setActivePanel(null);
-        setActiveGroup("All");
+        setActiveGroup(ROOT_GROUP);
         return;
       }
 
       if (panel === "series") {
+        stopCurrentVodPlaybackIfNeeded();
         setContentPage("series");
         setContentMode("series");
         setShowOpeningScreen(false);
         setActivePanel(null);
-        setActiveGroup("All");
+        setActiveGroup(ROOT_GROUP);
         return;
       }
 
@@ -145,6 +466,11 @@ export function App() {
         setContentPage("playlistManager");
         setShowOpeningScreen(false);
         setActivePanel(null);
+        return;
+      }
+
+      if (panel === "epgSearch" || panel === "timeline") {
+        void openGuidePanel(panel);
         return;
       }
 
@@ -176,17 +502,125 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    // Entering Live page without an explicit selected channel should always be preview mode.
+    if (!showOpeningScreen && contentPage === "live" && !currentChannel) {
+      setHasSelectedLiveChannel(false);
+      setShowLiveMenu(true);
+    }
+  }, [showOpeningScreen, contentPage, currentChannel]);
+
+  useEffect(() => {
+    if (!forceLivePreviewLayout) return;
+    exitAnyFullscreen();
+  }, [forceLivePreviewLayout]);
+
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      const doc = document as Document & { webkitFullscreenElement?: Element };
+      const isFullscreen = !!document.fullscreenElement || !!doc.webkitFullscreenElement;
+      setIsFullscreenActive(isFullscreen);
+
+      if (!isFullscreen && contentPage === "live") {
+        setIsLiveFullscreenRequested(false);
+        setShowLiveMenu(true);
+      }
+    };
+
+    document.addEventListener("fullscreenchange", syncFullscreenState);
+    document.addEventListener("webkitfullscreenchange", syncFullscreenState as EventListener);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", syncFullscreenState);
+      document.removeEventListener("webkitfullscreenchange", syncFullscreenState as EventListener);
+    };
+  }, [contentPage]);
+
+  useEffect(() => {
+    if (showOpeningScreen || contentPage !== "live") return;
+
+    const applyPinnedPreviewPosition = () => {
+      const margin = 20;
+      document.documentElement.style.setProperty("--live-preview-top", `${margin}px`);
+      document.documentElement.style.setProperty("--live-preview-right", `${margin}px`);
+
+      const shell = document.querySelector(".live-preview-shell") as HTMLElement | null;
+      const placeholder = document.querySelector(".live-preview-placeholder") as HTMLElement | null;
+      const referenceElement = shell ?? placeholder;
+
+      if (referenceElement) {
+        const rect = referenceElement.getBoundingClientRect();
+        document.documentElement.style.setProperty("--live-preview-width", `${Math.round(rect.width)}px`);
+        document.documentElement.style.setProperty("--live-preview-height", `${Math.round(rect.height)}px`);
+      }
+
+      [shell, placeholder].forEach((el) => {
+        if (!el) return;
+        el.style.position = "fixed";
+        el.style.top = `${margin}px`;
+        el.style.right = `${margin}px`;
+        el.style.left = "auto";
+        el.style.bottom = "auto";
+        el.style.transform = "none";
+      });
+    };
+
+    applyPinnedPreviewPosition();
+    const rafA = window.requestAnimationFrame(() => {
+      const rafB = window.requestAnimationFrame(() => {
+        applyPinnedPreviewPosition();
+      });
+      void rafB;
+    });
+    const intervalId = window.setInterval(applyPinnedPreviewPosition, 500);
+    window.addEventListener("resize", applyPinnedPreviewPosition);
+
+    return () => {
+      window.cancelAnimationFrame(rafA);
+      window.clearInterval(intervalId);
+      window.removeEventListener("resize", applyPinnedPreviewPosition);
+    };
+  }, [showOpeningScreen, contentPage, currentChannel?.id]);
+
+  useEffect(() => {
     // Re-bind to the current video element after major UI mode changes.
     initPlayerEngine();
   }, [showOpeningScreen, activePanel]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
+    const dispatchRefresh = () => {
       const event = new CustomEvent("refreshEPG");
       window.dispatchEvent(event);
-    }, 6 * 60 * 60 * 1000);
+    };
+
+    // Prime EPG on startup, then keep it fresh every 3 hours.
+    dispatchRefresh();
+    const interval = setInterval(() => {
+      dispatchRefresh();
+    }, 3 * 60 * 60 * 1000);
 
     return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (getAllChannels().length > 0) return;
+
+    let cancelled = false;
+
+    (async () => {
+      const restored = await restoreChannelsCache();
+      if (cancelled || restored.length === 0) return;
+      setCategoryRefreshTick((tick) => tick + 1);
+      try {
+        await ensureGuideEPGLoaded();
+        await prefetchGuideListingsAheadOfTime();
+      } catch {
+        // Keep app startup resilient even if guide warmup fails.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -197,10 +631,24 @@ export function App() {
 
   useEffect(() => {
     const refresh = () => {
-      const firstPlaylist = loadPlaylists()[0];
-      if (firstPlaylist) {
-        void loadEPGForPlaylist(firstPlaylist);
-      }
+      const playlists = loadPlaylists();
+      if (playlists.length === 0) return;
+
+      void (async () => {
+        for (const playlist of playlists) {
+          try {
+            await loadEPGForPlaylist(playlist);
+          } catch {
+            // Continue trying remaining playlists.
+          }
+        }
+        try {
+          await prefetchGuideListingsAheadOfTime();
+        } catch {
+          // Ignore warmup errors and keep periodic refresh alive.
+        }
+        setCategoryRefreshTick((tick) => tick + 1);
+      })();
     };
 
     window.addEventListener("refreshEPG", refresh);
@@ -210,7 +658,14 @@ export function App() {
   useEffect(() => {
     const handler = (e: Event) => {
       const custom = e as CustomEvent<any>;
-      playChannel(custom.detail);
+      const channel = custom.detail;
+      const channelId = String(channel?.id || "");
+      const groupName = (channel?.group && String(channel.group).trim()) || "Uncategorized";
+      if (!isChannelVisible(channelId) || !isGroupVisible(groupName)) {
+        return;
+      }
+
+      playChannel(channel);
     };
 
     window.addEventListener("tuneChannel", handler);
@@ -223,6 +678,7 @@ export function App() {
 
   useEffect(() => {
     const onPlayerError = (e: Event) => {
+      if (suppressPlayerEventsRef.current) return;
       if (!currentChannelRef.current) return;
 
       const custom = e as CustomEvent<{ message?: string }>;
@@ -233,9 +689,17 @@ export function App() {
     };
 
     const onPlayerPlaying = () => {
+      if (suppressPlayerEventsRef.current) return;
+      if (!currentChannelRef.current) return;
+
       // Keep UI in live-view state whenever playback is confirmed.
       setShowOpeningScreen(false);
-      setActivePanel(null);
+      setActivePanel((currentPanel) => {
+        if (currentPanel === "epgSearch" || currentPanel === "timeline") {
+          return currentPanel;
+        }
+        return null;
+      });
       setPlayerError(null);
 
       if (playerStatus && /picture-only|video-only/i.test(playerStatus)) {
@@ -246,6 +710,7 @@ export function App() {
     };
 
     const onPlayerTranscoding = (e: Event) => {
+      if (suppressPlayerEventsRef.current) return;
       if (!currentChannelRef.current) return;
 
       const custom = e as CustomEvent<{ message?: string }>;
@@ -269,15 +734,115 @@ export function App() {
   }, [playerStatus]);
 
   useEffect(() => {
+    const onPlayerEnded = () => {
+      if (suppressPlayerEventsRef.current) return;
+
+      const activeChannel = currentChannelRef.current;
+      if (!isSeriesEpisodeSelection(activeChannel)) return;
+
+      const activeUrl = String(activeChannel?.url || "");
+      if (!activeUrl) return;
+
+      // Guard against duplicate ended events from the same source.
+      const now = Date.now();
+      if (
+        lastSeriesEndedRef.current.url === activeUrl &&
+        now - lastSeriesEndedRef.current.at < 2500
+      ) {
+        return;
+      }
+      lastSeriesEndedRef.current = { url: activeUrl, at: now };
+
+      const token = ++seriesAutoAdvanceTokenRef.current;
+      const continueToNextEpisode = async () => {
+        let candidates = Array.isArray(seriesPickerEpisodes) ? seriesPickerEpisodes : [];
+        let nextEpisode = findNextSeriesEpisode(activeChannel, candidates);
+
+        if (!nextEpisode) {
+          try {
+            candidates = await loadXtreamSeriesEpisodesFromChannel(activeChannel);
+          } catch {
+            candidates = [];
+          }
+
+          if (token !== seriesAutoAdvanceTokenRef.current) return;
+
+          const currentUrl = String(currentChannelRef.current?.url || "");
+          if (!currentUrl || currentUrl !== activeUrl) return;
+
+          nextEpisode = findNextSeriesEpisode(activeChannel, candidates);
+        }
+
+        if (!nextEpisode) return;
+
+        rememberSeriesEpisode(activeChannel, nextEpisode);
+        playChannel(nextEpisode);
+      };
+
+      void continueToNextEpisode();
+    };
+
+    window.addEventListener("playerEnded", onPlayerEnded);
+    return () => {
+      window.removeEventListener("playerEnded", onPlayerEnded);
+    };
+  }, [seriesPickerEpisodes]);
+
+  useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setShowOpeningScreen(true);
+      if (isTextEntryTarget(e.target)) return;
+
+      if ((e.key === "Escape" || e.key === "Backspace") && isSeriesPickerVisible) {
+        e.preventDefault();
+        setIsSeriesPickerVisible(false);
+        return;
+      }
+
+      if ((e.key === "Escape" || e.key === "Backspace") && isVodPlaybackFullscreen) {
+        e.preventDefault();
+        exitVodPlayback();
+        return;
+      }
+
+      if ((e.key === "Escape" || e.key === "Backspace") && contentPage === "live" && isEffectiveLiveFullscreen) {
+        e.preventDefault();
+        setIsLiveFullscreenRequested(false);
+        setShowLiveMenu(true);
+        return;
+      }
+
+      if (e.key === "Escape" || e.key === "Backspace") {
+        // If a panel is open, close it. Otherwise show the main menu.
+        if (activePanel) {
+          setActivePanel(null);
+        } else {
+          if (currentChannel) {
+            exitLiveTvToMenu();
+          } else {
+            setShowOpeningScreen(true);
+          }
+        }
+      }
+
+      if (e.key === "f" || e.key === "F") {
+        e.preventDefault();
+        toggleFullscreen();
+      }
+
+      if (e.key === " " && currentChannel) {
+        e.preventDefault();
+        togglePlayPause();
+      }
+
+      if ((e.key === "m" || e.key === "M") && currentChannel) {
+        e.preventDefault();
+        toggleMute();
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [activePanel, isVodPlaybackFullscreen, currentChannel, isSeriesPickerVisible]);
 
   useEffect(() => {
     const onWindowError = (event: ErrorEvent) => {
@@ -307,6 +872,7 @@ export function App() {
     if (!isContentIconsView) return;
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if (isTextEntryTarget(e.target)) return;
       if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
 
       const movieButtons = Array.from(
@@ -395,13 +961,98 @@ export function App() {
       return rawUrl.replace(/\.m3u8(?=\?|$)/i, ".ts");
     }
 
-    // Older cached Xtream VOD entries may still point to .m3u8. Most providers
-    // expose movie streams as file containers (mp4/mkv). Use .mp4 as legacy fix.
-    if ((contentType === "movie" || contentType === "movies") && /\/movie\/[^/]+\/[^/]+\/\d+\.m3u8(?:\?|$)/i.test(rawUrl)) {
-      return rawUrl.replace(/\.m3u8(?=\?|$)/i, ".mp4");
-    }
+    // Keep legacy movie m3u8 URLs untouched. Relay/transcode fallback logic now
+    // resolves provider-specific container variants (mkv/mp4/ts) more reliably.
 
     return rawUrl;
+  }
+
+  function isTopLevelSeriesSelection(ch: any) {
+    const isSeries = String(ch?.contentType || "").toLowerCase() === "series";
+    if (!isSeries) return false;
+
+    const hasEpisodeInfo = !!(ch?.episodeInfo && typeof ch.episodeInfo === "object");
+    if (hasEpisodeInfo) return false;
+
+    const id = String(ch?.id || "");
+    const url = String(ch?.url || "");
+    return /^series_\d+$/i.test(id) && /\/series\/[^/]+\/[^/]+\/\d+\.[^/?#]+/i.test(url);
+  }
+
+  async function openSeriesEpisodePicker(seriesChannel: any) {
+    setSeriesPickerTitle(String(seriesChannel?.name || "Series"));
+    setSeriesPickerEpisodes([]);
+    setSeriesPickerError(null);
+    setSeriesPickerLoading(true);
+    setSeriesPickerSourceChannel(seriesChannel);
+    setIsSeriesPickerVisible(true);
+
+    try {
+      const episodes = await loadXtreamSeriesEpisodesFromChannel(seriesChannel);
+      setSeriesPickerEpisodes(episodes);
+
+      if (episodes.length === 0) {
+        setSeriesPickerError("No episodes found for this series.");
+      }
+    } catch {
+      setSeriesPickerError("Could not load episodes for this series.");
+    } finally {
+      setSeriesPickerLoading(false);
+    }
+  }
+
+  function getLastWatchedEpisodeForSeries(seriesChannel: any): any | null {
+    const seriesId = getSeriesRootId(seriesChannel);
+    if (!seriesId) return null;
+
+    const storedEpisode = seriesLastWatchRef.current[seriesId];
+    if (!storedEpisode || typeof storedEpisode !== "object") return null;
+    if (!storedEpisode.url || typeof storedEpisode.url !== "string") return null;
+
+    return {
+      ...storedEpisode,
+      contentType: "series"
+    };
+  }
+
+  function rememberSeriesEpisode(seriesChannel: any, episodeChannel: any) {
+    const seriesId = getSeriesRootId(seriesChannel);
+    if (!seriesId) return;
+    if (!episodeChannel || typeof episodeChannel !== "object") return;
+    if (!episodeChannel.url || typeof episodeChannel.url !== "string") return;
+
+    seriesLastWatchRef.current[seriesId] = {
+      id: String(episodeChannel.id || ""),
+      name: String(episodeChannel.name || ""),
+      logo: typeof episodeChannel.logo === "string" ? episodeChannel.logo : undefined,
+      url: String(episodeChannel.url),
+      group: typeof episodeChannel.group === "string" ? episodeChannel.group : undefined,
+      parentGroup:
+        typeof episodeChannel.parentGroup === "string"
+          ? episodeChannel.parentGroup
+          : typeof seriesChannel?.group === "string"
+            ? seriesChannel.group
+            : undefined,
+      episodeInfo:
+        episodeChannel.episodeInfo && typeof episodeChannel.episodeInfo === "object"
+          ? {
+              season:
+                typeof episodeChannel.episodeInfo.season === "number"
+                  ? episodeChannel.episodeInfo.season
+                  : undefined,
+              episode:
+                typeof episodeChannel.episodeInfo.episode === "number"
+                  ? episodeChannel.episodeInfo.episode
+                  : undefined,
+              title:
+                typeof episodeChannel.episodeInfo.title === "string"
+                  ? episodeChannel.episodeInfo.title
+                  : undefined
+            }
+          : undefined
+    };
+
+    saveSeriesLastWatchMap(seriesLastWatchRef.current);
   }
 
   function playChannel(ch: any) {
@@ -410,6 +1061,18 @@ export function App() {
       const msg = "This channel has no playable stream URL.";
       console.warn(`[playChannel] blocked: ${msg}`);
       setPlayerError(msg);
+      return;
+    }
+
+    if (isTopLevelSeriesSelection(ch)) {
+      if (isFavoriteChannel(String(ch.id || ""))) {
+        const lastEpisode = getLastWatchedEpisodeForSeries(ch);
+        if (lastEpisode) {
+          playChannel(lastEpisode);
+          return;
+        }
+      }
+      void openSeriesEpisodePicker(ch);
       return;
     }
 
@@ -432,11 +1095,19 @@ export function App() {
       at: now
     };
 
+    suppressPlayerEventsRef.current = false;
     setPlayerError(null);
     setPlayerStatus(null);
     setPlayerWarning(null);
+    const isLiveSelection = matchesContentMode(ch, "tv");
+
     setCurrentChannel(ch);
+    setIsSeriesPickerVisible(false);
     setActivePanel(null);
+    if (isLiveSelection) {
+      setHasSelectedLiveChannel(true);
+      setShowLiveMenu(true);
+    }
 
     const player = document.getElementById("player-main") as HTMLVideoElement | null;
     if (player) {
@@ -444,27 +1115,165 @@ export function App() {
       player.volume = 1;
     }
 
-    playUrl(requestUrl, false, false, 0, false, false, false, ch.contentType || "live");
+    const requestedContentType = (() => {
+      const declared = String(ch?.contentType || "").toLowerCase();
+      if (declared === "movie" || declared === "series" || declared === "live") {
+        return declared;
+      }
+
+      // Some playlists omit contentType on VOD entries. Use current UI mode as
+      // a stable fallback so movie/series selections still route through VOD
+      // playback handling (including local transcode bootstrap).
+      if (contentPage === "movies" || contentMode === "movies") return "movie";
+      if (contentPage === "series" || contentMode === "series") return "series";
+      return "live";
+    })();
+
+    if (player && requestedContentType !== "live") {
+      try {
+        player.focus({ preventScroll: true });
+      } catch {
+        player.focus();
+      }
+    }
+
+    const play = () => {
+      playUrl(requestUrl, false, false, 0, false, false, false, requestedContentType as "live" | "movie" | "series");
+    };
+
+    const playWhenVideoReady = (attempt = 0) => {
+      const player = document.getElementById("player-main") as HTMLVideoElement | null;
+      if (player) {
+        initPlayerEngine();
+        play();
+        return;
+      }
+
+      if (attempt >= 40) {
+        setPlayerStatus("Preparing player surface, retrying...");
+        return;
+      }
+
+      window.setTimeout(() => {
+        playWhenVideoReady(attempt + 1);
+      }, 100);
+    };
+
+    // Ensure preview -> live transition has committed before playback starts.
+    if (isLiveSelection && !showOpeningScreen) {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          playWhenVideoReady();
+        });
+      });
+    } else {
+      playWhenVideoReady();
+    }
     setShowNowNext(true);
     setShowOpeningScreen(false);
   }
 
+  function togglePlayPause() {
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    if (!player) return;
+
+    if (player.paused) {
+      void player.play();
+      return;
+    }
+
+    player.pause();
+  }
+
+  function toggleMute() {
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    if (!player) return;
+
+    if (player.muted || player.volume === 0) {
+      player.muted = false;
+      if (player.volume === 0) player.volume = 1;
+      return;
+    }
+
+    player.muted = true;
+  }
+
+  function toggleFullscreen() {
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    const appRoot = document.querySelector(".app-root") as HTMLElement | null;
+    if (!player && !appRoot) return;
+
+    // On webOS, native fullscreen can hide HTML overlays (custom control bar).
+    // Keep Live TV fullscreen as a CSS layout mode so controls remain visible.
+    if (contentPage === "live") {
+      setIsLiveFullscreenRequested((prev) => {
+        const next = !prev;
+        setShowLiveMenu(!next);
+        return next;
+      });
+      return;
+    }
+
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element;
+      webkitExitFullscreen?: () => Promise<void>;
+    };
+    const target = appRoot || player;
+    const targetAny = target as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void>;
+    };
+    const videoAny = player as HTMLVideoElement & {
+      webkitRequestFullscreen?: () => Promise<void>;
+      webkitEnterFullscreen?: () => void;
+    };
+
+    if (document.fullscreenElement || doc.webkitFullscreenElement) {
+      if (document.exitFullscreen) {
+        void document.exitFullscreen().catch(() => {});
+      } else if (doc.webkitExitFullscreen) {
+        void doc.webkitExitFullscreen().catch(() => {});
+      }
+      return;
+    }
+
+    if (target?.requestFullscreen) {
+      void target.requestFullscreen().catch(() => {});
+      return;
+    }
+
+    if (targetAny.webkitRequestFullscreen) {
+      void targetAny.webkitRequestFullscreen().catch(() => {});
+      return;
+    }
+
+    if (videoAny?.webkitRequestFullscreen) {
+      void videoAny.webkitRequestFullscreen().catch(() => {});
+      return;
+    }
+
+    if (videoAny?.webkitEnterFullscreen) {
+      videoAny.webkitEnterFullscreen();
+    }
+  }
+
   function openPanelFromMenu(panel: string) {
     if (panel === "vod") {
+      stopCurrentVodPlaybackIfNeeded();
       setContentPage("movies");
       setContentMode("movies");
       setActivePanel(null);
       setShowOpeningScreen(false);
-      setActiveGroup("All");
+      setActiveGroup(ROOT_GROUP);
       return;
     }
 
     if (panel === "series") {
+      stopCurrentVodPlaybackIfNeeded();
       setContentPage("series");
       setContentMode("series");
       setActivePanel(null);
       setShowOpeningScreen(false);
-      setActiveGroup("All");
+      setActiveGroup(ROOT_GROUP);
       return;
     }
 
@@ -475,23 +1284,95 @@ export function App() {
       return;
     }
 
+    if (panel === "epgSearch" || panel === "timeline") {
+      void openGuidePanel(panel);
+      return;
+    }
+
     setActivePanel(panel);
     setShowOpeningScreen(false);
   }
 
   function selectContent(content: "tv" | "movies" | "series") {
     const keepPlaylistManagerPage = contentPage === "playlistManager";
-    const modeChannels = channelsByMode[content];
+    const latestChannels = getAllChannels();
+    const modeChannels = latestChannels.filter((channel) => matchesContentMode(channel, content));
+
     if (modeChannels.length === 0) {
-      alert(`No ${content} channels found in the loaded playlist.`);
+      // No channels for this mode yet. If we have playlists, auto-load the first
+      // one (and force a content-mode preference for the user's choice) instead
+      // of dropping a confusing "no channels" alert.
+      if (latestChannels.length === 0) {
+        const playlists = loadPlaylists();
+        if (playlists.length === 0) {
+          // No playlists configured — guide user to add one.
+          setActivePanel("playlist");
+          setShowOpeningScreen(false);
+          return;
+        }
+
+        (async () => {
+          try {
+            const { playlist, channels } = await loadFromAnyPlaylist(playlists);
+            setChannels(channels);
+            resetVisibilityForCurrentChannels();
+            setCategoryRefreshTick((tick) => tick + 1);
+
+            const refreshed = channels.filter((channel: any) => matchesContentMode(channel, content));
+            if (refreshed.length === 0) {
+              alert(`Playlist "${playlist.name}" has no ${content} entries.`);
+              return;
+            }
+
+            setShowOpeningScreen(false);
+            setActivePanel(null);
+            setContentMode(content);
+
+            if (!keepPlaylistManagerPage) {
+              if (content === "tv") setContentPage("live");
+              if (content === "movies") setContentPage("movies");
+              if (content === "series") setContentPage("series");
+            }
+
+            const nextGroups = Array.from(
+              new Set(
+                refreshed
+                  .map((channel: any) => (channel.group && String(channel.group).trim()) || "Uncategorized")
+                  .filter((group: string) => group !== ROOT_GROUP)
+              )
+            );
+
+            if (content === "tv") {
+              setActiveGroup(ROOT_GROUP);
+            } else {
+              setActiveGroup((nextGroups[0] as string) || ROOT_GROUP);
+            }
+
+            await loadEPGForPlaylist(playlist).catch(() => {
+              // EPG is optional; ignore failures here.
+            });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "Unknown error";
+            alert(`Failed to load playlist: ${message}`);
+          }
+        })();
+        return;
+      }
+
+      // Channels are loaded but none match this mode in the current playlist.
+      alert(`No ${content} entries found in the loaded playlist.`);
       return;
+    }
+
+    if (content !== "tv") {
+      stopCurrentVodPlaybackIfNeeded();
     }
 
     const nextGroups = Array.from(
       new Set(
         modeChannels
           .map((channel) => (channel.group && String(channel.group).trim()) || "Uncategorized")
-          .filter((group) => group !== "All")
+          .filter((group) => group !== ROOT_GROUP)
       )
     );
 
@@ -506,146 +1387,597 @@ export function App() {
     }
 
     if (content === "tv") {
-      setActiveGroup("All");
+      setActiveGroup(ROOT_GROUP);
     } else {
-      setActiveGroup(nextGroups[0] || "All");
+      setActiveGroup(nextGroups[0] || ROOT_GROUP);
     }
   }
 
   function handlePlaylistLoaded(channels: any[]) {
+    resetVisibilityForCurrentChannels();
     const preferredMode = pickPreferredContentMode(channels);
 
     setContentMode(preferredMode);
-    setActiveGroup("All");
+    setActiveGroup(ROOT_GROUP);
     setShowOpeningScreen(false);
     setActivePanel(null);
     setCategoryRefreshTick((tick) => tick + 1);
   }
 
-  async function startLiveTV() {
-    setContentPage("live");
-    setContentMode("tv");
-
-    if (!hasPlaylists) {
-      setActivePanel("playlist");
-      setShowOpeningScreen(false);
-      return;
-    }
-
-    setActivePanel(null);
-
-    const firstVisiblePlayable = visibleChannels.find((ch) => typeof ch?.url === "string" && ch.url.trim().length > 0);
-    if (firstVisiblePlayable) {
-      playChannel(firstVisiblePlayable);
-      return;
-    }
-
-    const firstPlayable = allChannels.find((ch) => typeof ch?.url === "string" && ch.url.trim().length > 0);
-    if (firstPlayable) {
-      // Fallback so Live TV still starts if visibility filters hide everything.
-      playChannel(firstPlayable);
-      return;
-    }
-
+  async function ensureGuideEPGLoaded() {
     const playlists = loadPlaylists();
-    if (playlists.length === 0) {
-      setActivePanel("playlist");
-      setShowOpeningScreen(false);
-      return;
+    if (playlists.length === 0) return;
+
+    const channels = getAllChannels();
+    if (channels.length === 0) return;
+
+    const isLikelyLiveChannel = (channel: any) => {
+      const contentType = String(channel?.contentType || "").toLowerCase();
+      if (contentType === "live") return true;
+
+      const id = String(channel?.id || "").toLowerCase();
+      if (id.startsWith("live_")) return true;
+
+      const group = String(channel?.group || "").toLowerCase();
+      return group.startsWith("tv:");
+    };
+
+    const liveChannels = channels.filter((channel) => isLikelyLiveChannel(channel));
+    if (liveChannels.length === 0) return;
+
+    const hasAnyGuideData = () =>
+      liveChannels.some((channel) => {
+        const epg = getEPGForChannel(channel);
+        return Array.isArray(epg) && epg.length > 0;
+      });
+
+    const hasSufficientGuideData = () => {
+      const coverage = liveChannels.filter((channel) => {
+        const epg = getEPGForChannel(channel);
+        return Array.isArray(epg) && epg.length > 0;
+      }).length;
+      const minimumCoverage = Math.max(3, Math.ceil(liveChannels.length * 0.1));
+      return coverage >= minimumCoverage;
+    };
+
+    if (hasSufficientGuideData()) return;
+
+    for (const playlist of playlists) {
+      try {
+        await loadEPGForPlaylist(playlist);
+      } catch {
+        // Try the next playlist source if this one fails.
+      }
+
+      if (hasSufficientGuideData()) {
+        setCategoryRefreshTick((tick) => tick + 1);
+        return;
+      }
     }
+
+    setCategoryRefreshTick((tick) => tick + 1);
+  }
+
+  async function prefetchGuideListingsAheadOfTime() {
+    if (guidePrefetchInFlightRef.current) return;
+
+    const xtreamPlaylists = loadPlaylists().filter((playlist) => playlist.type === "xtream");
+    if (xtreamPlaylists.length === 0) return;
+
+    const isLikelyLiveChannel = (channel: any) => {
+      const contentType = String(channel?.contentType || "").toLowerCase();
+      if (contentType === "live") return true;
+
+      const id = String(channel?.id || "").toLowerCase();
+      if (id.startsWith("live_")) return true;
+
+      const group = String(channel?.group || "").toLowerCase();
+      return group.startsWith("tv:");
+    };
+
+    const extractXtreamStreamId = (channelId: string, channelUrl?: string) => {
+      const raw = String(channelId || "").trim();
+      if (raw) {
+        const prefixed = raw.match(/^live_(\d+)$/i);
+        if (prefixed) return prefixed[1];
+        const numericTail = raw.match(/(\d+)$/);
+        if (numericTail) return numericTail[1];
+      }
+
+      const fromUrl = String(channelUrl || "").trim();
+      if (!fromUrl) return "";
+
+      try {
+        const parsed = new URL(fromUrl);
+        const segments = parsed.pathname.split("/").filter(Boolean);
+        const lastSegment = segments[segments.length - 1] || "";
+        const filenameMatch = lastSegment.match(/^(\d+)(?:\.[a-z0-9]+)?$/i);
+        if (filenameMatch) return filenameMatch[1];
+      } catch {
+        // Ignore invalid URLs and try regex fallback.
+      }
+
+      const fallbackMatch = fromUrl.match(/(?:^|\/)(\d+)(?:\.[a-z0-9]+)?(?:$|[?#])/i);
+      return fallbackMatch ? fallbackMatch[1] : "";
+    };
+
+    const missingLiveChannels = getAllChannels()
+      .filter((channel) => isLikelyLiveChannel(channel))
+      .filter((channel) => {
+        const channelId = String(channel?.id || "");
+        if (!channelId) return false;
+        if (guidePrefetchedIdsRef.current.has(channelId)) return false;
+        const epg = getEPGForChannel(channel);
+        return !Array.isArray(epg) || epg.length === 0;
+      });
+
+    const chunkSize = 500;
+    const start =
+      missingLiveChannels.length > 0
+        ? guidePrefetchCursorRef.current % missingLiveChannels.length
+        : 0;
+
+    const candidates =
+      missingLiveChannels.length <= chunkSize
+        ? missingLiveChannels
+        : [
+            ...missingLiveChannels.slice(start, start + chunkSize),
+            ...missingLiveChannels.slice(0, Math.max(0, start + chunkSize - missingLiveChannels.length))
+          ];
+
+    guidePrefetchCursorRef.current = start + candidates.length;
+
+    if (candidates.length === 0) return;
+
+    guidePrefetchInFlightRef.current = true;
+    let updated = 0;
+    const workerCount = Math.min(10, candidates.length);
+    let cursor = 0;
+
+    const worker = async () => {
+      while (cursor < candidates.length) {
+        const index = cursor;
+        cursor += 1;
+        const channel = candidates[index];
+        const channelId = String(channel?.id || "");
+        if (!channelId) continue;
+
+        const streamId = extractXtreamStreamId(channelId, String(channel?.url || ""));
+        if (!streamId) continue;
+
+        for (const playlist of xtreamPlaylists) {
+          try {
+            const data = playlist.data || {};
+            const events = await loadXtreamEPGForStream(
+              String(data.url || ""),
+              String(data.user || ""),
+              String(data.pass || ""),
+              streamId,
+              24
+            );
+
+            if (events.length > 0) {
+              setEPG(streamId, events);
+              setEPG(`live_${streamId}`, events);
+              setEPG(channelId, events);
+              guidePrefetchedIdsRef.current.add(channelId);
+              updated += 1;
+              break;
+            }
+          } catch {
+            // Continue trying next playlist.
+          }
+        }
+      }
+    };
 
     try {
-      const { playlist, channels } = await loadFromAnyPlaylist(playlists);
-      setChannels(channels);
+      await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    } finally {
+      guidePrefetchInFlightRef.current = false;
+    }
+
+    if (updated > 0) {
       setCategoryRefreshTick((tick) => tick + 1);
-      await loadEPGForPlaylist(playlist);
+    }
 
-      const firstVisibleChannel = channels.find((ch) => {
-        const groupName = ch.group || "Uncategorized";
-        return isGroupVisible(groupName) && isChannelVisible(ch.id);
-      });
-      const firstPlayableChannel = firstVisibleChannel || channels[0];
+    return updated;
+  }
 
-      if (!firstPlayableChannel) {
-        alert("Playlist loaded but no channels were found.");
-        setShowOpeningScreen(false);
+  async function openGuidePanel(panel: "epgSearch" | "timeline") {
+    stopCurrentVodPlaybackIfNeeded();
+    exitAnyFullscreen();
+    setContentPage("live");
+    setContentMode("tv");
+    setShowOpeningScreen(false);
+    setShowLiveMenu(false);
+    setActiveGroup(ROOT_GROUP);
+    setActivePanel(panel);
+
+    try {
+      await ensureGuideEPGLoaded();
+      await Promise.race([
+        (async () => {
+          let rounds = 0;
+          while (rounds < 8) {
+            rounds += 1;
+            await prefetchGuideListingsAheadOfTime();
+          }
+        })(),
+        new Promise<void>((resolve) => {
+          window.setTimeout(() => resolve(), 3500);
+        })
+      ]);
+    } catch {
+      // Keep guide panel open even if background preload fails.
+    }
+  }
+
+  useEffect(() => {
+    if (showOpeningScreen || contentPage !== "live") return;
+    void prefetchGuideListingsAheadOfTime();
+  }, [showOpeningScreen, contentPage, categoryRefreshTick]);
+
+  async function startLiveTV() {
+    stopPlayback();
+    exitAnyFullscreen();
+    setCurrentChannel(null);
+    setPlayerError(null);
+    setPlayerStatus(null);
+    setPlayerWarning(null);
+    setShowNowNext(false);
+
+    setContentPage("live");
+    setContentMode("tv");
+    setActivePanel(null);
+    setShowLiveMenu(true);
+    setHasSelectedLiveChannel(false);
+    setIsLiveFullscreenRequested(false);
+    setShowOpeningScreen(false);
+    setActiveGroup(ROOT_GROUP);
+
+    // If no playlists are configured, always route to Add Playlist first.
+    // Cached channels from previous sessions should not bypass setup.
+    if (!hasPlaylists) {
+      setActivePanel("playlist");
+      return;
+    }
+
+    if (getAllChannels().length === 0) {
+      const restored = await restoreChannelsCache();
+      if (restored.length > 0) {
+        setCategoryRefreshTick((tick) => tick + 1);
+        await ensureGuideEPGLoaded();
         return;
       }
 
-      playChannel(firstPlayableChannel);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      alert(`Failed to load playlist: ${message}`);
-      setContentPage("playlistManager");
-      setActivePanel(null);
-      setShowOpeningScreen(false);
+      const playlists = loadPlaylists();
+      if (playlists.length === 0) {
+        setActivePanel("playlist");
+        return;
+      }
+
+      try {
+        const { playlist, channels } = await loadFromAnyPlaylist(playlists);
+        setChannels(channels);
+        resetVisibilityForCurrentChannels();
+        setCategoryRefreshTick((tick) => tick + 1);
+        await loadEPGForPlaylist(playlist);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        alert(`Failed to load playlist: ${message}`);
+        setContentPage("playlistManager");
+        setActivePanel(null);
+      }
     }
   }
 
   return (
     <div className="app-root">
-      <video
-        id="player-main"
-        className={`player-main ${showOpeningScreen && !currentChannel ? "player-main-idle" : showContentPreviewWindow ? "player-main-preview" : currentChannel ? "player-main-live" : activePanel || contentPage !== "live" ? "player-main-compact" : "player-main-live"}`}
-        autoPlay
-        playsInline
-        controls
-      />
+      {shouldRenderMainVideo && useLivePreviewShell && (
+        <div className={`live-preview-shell${isEffectiveLiveFullscreen ? " live-preview-shell-fullscreen" : ""}`} aria-hidden="false">
+          <video
+            id="player-main"
+            className="player-main player-main-shell-video"
+            autoPlay
+            playsInline
+            controls={!!currentChannel}
+            disablePictureInPicture={true}
+            disableRemotePlayback={true}
+            tabIndex={0}
+          />
+        </div>
+      )}
+      {shouldRenderMainVideo && !useLivePreviewShell && (
+        <video
+          id="player-main"
+          className={`player-main ${showOpeningScreen && !currentChannel ? "player-main-idle" : showContentPreviewWindow ? "player-main-preview" : contentPage === "live" ? (isEffectiveLiveFullscreen ? "player-main-live" : "player-main-compact") : currentChannel ? "player-main-live" : "player-main-compact"}${forceLivePreviewLayout ? " player-main-force-preview" : ""}`}
+          autoPlay
+          playsInline
+          controls={!!currentChannel && !forceLivePreviewLayout}
+          disablePictureInPicture={contentPage === "live"}
+          disableRemotePlayback={contentPage === "live"}
+          tabIndex={0}
+        />
+      )}
+      {forceLivePreviewLayout && !isPlaylistInputPanelOpen && (
+        <div className="live-preview-placeholder" aria-hidden="true">
+          <div className="live-preview-placeholder-title">Live TV Preview</div>
+          <div className="live-preview-placeholder-subtitle">Select a channel to start playback</div>
+        </div>
+      )}
       {showContentPreviewWindow && (
         <div className="player-preview-badge" aria-hidden="true">Preview</div>
       )}
-      {!showOpeningScreen && !currentChannel && (
-        <div className="player-status">No channel selected yet.</div>
+      {showIdlePlayerStatus && (
+        <div className="player-status">
+          {allChannels.length > 0 ? "No channels available in this view." : "Add a playlist to load channels."}
+        </div>
       )}
       {currentChannel && playerStatus && <div className="player-status player-status-info">{playerStatus}</div>}
       {currentChannel && !playerStatus && playerWarning && <div className="player-status player-status-info">{playerWarning}</div>}
       {currentChannel && playerError && <div className="player-status player-status-error">{playerError}</div>}
+      {isVodPlaybackFullscreen && (
+        <button
+          type="button"
+          className="vod-exit-btn"
+          onClick={exitVodPlayback}
+          aria-label="Exit movie playback"
+        >
+          Back
+        </button>
+      )}
 
       <MainMenuScreen
         visible={showOpeningScreen}
-        hasPlaylists={hasPlaylists}
+        hasPlaylists={hasPlaylists || hasPlayableChannels}
+        liveCount={channelsByMode.tv.length}
+        movieCount={channelsByMode.movies.length}
+        seriesCount={channelsByMode.series.length}
         onStartLive={() => {
           void startLiveTV();
         }}
         onOpenPanel={openPanelFromMenu}
       />
 
-      <>
-        <GroupList
-          groups={groupsForList}
-          activeGroup={activeGroup}
-          onSelect={(group) => {
-            setActiveGroup(group);
-          }}
-          isGroupVisible={isGroupVisible}
-          onToggleGroupVisible={(group, visible) => {
-            setGroupVisible(group, visible);
-            setCategoryRefreshTick((tick) => tick + 1);
-          }}
-          showVisibilityControls={isPlaylistManagerPage}
-        />
-        <ChannelList
-          channels={filteredChannels}
-          onSelect={playChannel}
-          activeChannel={currentChannel}
-          isChannelVisible={isChannelVisible}
-          onToggleChannelVisible={(channelId, visible) => {
-            setChannelVisible(channelId, visible);
-            setCategoryRefreshTick((tick) => tick + 1);
-          }}
-          showVisibilityControls={isPlaylistManagerPage && contentMode === "tv"}
-          showAsIcons={isContentIconsView}
-        />
-      </>
+      {!isVodPlaybackFullscreen && (!isLiveChannelPlaying || showLiveMenu) && (
+        <>
+          {isMainSeriesScreen && (
+            <div className="series-main-search-bar">
+              <button
+                type="button"
+                className="series-main-search-btn"
+                onClick={() => {
+                  setSeriesMainSearchDraft(seriesMainSearchDebouncedTerm);
+                  setIsSeriesSearchComposerOpen((open) => !open);
+                }}
+              >
+                {seriesMainSearchDebouncedTerm.trim() ? "Change Search" : "Search"}
+              </button>
+              {seriesMainSearchDebouncedTerm.trim() && (
+                <>
+                  <button
+                    type="button"
+                    className="series-main-search-btn"
+                    onClick={() => commitSeriesMainSearch("")}
+                  >
+                    Clear
+                  </button>
+                  <span className="series-main-search-hint" aria-live="polite">
+                    Search: {seriesMainSearchDebouncedTerm.trim()}
+                  </span>
+                </>
+              )}
+              {isSeriesSearchComposerOpen && (
+                <div className="series-search-composer" role="dialog" aria-label="Series search composer">
+                  <div className="series-search-composer-value">
+                    {seriesMainSearchDraft || "Choose characters"}
+                  </div>
+                  <div className="series-search-composer-actions">
+                    <button
+                      type="button"
+                      className="series-main-search-btn"
+                      onClick={backspaceSeriesSearchDraft}
+                      disabled={seriesMainSearchDraft.length === 0}
+                    >
+                      Backspace
+                    </button>
+                    <button
+                      type="button"
+                      className="series-main-search-btn"
+                      onClick={() => setSeriesMainSearchDraft("")}
+                      disabled={seriesMainSearchDraft.length === 0}
+                    >
+                      Clear Draft
+                    </button>
+                    <button
+                      type="button"
+                      className="series-main-search-btn"
+                      onClick={() => appendSeriesSearchDraft(" ")}
+                      disabled={seriesMainSearchDraft.length >= 32}
+                    >
+                      Space
+                    </button>
+                    <button
+                      type="button"
+                      className="series-main-search-btn"
+                      onClick={applySeriesSearchDraft}
+                    >
+                      Apply
+                    </button>
+                  </div>
+                  <div className="series-search-composer-grid">
+                    {SERIES_SEARCH_KEY_ROWS.flat().map((key) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className="series-search-key"
+                        onClick={() => appendSeriesSearchDraft(key)}
+                        disabled={seriesMainSearchDraft.length >= 32}
+                      >
+                        {key}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="series-main-search-hint" aria-live="polite">
+                    Build the term with buttons, then choose Apply
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+          {isMainMoviesScreen && (
+            <div className="movies-main-search-bar">
+              <input
+                type="search"
+                className="movies-main-search-input"
+                value={moviesMainSearchTerm}
+                onChange={(event) => setMoviesMainSearchTerm(event.target.value.slice(0, 64))}
+                placeholder="Search movies"
+                aria-label="Search movies"
+              />
+              {moviesMainSearchTerm.trim() && (
+                <button
+                  type="button"
+                  className="series-main-search-btn"
+                  onClick={() => setMoviesMainSearchTerm("")}
+                >
+                  Clear
+                </button>
+              )}
+              <button
+                type="button"
+                className="series-main-search-btn"
+                onClick={() => setMoviesSortDirection((current) => (current === "asc" ? "desc" : "asc"))}
+                aria-label={moviesSortDirection === "asc" ? "Sort Z-A" : "Sort A-Z"}
+              >
+                {moviesSortDirection === "asc" ? "Sort Z-A" : "Sort A-Z"}
+              </button>
+            </div>
+          )}
+          <GroupList
+            groups={groupsForList}
+            activeGroup={activeGroup}
+            onSelect={(group) => {
+              setActiveGroup(group);
+            }}
+            isGroupVisible={isGroupVisible}
+            onToggleGroupVisible={(group, visible) => {
+              setGroupVisible(group, visible);
+              setCategoryRefreshTick((tick) => tick + 1);
+            }}
+            showVisibilityControls={isPlaylistManagerPage}
+            className={isMainMoviesScreen ? "group-list-movies-right" : ""}
+            onSetAllVisible={
+              isPlaylistManagerPage
+                ? (visible) => {
+                    setGroupsVisible(groups, visible);
+                    if (!visible) {
+                      setActiveGroup(ROOT_GROUP);
+                    }
+                    setCategoryRefreshTick((tick) => tick + 1);
+                  }
+                : undefined
+            }
+          />
+          <ChannelList
+            channels={filteredChannelsForDisplay}
+            onSelect={playChannel}
+            activeChannel={currentChannel}
+            isChannelVisible={isChannelVisible}
+            onToggleChannelVisible={(channelId, visible) => {
+              setChannelVisible(channelId, visible);
+              setCategoryRefreshTick((tick) => tick + 1);
+            }}
+            isFavoriteChannel={isFavoriteChannel}
+            onToggleFavorite={(channelId) => {
+              setChannelFavorite(channelId, !isFavoriteChannel(channelId));
+              setCategoryRefreshTick((tick) => tick + 1);
+            }}
+            showVisibilityControls={isPlaylistManagerPage && contentMode === "tv"}
+            showFavoriteControls={isContentIconsView}
+            showAsIcons={isContentIconsView}
+            batchSize={
+              isMainSeriesScreen && isContentIconsView
+                ? 16
+                : isMainMoviesScreen && isContentIconsView
+                  ? 32
+                  : undefined
+            }
+            suppressLogos={false}
+            autoLoadOnScroll={(isMainSeriesScreen || isMainMoviesScreen) && isContentIconsView}
+            listClassName={
+              isMainSeriesScreen && isContentIconsView
+                ? "channel-list-series-grid"
+                : isMainMoviesScreen && isContentIconsView
+                  ? "channel-list-movies-grid"
+                  : ""
+            }
+          />
+        </>
+      )}
 
-      <EPGGrid currentChannel={currentChannel} />
+      {!isEpgSearchPanelOpen && currentChannel && (String(currentChannel.contentType || "").toLowerCase() === "live" || (!currentChannel.contentType && contentPage === "live")) && (
+        <>
+          <EPGGrid
+            currentChannel={currentChannel}
+            className={useLivePreviewShell && !isEffectiveLiveFullscreen ? "epg-grid-preview-window" : ""}
+            onOpenGuide={() => {
+              void openGuidePanel("epgSearch");
+            }}
+          />
+          <button
+            type="button"
+            className={`epg-favorite-btn${useLivePreviewShell && !isEffectiveLiveFullscreen ? " epg-favorite-btn-preview" : ""}`}
+            onClick={() => {
+              const id = String(currentChannel?.id || "");
+              if (!id) return;
+              const nextFavorite = !isFavoriteChannel(id);
+              setChannelFavorite(id, nextFavorite);
+              setCategoryRefreshTick((tick) => tick + 1);
+            }}
+          >
+            {isFavoriteChannel(String(currentChannel?.id || "")) ? "Remove Favorite" : "Add Favorite"}
+          </button>
+        </>
+      )}
       <PlayerOSD channel={currentChannel} />
+      <SeriesEpisodePicker
+        visible={isSeriesPickerVisible}
+        seriesTitle={seriesPickerTitle}
+        episodes={seriesPickerEpisodes}
+        loading={seriesPickerLoading}
+        error={seriesPickerError}
+        onClose={() => setIsSeriesPickerVisible(false)}
+        favoriteLabel={
+          isFavoriteChannel(String(seriesPickerSourceChannel?.id || ""))
+            ? "Remove Favorite"
+            : "Add Favorite"
+        }
+        onToggleFavorite={() => {
+          const id = String(seriesPickerSourceChannel?.id || "");
+          if (!id) return;
+          setChannelFavorite(id, !isFavoriteChannel(id));
+          setCategoryRefreshTick((tick) => tick + 1);
+        }}
+        onSelectEpisode={(episode) => {
+          rememberSeriesEpisode(seriesPickerSourceChannel, episode);
+          setIsSeriesPickerVisible(false);
+          playChannel(episode);
+        }}
+      />
       <PanelsHost
         activePanel={activePanel}
         setActivePanel={setActivePanel}
         showPlaylistManager={isPlaylistManagerPage}
+        visibleTvChannels={visibleTvChannels}
+        visibleTvGuideChannels={visibleTvGuideChannels}
+        visibilityVersion={categoryRefreshTick}
         onSelectContent={selectContent}
         onPlaylistLoaded={handlePlaylistLoaded}
+        onPlaylistsChanged={() => {
+          setCategoryRefreshTick(tick => tick + 1);
+        }}
       />
 
       <NowNextOverlay
@@ -714,4 +2046,96 @@ function pickPreferredContentMode(channels: any[]): "tv" | "movies" | "series" {
   }
 
   return "tv";
+}
+
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+function isSeriesEpisodeSelection(channel: any): boolean {
+  if (!channel || typeof channel !== "object") return false;
+  if (String(channel?.contentType || "").toLowerCase() !== "series") return false;
+
+  const id = String(channel?.id || "");
+  if (/^series_\d+_episode_\d+$/i.test(id)) return true;
+
+  const episodeInfo = channel?.episodeInfo;
+  return !!(episodeInfo && typeof episodeInfo === "object");
+}
+
+function isChannelRecord(channel: any): channel is Record<string, any> {
+  return !!channel && typeof channel === "object";
+}
+
+function getSeriesRootId(channel: any): string | null {
+  const id = String(channel?.id || "");
+  const directMatch = id.match(/^series_(\d+)$/i);
+  if (directMatch) return directMatch[1];
+
+  const episodeMatch = id.match(/^series_(\d+)_episode_\d+$/i);
+  if (episodeMatch) return episodeMatch[1];
+
+  return null;
+}
+
+function findNextSeriesEpisode(currentEpisode: any, episodes: any[]): any | null {
+  if (!Array.isArray(episodes) || episodes.length === 0) return null;
+
+  const currentId = String(currentEpisode?.id || "");
+  const currentUrl = String(currentEpisode?.url || "");
+
+  let currentIndex = episodes.findIndex((episode) => String(episode?.id || "") === currentId);
+  if (currentIndex < 0 && currentUrl) {
+    currentIndex = episodes.findIndex((episode) => String(episode?.url || "") === currentUrl);
+  }
+
+  if (currentIndex >= 0 && currentIndex + 1 < episodes.length) {
+    return episodes[currentIndex + 1];
+  }
+
+  const season = Number(currentEpisode?.episodeInfo?.season);
+  const episode = Number(currentEpisode?.episodeInfo?.episode);
+  if (!Number.isFinite(season) || !Number.isFinite(episode)) return null;
+
+  const ordered = episodes
+    .map((item, index) => ({
+      item,
+      index,
+      season: Number(item?.episodeInfo?.season),
+      episode: Number(item?.episodeInfo?.episode)
+    }))
+    .filter((entry) => Number.isFinite(entry.season) && Number.isFinite(entry.episode))
+    .sort((a, b) => {
+      if (a.season !== b.season) return a.season - b.season;
+      if (a.episode !== b.episode) return a.episode - b.episode;
+      return a.index - b.index;
+    });
+
+  const nextByNumber = ordered.find(
+    (entry) => entry.season > season || (entry.season === season && entry.episode > episode)
+  );
+
+  return nextByNumber?.item || null;
+}
+
+function loadSeriesLastWatchMap(): Record<string, any> {
+  try {
+    const raw = localStorage.getItem(SERIES_LAST_WATCH_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, any>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSeriesLastWatchMap(map: Record<string, any>) {
+  try {
+    localStorage.setItem(SERIES_LAST_WATCH_KEY, JSON.stringify(map));
+  } catch {
+    // Ignore persistence failures.
+  }
 }

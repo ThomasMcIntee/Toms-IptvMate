@@ -21,15 +21,23 @@ export function PanelsHost({
   activePanel,
   setActivePanel,
   showPlaylistManager,
+  visibleTvChannels,
+  visibleTvGuideChannels,
+  visibilityVersion,
   onSelectContent,
-  onPlaylistLoaded
+  onPlaylistLoaded,
+  onPlaylistsChanged
 }: {
   // This host wires side panels without owning their playback state.
   activePanel: string | null;
   setActivePanel: (p: string | null) => void;
   showPlaylistManager: boolean;
+  visibleTvChannels: any[];
+  visibleTvGuideChannels: any[];
+  visibilityVersion: number;
   onSelectContent: (content: "tv" | "movies" | "series") => void;
   onPlaylistLoaded: (channels: any[]) => void;
+  onPlaylistsChanged?: () => void;
 }) {
   return (
     <>
@@ -42,22 +50,28 @@ export function PanelsHost({
       <VoicePanel visible={activePanel === "voice"} />
       <AudioPanel visible={activePanel === "audio"} />
       <SubtitlePanel visible={activePanel === "subtitles"} />
-      <PlaylistInputMenu visible={activePanel === "playlist"} />
+      <PlaylistInputMenu 
+        visible={activePanel === "playlist"}
+        onPlaylistSaved={() => {
+          setActivePanel(null);
+          onPlaylistsChanged?.();
+        }}
+      />
       <PlaylistManager
         visible={showPlaylistManager}
         onSelectContent={onSelectContent}
         onPlaylistLoaded={onPlaylistLoaded}
       />
       <RecordingPlayback visible={activePanel === "recordingPlayback"} />
-      <EPGTimelinePanel visible={activePanel === "timeline"} />
+      <EPGTimelinePanel key={`timeline-${visibilityVersion}`} visible={activePanel === "timeline"} channels={visibleTvGuideChannels} />
       <RecordingStorageManager visible={activePanel === "recordingStorage"} />
       <RecordingLibrary visible={activePanel === "recordings"} />
       <EPGSearch
+        key={`epg-search-${visibilityVersion}`}
         visible={activePanel === "epgSearch"}
-        onSelectChannel={(ch) => {
+        channels={visibleTvChannels}
+        onClose={() => {
           setActivePanel(null);
-          const event = new CustomEvent("tuneChannel", { detail: ch });
-          window.dispatchEvent(event);
         }}
       />
       <TimeshiftBar />

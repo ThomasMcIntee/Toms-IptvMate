@@ -1,5 +1,7 @@
 export function initNavigation(setPanel: (p: string | null) => void) {
   window.addEventListener("keydown", (e) => {
+    if (isTextEntryActive(e.target) || e.altKey || e.ctrlKey || e.metaKey) return;
+
     if (e.key === "v" || e.key === "V") setPanel("vod");
     if (e.key === "a" || e.key === "A") setPanel("audio");
     if (e.key === "s" || e.key === "S") setPanel("subtitles");
@@ -23,4 +25,12 @@ export function initNavigation(setPanel: (p: string | null) => void) {
      window.dispatchEvent(event);
 }
   });
+}
+
+function isTextEntryActive(target: EventTarget | null): boolean {
+  const active = (target instanceof HTMLElement ? target : document.activeElement) as HTMLElement | null;
+  if (!active) return false;
+  if (active.isContentEditable) return true;
+  const tag = active.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }

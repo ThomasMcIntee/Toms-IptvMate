@@ -23,7 +23,11 @@ export function loadRecordings() {
 }
 
 export function saveRecordings() {
-  localStorage.setItem(KEY, JSON.stringify(jobs));
+  try {
+    localStorage.setItem(KEY, JSON.stringify(jobs));
+  } catch {
+    // Ignore persistence errors.
+  }
 }
 
 export function getRecordings() {

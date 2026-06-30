@@ -20,11 +20,22 @@ export default function PlaylistManager({
   onPlaylistLoaded: (channels: any[]) => void;
 }) {
   const [playlists, setPlaylists] = useState<PlaylistEntry[]>([]);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    if (visible) {
+    if (!visible) return;
+
+    const refresh = () => {
       setPlaylists(loadPlaylists());
-    }
+    };
+
+    refresh();
+    window.addEventListener("playlistsChanged", refresh);
+
+    return () => {
+      window.removeEventListener("playlistsChanged", refresh);
+    };
   }, [visible]);
 
   if (!visible) return null;
@@ -35,6 +46,9 @@ export default function PlaylistManager({
   }
 
   async function loadPlaylistIntoApp(p: PlaylistEntry) {
+    if (loadingId) return;
+    setLoadingId(p.id);
+    setStatusMessage(`Loading "${p.name}"… this can take up to a minute for large playlists.`);
     try {
       const channels = await loadChannelsForPlaylist(p);
 
@@ -42,14 +56,23 @@ export default function PlaylistManager({
         throw new Error("Zero channels added. Check playlist URL/credentials and provider response.");
       }
 
+      setStatusMessage(`Indexing ${channels.length.toLocaleString()} entries…`);
       setChannels(channels);
-      await loadEPGForPlaylist(p);
       onPlaylistLoaded(channels);
+      setStatusMessage(`Loaded ${channels.length.toLocaleString()} entries from "${p.name}". Fetching EPG…`);
 
-      alert(`Loaded ${channels.length} channels`);
+      try {
+        await loadEPGForPlaylist(p);
+      } catch (epgErr) {
+        console.warn("EPG load failed:", epgErr);
+      }
+
+      setStatusMessage(`✓ Loaded ${channels.length.toLocaleString()} entries from "${p.name}".`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
-      alert(`Failed to load playlist: ${message}`);
+      setStatusMessage(`✗ Failed to load "${p.name}": ${message}`);
+    } finally {
+      setLoadingId(null);
     }
   }
 
@@ -71,6 +94,25 @@ export default function PlaylistManager({
 
       {playlists.length === 0 && <p>No playlists added yet.</p>}
 
+      {statusMessage && (
+        <div
+          className="playlist-status-banner"
+          role="status"
+          aria-live="polite"
+          style={{
+            padding: "8px 12px",
+            margin: "8px 0",
+            background: loadingId ? "rgba(80, 140, 220, 0.18)" : "rgba(60, 180, 100, 0.18)",
+            border: "1px solid rgba(255,255,255,0.15)",
+            borderRadius: 6,
+            fontSize: 14
+          }}
+        >
+          {loadingId && <span style={{ marginRight: 8 }}>⏳</span>}
+          {statusMessage}
+        </div>
+      )}
+
       {playlists.map((p) => (
         <div key={p.id} className="playlist-card">
           <strong>{p.name}</strong>
@@ -81,15 +123,17 @@ export default function PlaylistManager({
           <div className="playlist-actions playlist-actions-top-gap">
             <button
               className="btn-primary btn-flex"
+              disabled={loadingId !== null}
               onClick={() => {
                 void loadPlaylistIntoApp(p);
               }}
             >
-              Load
+              {loadingId === p.id ? "Loading…" : "Load"}
             </button>
 
             <button
               className="btn-secondary btn-flex"
+              disabled={loadingId !== null}
               onClick={() => alert("TODO: Edit playlist")}
             >
               Edit
@@ -97,6 +141,7 @@ export default function PlaylistManager({
 
             <button
               className="btn-danger btn-flex"
+              disabled={loadingId !== null}
               onClick={() => remove(p.id)}
             >
               Delete

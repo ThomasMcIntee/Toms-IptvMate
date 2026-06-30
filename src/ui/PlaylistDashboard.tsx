@@ -16,9 +16,18 @@ export default function PlaylistDashboard({
   const [playlists, setPlaylists] = useState<PlaylistEntry[]>([]);
 
   useEffect(() => {
-    if (visible) {
+    if (!visible) return;
+
+    const refresh = () => {
       setPlaylists(loadPlaylists());
-    }
+    };
+
+    refresh();
+    window.addEventListener("playlistsChanged", refresh);
+
+    return () => {
+      window.removeEventListener("playlistsChanged", refresh);
+    };
   }, [visible]);
 
   if (!visible) return null;

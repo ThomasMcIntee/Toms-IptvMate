@@ -1,22 +1,27 @@
 import { useEffect, useRef, useState } from "react";
-import { getAllChannels } from "../core/channelStore";
+import { getAllChannels, isChannelVisible, isGroupVisible } from "../core/channelStore";
 import { getEPG } from "../core/epgStore";
 import { scheduleRecording } from "../core/recordingEngine";
 import EPGPreviewPlayer from "./EPGPreviewPlayer";
+import { formatEpgTime } from "../core/epgTime";
 
 export default function EPGTimeline({ visible }: { visible: boolean }) {
-  const [channels, setChannels] = useState<any[]>([]);
   const [previewChannel, setPreviewChannel] = useState<any | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
+  const channels = visible ? getVisibleTimelineChannels() : [];
 
   useEffect(() => {
     if (!visible) return;
-    const nextChannels = getAllChannels();
-    setChannels(nextChannels);
-    if (nextChannels.length > 0) {
-      setPreviewChannel(nextChannels[0]);
-    }
-  }, [visible]);
+    setPreviewChannel((current) => {
+      if (current) {
+        const currentId = String(current?.id || "");
+        const matchingChannel = channels.find((channel) => String(channel?.id || "") === currentId);
+        if (matchingChannel) return matchingChannel;
+      }
+
+      return channels[0] ?? null;
+    });
+  }, [visible, channels]);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -66,6 +71,20 @@ export default function EPGTimeline({ visible }: { visible: boolean }) {
   );
 }
 
+function getVisibleTimelineChannels() {
+  return getAllChannels().filter((channel) => {
+    const channelId = String(channel?.id || "");
+    const groupName = (channel?.group && String(channel.group).trim()) || "Uncategorized";
+    const epg = getEPG(channelId);
+    return (
+      isGroupVisible(groupName) &&
+      isChannelVisible(channelId) &&
+      Array.isArray(epg) &&
+      epg.length > 0
+    );
+  });
+}
+
 function scheduleEPGRecording(channel: any, event: any) {
   const job = {
     id: Date.now().toString(),
@@ -91,7 +110,7 @@ function EPGRow({ channel }: { channel: any }) {
         <div key={i} className="epg-event">
           <div className="epg-event-title">{e.title}</div>
           <div className="epg-event-time">
-            {formatTime(e.start)} - {formatTime(e.end)}
+            {formatEpgTime(e.start)} - {formatEpgTime(e.end)}
           </div>
           <button className="epg-record-btn" onClick={() => scheduleEPGRecording(channel, e)}>
             Record
@@ -102,7 +121,3 @@ function EPGRow({ channel }: { channel: any }) {
   );
 }
 
-function formatTime(ts: number) {
-  const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}

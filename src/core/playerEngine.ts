@@ -2,6 +2,8 @@ import Hls from "hls.js";
 import { ContentType } from "./channelStore";
 
 let hls: Hls | null = null;
+let shakaPlayer: any = null;
+let skipShakaOnce = false;
 let videoEl: HTMLVideoElement | null = null;
 let playRequestToken = 0;
 let lastRootSourceUrl: string | null = null;
@@ -12,12 +14,37 @@ let rapidRetryChain: { rootUrl: string | null; count: number; lastAt: number } =
 };
 let blockedRootPlaybackUntil: Record<string, number> = {};
 let rootAttemptWindowState: Record<string, { count: number; firstAt: number }> = {};
+let suppressPlayerEventsUntil = 0;
 
 const RAPID_RETRY_GAP_MS = 1200;
 const MAX_RAPID_RETRIES = 30;
 const RETRY_COOLDOWN_MS = 1500;
 const ATTEMPT_WINDOW_MS = 20000;
 const MAX_ATTEMPTS_PER_WINDOW = 30;
+const DEFAULT_ELECTRON_RELAY_ORIGIN = "http://127.0.0.1:4173";
+
+function getRelayBaseOrigin(): string | null {
+  const protocol = window.location.protocol;
+
+  if (protocol === "http:" || protocol === "https:") {
+    // Only local dev/preview hosts expose the Vite relay/transcode middleware.
+    return isLikelyLocalRuntime() ? window.location.origin : null;
+  }
+
+  if (protocol === "file:") {
+    const scopedWindow = window as Window & { __IPTV_RELAY_ORIGIN__?: string };
+    const explicitRelayOrigin = scopedWindow.__IPTV_RELAY_ORIGIN__?.trim();
+    return explicitRelayOrigin || DEFAULT_ELECTRON_RELAY_ORIGIN;
+  }
+
+  return null;
+}
+
+function toRelayUrl(pathWithQuery: string): string | null {
+  const relayBase = getRelayBaseOrigin();
+  if (!relayBase) return null;
+  return `${relayBase}${pathWithQuery}`;
+}
 
 function nextGlobalPlayAttemptId(): number {
   const scopedWindow = window as Window & { __iptvGlobalPlayAttemptId?: number };
@@ -30,18 +57,45 @@ function isCurrentGlobalPlayAttempt(id: number): boolean {
   return (scopedWindow.__iptvGlobalPlayAttemptId || 0) === id;
 }
 
+function invalidateGlobalPlayAttempts() {
+  const scopedWindow = window as Window & { __iptvGlobalPlayAttemptId?: number };
+  scopedWindow.__iptvGlobalPlayAttemptId = (scopedWindow.__iptvGlobalPlayAttemptId || 0) + 1;
+}
+
+function shouldSuppressPlayerEvents(): boolean {
+  return Date.now() < suppressPlayerEventsUntil;
+}
+
 function emitPlayerError(message: string) {
+  if (shouldSuppressPlayerEvents()) return;
   window.dispatchEvent(new CustomEvent("playerError", { detail: { message } }));
 }
 
 function emitPlayerPlaying() {
+  if (shouldSuppressPlayerEvents()) return;
   // Successful playback should reset retry-chain protection.
   rapidRetryChain = { rootUrl: null, count: 0, lastAt: 0 };
   window.dispatchEvent(new CustomEvent("playerPlaying"));
 }
 
 function emitPlayerTranscoding(message: string) {
+  if (shouldSuppressPlayerEvents()) return;
   window.dispatchEvent(new CustomEvent("playerTranscoding", { detail: { message } }));
+}
+
+function emitPlayerEnded() {
+  if (shouldSuppressPlayerEvents()) return;
+  window.dispatchEvent(new CustomEvent("playerEnded"));
+}
+
+async function teardownShakaPlayer() {
+  if (!shakaPlayer) return;
+  try {
+    await shakaPlayer.destroy();
+  } catch {
+    // Ignore teardown errors while switching player engines.
+  }
+  shakaPlayer = null;
 }
 
 function logAudioRuntimeState(video: HTMLVideoElement, context: string) {
@@ -49,6 +103,26 @@ function logAudioRuntimeState(video: HTMLVideoElement, context: string) {
   const audioTrackCount = tracks ? tracks.length : 0;
   console.log(
     `[audio] ${context} muted=${video.muted} volume=${video.volume} paused=${video.paused} readyState=${video.readyState} tracks=${audioTrackCount}`
+  );
+}
+
+function selectPreferredHlsAudioTrack(hlsInstance: Hls, reason: string) {
+  const tracks = hlsInstance.audioTracks || [];
+  if (!tracks.length) {
+    console.log(`[hls-audio] reason=${reason} tracks=0`);
+    return;
+  }
+
+  const preferredIndex = tracks.findIndex((track) => (track as { default?: boolean }).default) >= 0
+    ? tracks.findIndex((track) => (track as { default?: boolean }).default)
+    : 0;
+
+  if (hlsInstance.audioTrack !== preferredIndex) {
+    hlsInstance.audioTrack = preferredIndex;
+  }
+
+  console.log(
+    `[hls-audio] reason=${reason} tracks=${tracks.length} selected=${hlsInstance.audioTrack} defaultIndex=${preferredIndex}`
   );
 }
 
@@ -105,9 +179,13 @@ function isLikelyLocalRuntime(): boolean {
   return false;
 }
 
+function isElectronRuntime(): boolean {
+  return /\belectron\b/i.test(navigator.userAgent || "");
+}
+
 function hasQueryParam(url: string, key: string): boolean {
   try {
-    const parsed = new URL(url, window.location.origin);
+    const parsed = new URL(url, window.location.href);
     return parsed.searchParams.has(key);
   } catch {
     return new RegExp(`[?&]${key}=`).test(url);
@@ -146,13 +224,24 @@ function normalizeProblematicXtreamSourceUrl(url: string): string {
     return url.replace(/\.m3u8(?=\?|$)/i, ".ts");
   }
 
-  // Legacy Xtream VOD links were sometimes persisted as .m3u8 even when
-  // providers actually serve file containers; normalize to .mp4 as fallback.
-  if (/\/movie\/[^/]+\/[^/]+\/\d+\.m3u8(?:\?|$)/i.test(url)) {
-    return url.replace(/\.m3u8(?=\?|$)/i, ".mp4");
-  }
+  // Keep legacy movie m3u8 URLs untouched. Relay/transcode fallback logic now
+  // resolves provider-specific container variants (mkv/mp4/ts) more reliably.
 
   return url;
+}
+
+function inferContentTypeFromUrl(url: string, currentType: ContentType): ContentType {
+  if (currentType !== "live") return currentType;
+
+  if (/\/(movie|vod)\//i.test(url)) {
+    return "movie";
+  }
+
+  if (/\/series\//i.test(url)) {
+    return "series";
+  }
+
+  return currentType;
 }
 
 function unwrapWrappedUrl(url: string): string {
@@ -183,7 +272,7 @@ function resolveRootSourceUrl(url: string): string {
 
   if (isTranscodeBootstrapUrl(url)) {
     try {
-      const parsed = new URL(url, window.location.origin);
+      const parsed = new URL(url, window.location.href);
       const wrapped = parsed.searchParams.get("url");
       if (wrapped) {
         return normalizeProblematicXtreamSourceUrl(decodeURIComponent(wrapped));
@@ -209,11 +298,16 @@ function toPrimaryPlaybackUrl(url: string, preferTranscode = true): string {
   if (!/^https?:\/\//i.test(url)) return url;
   if (isAlreadyRelayed(url)) return url;
 
-  if (isLikelyLocalRuntime()) {
+  if (isLikelyLocalRuntime() || !!getRelayBaseOrigin()) {
+    const relayBase = getRelayBaseOrigin();
+    if (!relayBase) return url;
+
     if (!preferTranscode) {
-      return `${window.location.origin}/__stream?url=${encodeURIComponent(url)}`;
+      return `${relayBase}/__stream?url=${encodeURIComponent(url)}`;
     }
-    return `${window.location.origin}/__transcode?url=${encodeURIComponent(url)}`;
+    const isVodLike = /\/(movie|series)\//i.test(url);
+    const compatSuffix = isVodLike ? "&amode=compat" : "";
+    return `${relayBase}/__transcode?url=${encodeURIComponent(url)}${compatSuffix}`;
   }
 
   return url;
@@ -240,8 +334,7 @@ function toProxyFallbackUrl(url: string): string | null {
   if (!/^https?:\/\//i.test(url)) return null;
   if (isAlreadyRelayed(url)) return null;
 
-  const localRelay = `${window.location.origin}/__stream?url=${encodeURIComponent(url)}`;
-  return localRelay;
+  return toRelayUrl(`/__stream?url=${encodeURIComponent(url)}`);
 }
 
 function toExternalProxyFallbackUrl(url: string): string | null {
@@ -255,12 +348,15 @@ function toTranscodeFallbackUrl(
   videoOnly = false,
   audioMode: "standard" | "compat" | "safe" = "standard"
 ): string | null {
-  if (!isLikelyLocalRuntime()) return null;
-  if (!/^https?:\/\//i.test(url)) return null;
+  if (!isLikelyLocalRuntime() && !getRelayBaseOrigin()) return null;
+  const relayBase = getRelayBaseOrigin();
+  if (!relayBase) return null;
+  const isSessionUrl = isTranscodeSessionUrl(url);
+  if (!/^https?:\/\//i.test(url) && !isSessionUrl) return null;
 
   if (isTranscodeBootstrapUrl(url)) {
     try {
-      const parsed = new URL(url, window.location.origin);
+      const parsed = new URL(url, window.location.href);
 
       if (videoOnly) {
         parsed.searchParams.set("audio", "0");
@@ -302,11 +398,17 @@ function toTranscodeFallbackUrl(
     }
   }
 
-  if (url.includes("/__transcode/session/")) return null;
+  if (isSessionUrl) {
+    const rootUrl = resolveRootSourceUrl(url);
+    if (!/^https?:\/\//i.test(rootUrl)) return null;
+    const audioSuffix = videoOnly ? "&audio=0" : "";
+    const audioModeSuffix = !videoOnly && audioMode !== "standard" ? `&amode=${audioMode}` : "";
+    return `${relayBase}/__transcode?url=${encodeURIComponent(rootUrl)}${audioSuffix}${audioModeSuffix}`;
+  }
 
   const audioSuffix = videoOnly ? "&audio=0" : "";
   const audioModeSuffix = !videoOnly && audioMode !== "standard" ? `&amode=${audioMode}` : "";
-  return `${window.location.origin}/__transcode?url=${encodeURIComponent(url)}${audioSuffix}${audioModeSuffix}`;
+  return `${relayBase}/__transcode?url=${encodeURIComponent(url)}${audioSuffix}${audioModeSuffix}`;
 }
 
 async function safePlay(video: HTMLVideoElement) {
@@ -358,10 +460,54 @@ async function safePlay(video: HTMLVideoElement) {
 
 export function initPlayerEngine() {
   videoEl = document.getElementById("player-main") as HTMLVideoElement;
+
   if (videoEl) {
     videoEl.autoplay = true;
     videoEl.playsInline = true;
+    videoEl.setAttribute("playsinline", "true");
+    videoEl.setAttribute("webkit-playsinline", "true");
     videoEl.onplaying = () => emitPlayerPlaying();
+    videoEl.onended = () => emitPlayerEnded();
+  }
+}
+
+export function stopPlayback() {
+  playRequestToken += 1;
+  invalidateGlobalPlayAttempts();
+  suppressPlayerEventsUntil = Date.now() + 3000;
+
+  if (hls) {
+    try {
+      hls.stopLoad();
+      hls.detachMedia();
+      hls.destroy();
+    } catch {
+      // Ignore teardown errors while stopping playback.
+    }
+    hls = null;
+  }
+
+  void teardownShakaPlayer();
+
+  videoEl = document.getElementById("player-main") as HTMLVideoElement | null;
+  if (!videoEl) return;
+
+  try {
+    videoEl.pause();
+    videoEl.onplaying = null;
+    videoEl.onended = null;
+    videoEl.onerror = null;
+    if (videoEl.src && videoEl.src.startsWith("blob:")) {
+      try {
+        URL.revokeObjectURL(videoEl.src);
+      } catch {
+        // Ignore stale blob cleanup errors.
+      }
+    }
+    videoEl.removeAttribute("src");
+    videoEl.load();
+  } catch {
+    // Ignore media element reset errors while stopping playback.
   }
 }
 
@@ -390,9 +536,39 @@ export function playUrl(
   };
 
   videoEl.addEventListener("playing", markPlaybackStarted, { once: true });
+  const ensureAudibleOnPlaying = () => {
+    if (!videoEl || isStaleRequest()) return;
+
+    let attempt = 0;
+    const tryUnmute = () => {
+      if (!videoEl || isStaleRequest()) return;
+      attempt += 1;
+
+      if (videoEl.muted || videoEl.volume < 1) {
+        videoEl.muted = false;
+        videoEl.volume = 1;
+      }
+
+      if (attempt >= 5) return;
+      if (!videoEl.muted && videoEl.volume >= 1) return;
+
+      window.setTimeout(() => {
+        if (videoEl && !isStaleRequest()) {
+          void videoEl.play().catch(() => {
+            // Ignore retries while source/player engine settles.
+          });
+        }
+        tryUnmute();
+      }, 500);
+    };
+
+    tryUnmute();
+  };
+  videoEl.addEventListener("playing", ensureAudibleOnPlaying);
   videoEl.muted = false;
   videoEl.onerror = null;
   const normalizedUrl = normalizeProblematicXtreamSourceUrl(normalizeStreamUrl(url));
+  contentType = inferContentTypeFromUrl(normalizedUrl, contentType);
   const isLiveContent = contentType === "live";
   const isRequestedTranscode =
     isTranscodeBootstrapUrl(normalizedUrl) ||
@@ -444,7 +620,7 @@ export function playUrl(
 
     const blockedUntil = blockedRootPlaybackUntil[rootSourceUrl] || 0;
     if (now < blockedUntil) {
-      emitPlayerError("Retrying stream startup...");
+      emitPlayerTranscoding("Retrying stream startup...");
       return;
     }
 
@@ -496,11 +672,23 @@ export function playUrl(
   if (!isTranscodeSessionUrl(normalizedUrl)) {
     lastRootSourceUrl = rootSourceUrl;
   }
-  const shouldPreferTranscode = allowTranscodeFallback && (isRequestedTranscode || !isLiveContent);
+  const shouldPreferTranscode = isRequestedTranscode;
+  const rebootstrapVodSessionUrl =
+    !isLiveContent && isTranscodeSessionUrl(normalizedUrl)
+      ? toTranscodeFallbackUrl(rootSourceUrl, false, "compat")
+      : null;
+  const initialVodTranscodeUrl =
+    !forceNativePlayback &&
+    !isRequestedTranscode &&
+    !isLiveContent
+      ? toTranscodeFallbackUrl(rootSourceUrl, false, "compat")
+      : null;
   const initialLiveTranscodeUrl =
     !forceNativePlayback &&
     !isRequestedTranscode &&
-    isLiveContent && !hasTriedTranscodeFallback
+    isLiveContent &&
+    !hasTriedTranscodeFallback &&
+    false
       ? toTranscodeFallbackUrl(rootSourceUrl, false, "compat")
       : null;
   const liveRelayUrl = !forceNativePlayback && !isRequestedTranscode && isLiveContent ? toProxyFallbackUrl(rootSourceUrl) : null;
@@ -513,7 +701,9 @@ export function playUrl(
   const playbackUrl =
     directNativeRelayUrl ||
     (forceNativePlayback ? rootSourceUrl : null) ||
+    rebootstrapVodSessionUrl ||
     (isRequestedTranscode ? normalizedUrl : null) ||
+    initialVodTranscodeUrl ||
     (isLiveContent && isTransportStreamSource ? initialLiveTranscodeUrl : null) ||
     liveRelayUrl ||
     toPrimaryPlaybackUrl(rootSourceUrl, shouldPreferTranscode);
@@ -522,6 +712,7 @@ export function playUrl(
     isManifestLikeSource ||
     (playbackUrl.includes("/__stream?") && isManifestLikeSource);
   const shouldUseNativeHls = shouldUseHlsJs;
+  const shouldUseHlsJsPath = shouldUseHlsJs;
 
   console.log(`[playUrl-startup] isLocalTranscodePlayback=${playbackUrl.includes("/__transcode")}, shouldPreferTranscode=${shouldPreferTranscode}, hasTriedTranscodeFallback=${hasTriedTranscodeFallback}`);
 
@@ -551,10 +742,128 @@ export function playUrl(
   videoEl.removeAttribute("src");
   videoEl.load();
 
-  if (Hls.isSupported() && !forceNativePlayback && shouldUseHlsJs) {
+  if (Hls.isSupported() && !forceNativePlayback && shouldUseHlsJsPath) {
+    const shouldTryShakaForVodTranscode = false;
+
+    if (shouldTryShakaForVodTranscode) {
+      const launchShaka = async () => {
+        try {
+          const shakaModule = await import("shaka-player");
+          const shakaLib = (shakaModule as any).default || (shakaModule as any);
+
+          if (!shakaLib?.Player?.isBrowserSupported?.()) {
+            throw new Error("Shaka Player not supported in this browser");
+          }
+
+          if (isStaleRequest()) return;
+          await teardownShakaPlayer();
+
+          let shakaStartedPlayback = false;
+          const onShakaPlaying = () => {
+            shakaStartedPlayback = true;
+          };
+
+          if (videoEl) {
+            videoEl.addEventListener("playing", onShakaPlaying);
+          }
+
+          shakaPlayer = new shakaLib.Player();
+          await shakaPlayer.attach(videoEl);
+          shakaPlayer.configure({
+            preferredAudioLanguage: "eng",
+            preferredAudioChannelCount: 2,
+            streaming: {
+              rebufferingGoal: 2,
+              bufferingGoal: 10
+            }
+          });
+
+          shakaPlayer.addEventListener("error", () => {
+            if (isStaleRequest()) return;
+
+            void teardownShakaPlayer();
+            skipShakaOnce = true;
+            emitPlayerTranscoding("Alternate player failed, retrying with default player...");
+            playUrl(
+              normalizedUrl,
+              hasRetriedHttpFallback,
+              forceNativePlayback,
+              proxyFallbackStage,
+              hasTriedNativeFallback,
+              hasTriedTranscodeFallback,
+              hasRetriedTranscodeBootstrap,
+              contentType
+            );
+          });
+
+          await shakaPlayer.load(playbackUrl);
+
+          if (isStaleRequest()) {
+            if (videoEl) {
+              videoEl.removeEventListener("playing", onShakaPlaying);
+            }
+            await teardownShakaPlayer();
+            return;
+          }
+
+          window.setTimeout(() => {
+            if (isStaleRequest()) return;
+            if (shakaStartedPlayback) return;
+
+            if (videoEl) {
+              videoEl.removeEventListener("playing", onShakaPlaying);
+            }
+
+            void teardownShakaPlayer();
+            skipShakaOnce = true;
+            emitPlayerTranscoding("Alternate player startup stalled, retrying with default player...");
+            playUrl(
+              normalizedUrl,
+              hasRetriedHttpFallback,
+              forceNativePlayback,
+              proxyFallbackStage,
+              hasTriedNativeFallback,
+              hasTriedTranscodeFallback,
+              hasRetriedTranscodeBootstrap,
+              contentType
+            );
+          }, 7000);
+
+          skipShakaOnce = false;
+          if (videoEl) {
+            await safePlay(videoEl);
+            logAudioRuntimeState(videoEl, "shaka-playing");
+            videoEl.removeEventListener("playing", onShakaPlaying);
+          }
+        } catch {
+          if (isStaleRequest()) return;
+
+          void teardownShakaPlayer();
+          skipShakaOnce = true;
+          playUrl(
+            normalizedUrl,
+            hasRetriedHttpFallback,
+            forceNativePlayback,
+            proxyFallbackStage,
+            hasTriedNativeFallback,
+            hasTriedTranscodeFallback,
+            hasRetriedTranscodeBootstrap,
+            contentType
+          );
+        }
+      };
+
+      void launchShaka();
+      return;
+    }
+
+    if (skipShakaOnce) {
+      skipShakaOnce = false;
+    }
+
     const isLocalTranscodePlayback = playbackUrl.includes("/__transcode");
-    // Option 2: favor audio recovery attempts again before dropping to picture-only fallback.
-    const preferFastPictureOnlyRecovery = true;
+    // Prefer audio mode recovery (compat/safe) before picture-only fallback.
+    const preferFastPictureOnlyRecovery = false;
     const isAudioEnabledTranscode = isLocalTranscodePlayback && !/[?&]audio=0(?:&|$)/.test(playbackUrl);
     const currentAudioMode: "standard" | "compat" | "safe" = /[?&]amode=compat(?:&|$)/.test(playbackUrl)
       ? "compat"
@@ -565,7 +874,6 @@ export function playUrl(
       currentAudioMode === "standard" ? "compat" : currentAudioMode === "compat" ? "safe" : null;
     hls = new Hls({
       enableWorker: !isLocalTranscodePlayback, // Disable worker for local transcode (avoid async append race)
-      defaultAudioCodec: isAudioEnabledTranscode ? "mp4a.40.2" : undefined,
       startPosition: isLocalTranscodePlayback && contentType !== "live" ? 0 : -1,
       lowLatencyMode: isLocalTranscodePlayback && contentType === "live",
       liveDurationInfinity: isLocalTranscodePlayback && contentType === "live",
@@ -645,7 +953,7 @@ export function playUrl(
           // Live startup can stall with no explicit decoder error. In that case,
           // try one native fallback path only.
           if (contentType === "live" && !hasLoadedMetadata && !hasStartedPlayback && !hasTriedNativeFallback) {
-            emitPlayerError("Live startup stalled, trying direct playback...");
+            emitPlayerTranscoding("Live startup stalled, trying direct playback...");
             playUrl(
               rootSourceUrl,
               hasRetriedHttpFallback,
@@ -704,7 +1012,7 @@ export function playUrl(
               );
             }
           } else if (!hasTriedNativeFallback) {
-            emitPlayerError("Native audio decoder rejected stream, trying direct playback...");
+            emitPlayerTranscoding("Native audio decoder rejected stream, trying direct playback...");
             playUrl(
               rootSourceUrl,
               hasRetriedHttpFallback,
@@ -745,7 +1053,8 @@ export function playUrl(
             proxyFallbackStage,
             hasTriedNativeFallback,
             true,
-            hasRetriedTranscodeBootstrap
+            hasRetriedTranscodeBootstrap,
+            contentType
           );
         }
       }, startupTimeoutMs);
@@ -816,7 +1125,8 @@ export function playUrl(
             1,
             hasTriedNativeFallback,
             true,
-            hasRetriedTranscodeBootstrap
+            hasRetriedTranscodeBootstrap,
+            contentType
           );
         }
       }, transcodeStartupTimeoutMs);
@@ -926,7 +1236,8 @@ export function playUrl(
                   proxyFallbackStage,
                   hasTriedNativeFallback,
                   true,
-                  hasRetriedTranscodeBootstrap
+                  hasRetriedTranscodeBootstrap,
+                  contentType
                 );
                 return;
               }
@@ -944,7 +1255,8 @@ export function playUrl(
                   proxyFallbackStage,
                   hasTriedNativeFallback,
                   true,
-                  hasRetriedTranscodeBootstrap
+                  hasRetriedTranscodeBootstrap,
+                  contentType
                 );
                 return;
               }
@@ -975,32 +1287,81 @@ export function playUrl(
     // This covers both relay and transcode paths where Hls fatal details may be too generic.
     videoEl.onerror = () => {
       if (isStaleRequest()) return;
-      if (hasPlaybackStarted) return;
-
-      // Ignore decoder errors that arrive after stream startup succeeded.
-      if (hasLoadedMetadata || hasStartedPlayback) {
-        return;
-      }
-
       const mediaErr = videoEl?.error;
       console.error(`[video-error] code=${mediaErr?.code} message=${mediaErr?.message}`);
-      if (!isUnsupportedAudioDecoderError(mediaErr)) return;
+      const isUnsupportedAudio = isUnsupportedAudioDecoderError(mediaErr);
+
+      // Check if it's an audio decoder error first - handle these even after playback started
+      if (!isUnsupportedAudio) {
+        // For non-audio-decoder errors, ignore after startup has progressed
+        if (hasPlaybackStarted || hasLoadedMetadata || hasStartedPlayback) {
+          return;
+        }
+      }
+
+      if (!isUnsupportedAudio) return;
 
       // Debounce rapid decoder errors to prevent restart loop (e.g., every ~30ms)
       const now = Date.now();
       const timeSinceLastEscalation = now - lastEscalationTime;
       if (timeSinceLastEscalation < 3000) {
         // Too soon - skip escalation attempt
+        console.log(`[video-error-skip-debounce] time since last=${timeSinceLastEscalation}ms`);
         return;
       }
 
       clearStartupFallbackTimer();
+      console.log(`[video-error-handling] isLocalTranscodePlayback=${isLocalTranscodePlayback} isAudioEnabledTranscode=${isAudioEnabledTranscode} currentAudioMode=${currentAudioMode} nextAudioMode=${nextAudioMode}`);
 
       if (isLocalTranscodePlayback) {
-        // Chromium can emit an early unsupported-audio media error during MSE/fMP4
+        // For local transcode, first retry with audio compatibility modes before
+        // dropping to video-only playback.
+        console.log(`[video-error] isAudioEnabledTranscode=${isAudioEnabledTranscode} currentAudioMode=${currentAudioMode} nextAudioMode=${nextAudioMode}`);
+        if (isAudioEnabledTranscode && nextAudioMode) {
+          console.log(`[video-error-attempt-audio-mode] attempting to build ${nextAudioMode} URL from normalizedUrl=${normalizedUrl.slice(0, 80)}`);
+          const nextModeUrl = toTranscodeFallbackUrl(normalizedUrl, false, nextAudioMode);
+          console.log(`[video-error-attempt-audio-mode] result=${nextModeUrl ? nextModeUrl.slice(0, 100) : "null"}`);
+          if (nextModeUrl) {
+            lastEscalationTime = now;
+            console.log(`[video-error-fallback] trying ${nextAudioMode}-audio transcode: ${nextModeUrl.slice(0, 100)}...`);
+            emitPlayerTranscoding(`Audio decoder rejected ${currentAudioMode} mode, trying ${nextAudioMode}-audio transcoder...`);
+            playUrl(
+              nextModeUrl,
+              hasRetriedHttpFallback,
+              false,
+              proxyFallbackStage,
+              hasTriedNativeFallback,
+              true,
+              hasRetriedTranscodeBootstrap,
+              contentType
+            );
+            return;
+          }
+        }
+
+        console.log(`[video-error-attempt-videoonly] attempting video-only from normalizedUrl=${normalizedUrl.slice(0, 80)}`);
+        const videoOnlyBootstrapUrl = toTranscodeFallbackUrl(normalizedUrl, true);
+        console.log(`[video-error-attempt-videoonly] result=${videoOnlyBootstrapUrl ? videoOnlyBootstrapUrl.slice(0, 100) : "null"}`);
+        if (videoOnlyBootstrapUrl) {
+          lastEscalationTime = now;
+          console.log(`[video-error-fallback] trying video-only transcode: ${videoOnlyBootstrapUrl.slice(0, 100)}...`);
+          emitPlayerTranscoding("Audio decoder unsupported, restoring picture with video-only playback...");
+          playUrl(
+            videoOnlyBootstrapUrl,
+            hasRetriedHttpFallback,
+            false,
+            proxyFallbackStage,
+            hasTriedNativeFallback,
+            true,
+            hasRetriedTranscodeBootstrap,
+            contentType
+          );
+          return;
+        }
+        // Chromium can emit an early unsupported-audio media error during MSE startup
         // startup even when the manifest and init segment are valid. Let startup
         // continue unless the transcode still has not progressed after a grace period.
-        if (isAudioEnabledTranscode && videoEl && (hasManifestParsed || videoEl.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA)) {
+        if (isAudioEnabledTranscode && videoEl && videoEl.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
           return;
         }
 
@@ -1009,7 +1370,7 @@ export function playUrl(
         delayedLocalAudioEscalationTimer = window.setTimeout(() => {
           if (isStaleRequest()) return;
           if (hasPlaybackStarted || hasStartedPlayback || hasLoadedMetadata) return;
-          if (isAudioEnabledTranscode && videoEl && (hasManifestParsed || videoEl.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA)) {
+          if (isAudioEnabledTranscode && videoEl && videoEl.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
             return;
           }
 
@@ -1033,7 +1394,7 @@ export function playUrl(
           }
 
           const videoOnlyTranscodeUrl = toTranscodeFallbackUrl(rootSourceUrl, true);
-          if (videoOnlyTranscodeUrl) {
+          if (videoOnlyTranscodeUrl && contentType === "live") {
             lastEscalationTime = Date.now();
             emitPlayerTranscoding("Audio is not supported on this device for this stream, restoring picture-only playback...");
             playUrl(
@@ -1043,7 +1404,24 @@ export function playUrl(
               proxyFallbackStage,
               hasTriedNativeFallback,
               true,
-              hasRetriedTranscodeBootstrap
+              hasRetriedTranscodeBootstrap,
+              contentType
+            );
+            return;
+          }
+
+          if (videoOnlyTranscodeUrl && contentType !== "live" && !hasRetriedTranscodeBootstrap) {
+            lastEscalationTime = Date.now();
+            emitPlayerTranscoding("Audio decoder still unsupported, retrying with a fresh audio transcode session...");
+            playUrl(
+              rootSourceUrl,
+              hasRetriedHttpFallback,
+              false,
+              proxyFallbackStage,
+              hasTriedNativeFallback,
+              true,
+              true,
+              contentType
             );
             return;
           }
@@ -1077,7 +1455,7 @@ export function playUrl(
               );
             }
           } else if (!hasTriedNativeFallback) {
-            emitPlayerError("Native audio decoder rejected stream, trying direct playback...");
+            emitPlayerTranscoding("Native audio decoder rejected stream, trying direct playback...");
             playUrl(
               rootSourceUrl,
               hasRetriedHttpFallback,
@@ -1104,15 +1482,16 @@ export function playUrl(
             proxyFallbackStage,
             hasTriedNativeFallback,
             true,
-            hasRetriedTranscodeBootstrap
+            hasRetriedTranscodeBootstrap,
+            contentType
           );
         }
         return;
       }
 
-      if (isLocalTranscodePlayback && isAudioEnabledTranscode) {
-        return;
-      }
+      // Local transcode sessions can still hit unsupported audio decoder configs
+      // on some Chromium builds. Allow the fallback chain below to switch
+      // audio mode (compat/safe) or drop to video-only playback.
 
       if (nextAudioMode) {
         const nextModeUrl = toTranscodeFallbackUrl(rootSourceUrl, false, nextAudioMode);
@@ -1126,14 +1505,15 @@ export function playUrl(
             proxyFallbackStage,
             hasTriedNativeFallback,
             true,
-            hasRetriedTranscodeBootstrap
+            hasRetriedTranscodeBootstrap,
+            contentType
           );
           return;
         }
       }
 
       const videoOnlyTranscodeUrl = toTranscodeFallbackUrl(rootSourceUrl, true);
-      if (videoOnlyTranscodeUrl) {
+      if (videoOnlyTranscodeUrl && contentType === "live") {
         lastEscalationTime = now;
         emitPlayerTranscoding("Audio decoder unsupported in all modes, restoring picture with video-only transcoder...");
         playUrl(
@@ -1143,13 +1523,30 @@ export function playUrl(
           proxyFallbackStage,
           hasTriedNativeFallback,
           true,
-          hasRetriedTranscodeBootstrap
+          hasRetriedTranscodeBootstrap,
+          contentType
+        );
+        return;
+      }
+
+      if (videoOnlyTranscodeUrl && contentType !== "live" && !hasRetriedTranscodeBootstrap) {
+        lastEscalationTime = now;
+        emitPlayerTranscoding("Audio decoder unsupported in this session, retrying with a fresh audio transcode session...");
+        playUrl(
+          rootSourceUrl,
+          hasRetriedHttpFallback,
+          false,
+          proxyFallbackStage,
+          hasTriedNativeFallback,
+          true,
+          true,
+          contentType
         );
         return;
       }
 
       if (!hasTriedNativeFallback) {
-        emitPlayerError("Trying direct native playback fallback...");
+        emitPlayerTranscoding("Trying direct native playback fallback...");
         playUrl(
           rootSourceUrl,
           hasRetriedHttpFallback,
@@ -1186,7 +1583,7 @@ export function playUrl(
           /SourceBuffer has been removed/i.test(combinedMsg);
 
         if (isStaleSourceBufferAppend && !hasTriedNativeFallback && !isLocalTranscodePlayback) {
-          emitPlayerError("HLS append failed, trying direct playback...");
+          emitPlayerTranscoding("HLS append failed, trying direct playback...");
           playUrl(
             rootSourceUrl,
             hasRetriedHttpFallback,
@@ -1232,7 +1629,8 @@ export function playUrl(
             proxyFallbackStage,
             hasTriedNativeFallback,
             true,
-            true
+            true,
+            contentType
           );
           return;
         }
@@ -1250,7 +1648,8 @@ export function playUrl(
               1,
               hasTriedNativeFallback,
               true,
-              hasRetriedTranscodeBootstrap
+              hasRetriedTranscodeBootstrap,
+              contentType
             );
             return;
           }
@@ -1311,13 +1710,14 @@ export function playUrl(
                 proxyFallbackStage,
                 hasTriedNativeFallback,
                 true,
-                hasRetriedTranscodeBootstrap
+                hasRetriedTranscodeBootstrap,
+                contentType
               );
               return;
             }
           }
 
-          if (currentAudioMode !== "standard") {
+          if (currentAudioMode !== "standard" && isLiveContent) {
             const standardAudioUrl = toTranscodeFallbackUrl(rootSourceUrl, false, "standard");
             if (standardAudioUrl) {
               emitPlayerTranscoding("Audio pipeline unstable, retrying standard-audio transcoder...");
@@ -1328,7 +1728,8 @@ export function playUrl(
                 proxyFallbackStage,
                 hasTriedNativeFallback,
                 true,
-                hasRetriedTranscodeBootstrap
+                hasRetriedTranscodeBootstrap,
+                contentType
               );
               return;
             }
@@ -1344,7 +1745,8 @@ export function playUrl(
               proxyFallbackStage,
               hasTriedNativeFallback,
               true,
-              hasRetriedTranscodeBootstrap
+              hasRetriedTranscodeBootstrap,
+              contentType
             );
             return;
           }
@@ -1360,7 +1762,8 @@ export function playUrl(
                 proxyFallbackStage,
                 true,
                 true,
-                hasRetriedTranscodeBootstrap
+                hasRetriedTranscodeBootstrap,
+                contentType
               );
               return;
             }
@@ -1382,7 +1785,8 @@ export function playUrl(
                 proxyFallbackStage,
                 hasTriedNativeFallback,
                 true,
-                hasRetriedTranscodeBootstrap
+                hasRetriedTranscodeBootstrap,
+                contentType
               );
               return;
             }
@@ -1399,7 +1803,7 @@ export function playUrl(
               hasRetriedTranscodeBootstrap,
               contentType
             );
-            emitPlayerError("Codec error in HLS path, trying direct stream playback...");
+            emitPlayerTranscoding("Codec error in HLS path, trying direct stream playback...");
             return;
           }
 
@@ -1428,7 +1832,8 @@ export function playUrl(
               proxyFallbackStage,
               hasTriedNativeFallback,
               hasTriedTranscodeFallback,
-              hasRetriedTranscodeBootstrap
+              hasRetriedTranscodeBootstrap,
+              contentType
             );
             return;
           }
@@ -1444,7 +1849,8 @@ export function playUrl(
               1,
               hasTriedNativeFallback,
               hasTriedTranscodeFallback,
-              hasRetriedTranscodeBootstrap
+              hasRetriedTranscodeBootstrap,
+              contentType
             );
             return;
           }
@@ -1460,7 +1866,8 @@ export function playUrl(
               2,
               hasTriedNativeFallback,
               hasTriedTranscodeFallback,
-              hasRetriedTranscodeBootstrap
+              hasRetriedTranscodeBootstrap,
+              contentType
             );
             return;
           }
@@ -1478,7 +1885,7 @@ export function playUrl(
             hasRetriedTranscodeBootstrap,
             contentType
           );
-          emitPlayerError("HLS failed, trying direct stream playback.");
+          emitPlayerTranscoding("HLS failed, trying direct stream playback.");
           return;
         }
 
@@ -1487,9 +1894,21 @@ export function playUrl(
         emitPlayerError(finalMsg);
       }
     });
+    hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
+      if (!hls || isStaleRequest()) return;
+      selectPreferredHlsAudioTrack(hls, "audio-tracks-updated");
+    });
+    hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_, data) => {
+      if (isStaleRequest()) return;
+      const switchedTo = (data as { id?: number }).id;
+      console.log(`[hls-audio] event=audio-track-switched id=${typeof switchedTo === "number" ? switchedTo : "unknown"}`);
+    });
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       if (!videoEl || isStaleRequest()) return;
       hasManifestParsed = true;
+      if (hls) {
+        selectPreferredHlsAudioTrack(hls, "manifest-parsed");
+      }
 
       if (isLocalTranscodePlayback && contentType !== "live") {
         clearStartupWatchdogIfCurrent();
@@ -1576,10 +1995,14 @@ export function playUrl(
         }
       }
 
-      if (contentType !== "live" && !hasTriedTranscodeFallback) {
+      if (!hasTriedTranscodeFallback) {
         const transcodeUrl = toTranscodeFallbackUrl(rootSourceUrl, false, "compat");
         if (transcodeUrl) {
-          emitPlayerTranscoding("Network/protocol error, trying local transcoder...");
+          emitPlayerTranscoding(
+            contentType === "live"
+              ? "Stream format not supported, trying compatibility transcoder..."
+              : "Network/protocol error, trying local transcoder..."
+          );
           playUrl(
             transcodeUrl,
             hasRetriedHttpFallback,
@@ -1661,10 +2084,14 @@ export function playUrl(
         }
       }
 
-      if (contentType !== "live" && !hasTriedTranscodeFallback) {
+      if (!hasTriedTranscodeFallback) {
         const transcodeUrl = toTranscodeFallbackUrl(rootSourceUrl, false, "compat");
         if (transcodeUrl) {
-          emitPlayerTranscoding("Network/protocol error, trying local transcoder...");
+          emitPlayerTranscoding(
+            contentType === "live"
+              ? "Stream format not supported, trying compatibility transcoder..."
+              : "Network/protocol error, trying local transcoder..."
+          );
           playUrl(
             transcodeUrl,
             hasRetriedHttpFallback,

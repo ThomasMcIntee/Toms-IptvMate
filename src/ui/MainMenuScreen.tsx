@@ -1,6 +1,9 @@
 type Props = {
   visible: boolean;
   hasPlaylists: boolean;
+  liveCount: number;
+  movieCount: number;
+  seriesCount: number;
   onStartLive: () => void;
   onOpenPanel: (panel: string) => void;
 };
@@ -13,8 +16,22 @@ const menuItems = [
   { label: "Timeline Guide", panel: "timeline" }
 ];
 
-export default function MainMenuScreen({ visible, hasPlaylists, onStartLive, onOpenPanel }: Props) {
+function formatCount(count: number) {
+  return count.toLocaleString();
+}
+
+export default function MainMenuScreen({
+  visible,
+  hasPlaylists,
+  liveCount,
+  movieCount,
+  seriesCount,
+  onStartLive,
+  onOpenPanel
+}: Props) {
   if (!visible) return null;
+
+  const hasLoadedContent = liveCount > 0 || movieCount > 0 || seriesCount > 0;
 
   return (
     <div className="opening-screen" role="dialog" aria-modal="true" aria-label="Main menu">
@@ -26,18 +43,24 @@ export default function MainMenuScreen({ visible, hasPlaylists, onStartLive, onO
 
         <div className="opening-actions">
           <button className="opening-btn opening-btn-primary" onClick={onStartLive}>
-            {hasPlaylists ? "Start Live TV" : "Add Your First Playlist"}
+            {hasPlaylists ? `Start Live TV${liveCount > 0 ? ` (${formatCount(liveCount)})` : ""}` : "Add Your First Playlist"}
           </button>
         </div>
 
         <div className="opening-quick-actions" aria-label="Content shortcuts">
           <button className="opening-btn opening-btn-secondary opening-btn-quick" onClick={() => onOpenPanel("vod")}>
-            Movies
+            Movies{movieCount > 0 ? ` (${formatCount(movieCount)})` : ""}
           </button>
           <button className="opening-btn opening-btn-secondary opening-btn-quick" onClick={() => onOpenPanel("series")}>
-            Series
+            Series{seriesCount > 0 ? ` (${formatCount(seriesCount)})` : ""}
           </button>
         </div>
+
+        {hasLoadedContent && (
+          <div className="opening-hint">
+            Loaded: {formatCount(liveCount)} live, {formatCount(movieCount)} movies, {formatCount(seriesCount)} series.
+          </div>
+        )}
 
         {!hasPlaylists && (
           <div className="opening-warning">

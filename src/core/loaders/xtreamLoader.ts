@@ -1,5 +1,19 @@
 import { Channel, ContentType } from "../channelStore";
 
+type XtreamSeriesEpisodeRaw = {
+  id?: number | string;
+  stream_id?: number | string;
+  title?: string;
+  name?: string;
+  container_extension?: string;
+  episode_num?: number | string;
+  episode?: number | string;
+  movie_image?: string;
+  cover_big?: string;
+  stream_icon?: string;
+  info?: unknown;
+};
+
 export async function loadXtream(url: string, user: string, pass: string): Promise<Channel[]> {
   const { baseUrl, apiUrl, useProxy } = await resolveReachableBaseUrl(url, user, pass);
   const baseApiUrl = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`;
@@ -315,4 +329,193 @@ async function resolveReachableBaseUrl(
 
 function toCorsProxyUrl(url: string): string {
   return `https://corsproxy.io/?${encodeURIComponent(url)}`;
+}
+
+export async function loadXtreamSeriesEpisodesFromChannel(seriesChannel: Channel): Promise<Channel[]> {
+  const parsed = parseXtreamSeriesUrl(String(seriesChannel?.url || ""));
+  if (!parsed) return [];
+
+  const { baseUrl, user, pass, seriesId } = parsed;
+  const apiUrl = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_series_info&series_id=${encodeURIComponent(seriesId)}`;
+  const payload = await fetchJsonWithProxyFallback(apiUrl);
+  if (!payload || typeof payload !== "object") return [];
+
+  const episodes = extractEpisodeEntries(payload.episodes);
+  if (episodes.length === 0) return [];
+
+  const group = seriesChannel.group || "Series";
+  const parentGroup = seriesChannel.group || undefined;
+  const fallbackLogo = seriesChannel.logo;
+  const titlePrefix = String(seriesChannel.name || "Series").trim();
+
+  const mapped = episodes
+    .map((entry) => {
+      const streamIdRaw = entry.raw.id ?? entry.raw.stream_id;
+      const streamId = Number.parseInt(String(streamIdRaw ?? ""), 10);
+      if (!Number.isFinite(streamId) || streamId <= 0) return null;
+
+      const season = entry.season;
+      const episodeNumber = coerceNumber(entry.raw.episode_num ?? entry.raw.episode);
+      const episodeTitle = String(entry.raw.title || entry.raw.name || "").trim();
+      const extension = String(entry.raw.container_extension || "mp4").trim() || "mp4";
+      const logo = resolveEpisodeLogo(entry.raw, fallbackLogo);
+
+      const label = formatEpisodeLabel({
+        seriesTitle: titlePrefix,
+        season,
+        episode: episodeNumber,
+        title: episodeTitle,
+        fallbackId: streamId
+      });
+
+      return {
+        id: `series_${seriesId}_episode_${streamId}`,
+        name: label,
+        logo,
+        url: `${baseUrl}/series/${user}/${pass}/${streamId}.${extension}`,
+        group,
+        parentGroup,
+        contentType: "series" as ContentType,
+        episodeInfo: {
+          season,
+          episode: episodeNumber,
+          title: episodeTitle || undefined
+        }
+      } satisfies Channel;
+    })
+    .filter((item): item is Channel => !!item);
+
+  mapped.sort((a, b) => {
+    const aSeason = typeof a.episodeInfo?.season === "number" ? a.episodeInfo.season : Number.MAX_SAFE_INTEGER;
+    const bSeason = typeof b.episodeInfo?.season === "number" ? b.episodeInfo.season : Number.MAX_SAFE_INTEGER;
+    if (aSeason !== bSeason) return aSeason - bSeason;
+
+    const aEpisode = typeof a.episodeInfo?.episode === "number" ? a.episodeInfo.episode : Number.MAX_SAFE_INTEGER;
+    const bEpisode = typeof b.episodeInfo?.episode === "number" ? b.episodeInfo.episode : Number.MAX_SAFE_INTEGER;
+    if (aEpisode !== bEpisode) return aEpisode - bEpisode;
+
+    return a.name.localeCompare(b.name);
+  });
+
+  return mapped;
+}
+
+function parseXtreamSeriesUrl(url: string): {
+  baseUrl: string;
+  user: string;
+  pass: string;
+  seriesId: string;
+} | null {
+  const match = url.match(/^(https?:\/\/[^/]+)\/series\/([^/]+)\/([^/]+)\/(\d+)\.[^/?#]+/i);
+  if (!match) return null;
+
+  return {
+    baseUrl: match[1],
+    user: decodeURIComponent(match[2]),
+    pass: decodeURIComponent(match[3]),
+    seriesId: match[4]
+  };
+}
+
+async function fetchJsonWithProxyFallback(url: string): Promise<unknown> {
+  const direct = await fetch(url).catch(() => null);
+  if (direct?.ok) {
+    return direct.json();
+  }
+
+  const proxied = await fetch(toCorsProxyUrl(url)).catch(() => null);
+  if (proxied?.ok) {
+    return proxied.json();
+  }
+
+  return null;
+}
+
+function extractEpisodeEntries(episodesData: unknown): Array<{ season?: number; raw: XtreamSeriesEpisodeRaw }> {
+  if (!episodesData) return [];
+
+  const entries: Array<{ season?: number; raw: XtreamSeriesEpisodeRaw }> = [];
+
+  if (Array.isArray(episodesData)) {
+    for (const item of episodesData) {
+      if (!item || typeof item !== "object") continue;
+      entries.push({ raw: item as XtreamSeriesEpisodeRaw });
+    }
+    return entries;
+  }
+
+  if (typeof episodesData !== "object") return [];
+
+  for (const [seasonKey, seasonEpisodes] of Object.entries(episodesData as Record<string, unknown>)) {
+    if (!Array.isArray(seasonEpisodes)) continue;
+
+    const season = coerceNumber(seasonKey);
+    for (const episode of seasonEpisodes) {
+      if (!episode || typeof episode !== "object") continue;
+      entries.push({ season, raw: episode as XtreamSeriesEpisodeRaw });
+    }
+  }
+
+  return entries;
+}
+
+function resolveEpisodeLogo(raw: XtreamSeriesEpisodeRaw, fallbackLogo?: string): string | undefined {
+  const nestedInfo = parseEpisodeInfoRecord(raw.info);
+  return firstNonEmptyString([
+    raw.movie_image,
+    raw.cover_big,
+    raw.stream_icon,
+    nestedInfo?.movie_image,
+    nestedInfo?.cover_big,
+    nestedInfo?.stream_icon,
+    nestedInfo?.cover,
+    nestedInfo?.image,
+    nestedInfo?.poster,
+    fallbackLogo
+  ]);
+}
+
+function parseEpisodeInfoRecord(value: unknown): Record<string, unknown> | null {
+  if (!value) return null;
+  if (typeof value === "object") return value as Record<string, unknown>;
+  if (typeof value !== "string") return null;
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function firstNonEmptyString(values: Array<unknown>): string | undefined {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
+}
+
+function coerceNumber(value: unknown): number | undefined {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function formatEpisodeLabel(params: {
+  seriesTitle: string;
+  season?: number;
+  episode?: number;
+  title?: string;
+  fallbackId: number;
+}): string {
+  const seasonChunk = typeof params.season === "number" ? `S${String(params.season).padStart(2, "0")}` : "";
+  const episodeChunk = typeof params.episode === "number" ? `E${String(params.episode).padStart(2, "0")}` : "";
+  const code = `${seasonChunk}${episodeChunk}`.trim();
+  const title = (params.title || "").trim();
+
+  if (code && title) return `${code} - ${title}`;
+  if (code) return `${params.seriesTitle} ${code}`;
+  if (title) return title;
+  return `${params.seriesTitle} Episode ${params.fallbackId}`;
 }

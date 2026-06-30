@@ -28,6 +28,13 @@ function detectContentType(name: string, group: string): ContentType {
   return "live";
 }
 
+function normalizeM3uId(value: string): string {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-zA-Z0-9_.-]+/g, "_");
+}
+
 export async function loadM3U(url: string): Promise<Channel[]> {
   const { requestUrl, baseUrl } = await resolveReachableUrl(url, "M3U");
   const res = await fetch(requestUrl);
@@ -49,10 +56,14 @@ export async function loadM3U(url: string): Promise<Channel[]> {
     if (line.startsWith("#EXTINF")) {
       const nameMatch = line.match(/,(.*)$/);
       const logoMatch = line.match(/tvg-logo="(.*?)"/);
+      const tvgIdMatch = line.match(/tvg-id="(.*?)"/i);
       const groupMatch = line.match(/group-title="(.*?)"/);
 
+      const parsedTvgId = tvgIdMatch && tvgIdMatch[1] ? tvgIdMatch[1] : "";
+      const normalizedTvgId = parsedTvgId ? normalizeM3uId(parsedTvgId) : "";
+
       current = {
-        id: Math.random().toString(36).substring(2),
+        id: normalizedTvgId ? `m3u_${normalizedTvgId}` : Math.random().toString(36).substring(2),
         name: nameMatch ? nameMatch[1] : "Unknown",
         logo: logoMatch ? logoMatch[1] : "",
         group: groupMatch ? groupMatch[1] : ""

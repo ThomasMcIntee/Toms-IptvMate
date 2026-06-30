@@ -1,12 +1,21 @@
 
+import { useEffect, useMemo, useRef, useState } from "react";
+
 type Props = {
   channels: any[];
   onSelect: (ch: any) => void;
   activeChannel: any | null;
   isChannelVisible: (channelId: string) => boolean;
   onToggleChannelVisible: (channelId: string, visible: boolean) => void;
+  isFavoriteChannel?: (channelId: string) => boolean;
+  onToggleFavorite?: (channelId: string) => void;
   showVisibilityControls?: boolean;
+  showFavoriteControls?: boolean;
   showAsIcons?: boolean;
+  batchSize?: number;
+  suppressLogos?: boolean;
+  autoLoadOnScroll?: boolean;
+  listClassName?: string;
 };
 
 export function ChannelList({
@@ -15,12 +24,59 @@ export function ChannelList({
   activeChannel,
   isChannelVisible = () => true,
   onToggleChannelVisible = () => {},
+  isFavoriteChannel = () => false,
+  onToggleFavorite,
   showVisibilityControls = true,
-  showAsIcons = false
+  showFavoriteControls = false,
+  showAsIcons = false,
+  batchSize,
+  suppressLogos = false,
+  autoLoadOnScroll = false,
+  listClassName = ""
 }: Props) {
+  const effectiveBatchSize = Math.max(1, batchSize ?? (showAsIcons ? 180 : 250));
+  const [visibleCount, setVisibleCount] = useState(effectiveBatchSize);
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setVisibleCount(effectiveBatchSize);
+    const listEl = listRef.current;
+    if (listEl) {
+      listEl.scrollTop = 0;
+    }
+  }, [channels, showAsIcons, effectiveBatchSize]);
+
+  const safeChannels = useMemo(() => {
+    return channels.filter((channel) => !!channel && typeof channel === "object");
+  }, [channels]);
+
+  const visibleChannels = useMemo(() => {
+    return safeChannels.slice(0, visibleCount);
+  }, [safeChannels, visibleCount]);
+
+  const hasMoreChannels = visibleCount < safeChannels.length;
+
+  const loadNextBatch = () => {
+    setVisibleCount((count) => Math.min(safeChannels.length, count + effectiveBatchSize));
+  };
+
+  const handleScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    if (!autoLoadOnScroll || !hasMoreChannels) return;
+
+    const element = event.currentTarget;
+    const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (remaining <= 160) {
+      loadNextBatch();
+    }
+  };
+
   return (
-    <div className={"channel-list" + (showAsIcons ? " channel-list-icons" : "") }>
-      {channels.map((ch) => (
+    <div
+      ref={listRef}
+      className={"channel-list" + (showAsIcons ? " channel-list-icons" : "") + (listClassName ? ` ${listClassName}` : "")}
+      onScroll={handleScroll}
+    >
+      {visibleChannels.map((ch) => (
         <div
           key={ch.id}
           className={
@@ -46,6 +102,19 @@ export function ChannelList({
                   />
                 </label>
               )}
+              {showFavoriteControls && onToggleFavorite && (
+                <button
+                  type="button"
+                  className={`channel-icon-favorite${isFavoriteChannel(String(ch.id || "")) ? " active" : ""}`}
+                  aria-label={`${isFavoriteChannel(String(ch.id || "")) ? "Remove" : "Add"} ${ch.name} ${"to favorites"}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleFavorite(String(ch.id || ""));
+                  }}
+                >
+                  {isFavoriteChannel(String(ch.id || "")) ? "★" : "☆"}
+                </button>
+              )}
               <button
                 type="button"
                 className="channel-icon-btn"
@@ -58,7 +127,7 @@ export function ChannelList({
                   }
                 }}
               >
-                {ch.logo ? (
+                {!suppressLogos && ch.logo ? (
                   <img
                     src={ch.logo}
                     className="channel-icon-image"
@@ -99,6 +168,16 @@ export function ChannelList({
           )}
         </div>
       ))}
+
+      {hasMoreChannels && (
+        <button
+          type="button"
+          className="channel-load-more-btn"
+          onClick={loadNextBatch}
+        >
+          Load more ({safeChannels.length - visibleCount} remaining)
+        </button>
+      )}
     </div>
   );
 }

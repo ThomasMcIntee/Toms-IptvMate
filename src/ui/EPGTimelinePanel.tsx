@@ -1,48 +1,57 @@
 import { useEffect, useRef, useState } from "react";
-import { getAllChannels } from "../core/channelStore";
-import { getEPG } from "../core/epgStore";
+import { isChannelVisible, isGroupVisible } from "../core/channelStore";
+import { getEPGForChannel } from "../core/epgStore";
 import { scheduleRecording } from "../core/recordingEngine";
 import EPGPreviewPlayer from "./EPGPreviewPlayer";
+import { formatEpgTime } from "../core/epgTime";
 
-export default function EPGTimelinePanel({ visible }: { visible: boolean }) {
-  const [channels, setChannels] = useState<any[]>([]);
+export default function EPGTimelinePanel({ visible, channels }: { visible: boolean; channels: any[] }) {
   const [previewChannel, setPreviewChannel] = useState<any | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
+  const visibleChannels = channels.filter((channel) => {
+    const channelId = String(channel?.id || "");
+    const groupName = (channel?.group && String(channel.group).trim()) || "Uncategorized";
+    return isGroupVisible(groupName) && isChannelVisible(channelId);
+  });
 
   useEffect(() => {
     if (!visible) return;
-    const nextChannels = getAllChannels();
-    setChannels(nextChannels);
-    if (nextChannels.length > 0) {
-      setPreviewChannel(nextChannels[0]);
-    }
-  }, [visible]);
+    setPreviewChannel((current) => {
+      if (current) {
+        const currentId = String(current?.id || "");
+        const matchingChannel = visibleChannels.find((channel) => String(channel?.id || "") === currentId);
+        if (matchingChannel) return matchingChannel;
+      }
+
+      return visibleChannels[0] ?? null;
+    });
+  }, [visible, visibleChannels]);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (!visible || channels.length === 0) return;
+      if (!visible || visibleChannels.length === 0) return;
 
       if (e.key === "ArrowUp") {
-        const idx = channels.findIndex((c) => c.id === previewChannel?.id);
-        if (idx > 0) setPreviewChannel(channels[idx - 1]);
+        const idx = visibleChannels.findIndex((c) => c.id === previewChannel?.id);
+        if (idx > 0) setPreviewChannel(visibleChannels[idx - 1]);
       }
 
       if (e.key === "ArrowDown") {
-        const idx = channels.findIndex((c) => c.id === previewChannel?.id);
-        if (idx < channels.length - 1) setPreviewChannel(channels[idx + 1]);
+        const idx = visibleChannels.findIndex((c) => c.id === previewChannel?.id);
+        if (idx < visibleChannels.length - 1) setPreviewChannel(visibleChannels[idx + 1]);
       }
     };
 
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [visible, previewChannel, channels]);
+  }, [visible, previewChannel, visibleChannels]);
 
   if (!visible) return null;
 
   return (
     <div className="epg-timeline-container">
       <div className="epg-timeline-channels">
-        {channels.map((ch) => (
+        {visibleChannels.map((ch) => (
           <div
             key={ch.id}
             className="epg-timeline-channel"
@@ -56,7 +65,7 @@ export default function EPGTimelinePanel({ visible }: { visible: boolean }) {
       </div>
 
       <div className="epg-timeline-grid" ref={timelineRef}>
-        {channels.map((ch) => (
+        {visibleChannels.map((ch) => (
               <EPGTimelinePanelRow key={ch.id} channel={ch} />
         ))}
       </div>
@@ -83,7 +92,7 @@ function scheduleEPGRecording(channel: any, event: any) {
 }
 
    function EPGTimelinePanelRow({ channel }: { channel: any }) {
-  const events = getEPG(channel.id);
+  const events = getEPGForChannel(channel);
 
   return (
     <div className="epg-row">
@@ -91,7 +100,7 @@ function scheduleEPGRecording(channel: any, event: any) {
         <div key={i} className="epg-event">
           <div className="epg-event-title">{e.title}</div>
           <div className="epg-event-time">
-            {formatTime(e.start)} - {formatTime(e.end)}
+            {formatEpgTime(e.start)} - {formatEpgTime(e.end)}
           </div>
           <button className="epg-record-btn" onClick={() => scheduleEPGRecording(channel, e)}>
             Record
@@ -102,7 +111,3 @@ function scheduleEPGRecording(channel: any, event: any) {
   );
 }
 
-function formatTime(ts: number) {
-  const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}

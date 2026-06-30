@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { savePlaylist } from "../core/playlistStore";
+import { loadPlaylists, savePlaylist } from "../core/playlistStore";
 
-export default function PlaylistInputMenu({ visible }: { visible: boolean }) {
+export default function PlaylistInputMenu({ visible, onPlaylistSaved }: { visible: boolean; onPlaylistSaved?: () => void }) {
   const [tab, setTab] = useState<"m3u" | "xtream" | "stalker">("m3u");
   const [validationError, setValidationError] = useState("");
 
@@ -91,7 +91,28 @@ export default function PlaylistInputMenu({ visible }: { visible: boolean }) {
       return;
     }
 
-    alert("Playlist saved!");
+    // Reset form and notify parent
+    const saved = loadPlaylists().some((playlist) => playlist.id === id);
+    if (!saved) {
+      setValidationError("Playlist could not be saved. Please try again.");
+      return;
+    }
+
+    setName("");
+    setM3uUrl("");
+    setEpgUrl("");
+    setXtreamUrl("");
+    setXtreamUser("");
+    setXtreamPass("");
+    setPortalUrl("");
+    setMac("");
+    setTab("m3u");
+    
+    if (onPlaylistSaved) {
+      onPlaylistSaved();
+    } else {
+      alert("Playlist saved!");
+    }
   }
 
   return (
@@ -128,6 +149,10 @@ export default function PlaylistInputMenu({ visible }: { visible: boolean }) {
         placeholder="My IPTV"
         value={name}
         onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          // Allow all keyboard input - stop propagation to prevent parent handlers
+          e.stopPropagation();
+        }}
       />
 
       {/* M3U */}
@@ -139,6 +164,7 @@ export default function PlaylistInputMenu({ visible }: { visible: boolean }) {
             placeholder="http://example.com/playlist.m3u"
             value={m3uUrl}
             onChange={(e) => setM3uUrl(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
           />
 
           <label>EPG URL (optional)</label>
@@ -147,6 +173,7 @@ export default function PlaylistInputMenu({ visible }: { visible: boolean }) {
             placeholder="http://example.com/epg.xml"
             value={epgUrl}
             onChange={(e) => setEpgUrl(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
           />
         </>
       )}
@@ -160,6 +187,7 @@ export default function PlaylistInputMenu({ visible }: { visible: boolean }) {
             placeholder="http://example.com"
             value={xtreamUrl}
             onChange={(e) => setXtreamUrl(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
           />
 
           <label>Username</label>
@@ -168,6 +196,7 @@ export default function PlaylistInputMenu({ visible }: { visible: boolean }) {
             placeholder="username"
             value={xtreamUser}
             onChange={(e) => setXtreamUser(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
           />
 
           <label>Password</label>
@@ -176,6 +205,7 @@ export default function PlaylistInputMenu({ visible }: { visible: boolean }) {
             placeholder="password"
             value={xtreamPass}
             onChange={(e) => setXtreamPass(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
           />
         </>
       )}
@@ -189,6 +219,7 @@ export default function PlaylistInputMenu({ visible }: { visible: boolean }) {
             placeholder="http://example.com/c/"
             value={portalUrl}
             onChange={(e) => setPortalUrl(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
           />
 
           <label>MAC Address</label>
@@ -197,6 +228,7 @@ export default function PlaylistInputMenu({ visible }: { visible: boolean }) {
             placeholder="00:1A:79:XX:XX:XX"
             value={mac}
             onChange={(e) => setMac(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
           />
         </>
       )}

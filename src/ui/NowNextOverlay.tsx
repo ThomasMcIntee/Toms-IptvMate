@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getEPG } from "../core/epgStore";
+import { formatEpgTime } from "../core/epgTime";
 
 export default function NowNextOverlay({
   channel,
@@ -51,7 +52,7 @@ export default function NowNextOverlay({
           <div className="nn-title">NOW</div>
           <div className="nn-program">{now.title}</div>
           <div className="nn-time">
-            {formatTime(now.start)} — {formatTime(now.end)}
+            {formatEpgTime(now.start)} - {formatEpgTime(now.end)}
           </div>
           <div className="nn-progress">
             <progress className="nn-progress-bar" value={safeProgress} max={100} />
@@ -64,7 +65,7 @@ export default function NowNextOverlay({
           <div className="nn-title">NEXT</div>
           <div className="nn-program">{next.title}</div>
           <div className="nn-time">
-            {formatTime(next.start)} — {formatTime(next.end)}
+            {formatEpgTime(next.start)} - {formatEpgTime(next.end)}
           </div>
         </div>
       )}
@@ -72,7 +73,3 @@ export default function NowNextOverlay({
   );
 }
 
-function formatTime(ts: number) {
-  const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
