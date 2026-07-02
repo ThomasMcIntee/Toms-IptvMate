@@ -1,0 +1,9 @@
+{
+  "id": "tv.toms.iptvmate",
+  "version": "1.0.0",
+  "vendor": "Thomas",
+  "type": "web",
+  "main": "index.html",
+  "title": "Toms IPTVmate",
+  "icon": "icon.png"
+}

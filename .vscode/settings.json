@@ -1,0 +1,5 @@
+{
+    "github.copilot.chat.agentDebugLog.fileLogging.enabled": true,
+    "android-studio-lite.sdkPath": "C:\\Users\\mcint\\AppData\\Local\\Android\\Sdk",
+    "android-studio-lite.executable": "c:\\Users\\mcint\\AppData\\Local\\Android\\Sdk\\cmdline-tools\\latest\\bin\\avdmanager.bat"
+}

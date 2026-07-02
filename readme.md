@@ -34,8 +34,6 @@ Multi‑source fallback
 
 Fast channel switching
 
-Timeshift support (if provider supports it)
-
 On‑screen display (OSD) with:
 
 Channel info
