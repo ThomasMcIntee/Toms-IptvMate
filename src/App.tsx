@@ -25,7 +25,8 @@ import {
   setChannels,
   setRoleChannelWriteLock,
   setGroupVisible,
-  setGroupsVisible
+  setGroupsVisible,
+  setActiveVisibilityRole
 } from "./core/channelStore";
 import NowNextOverlay from "./ui/NowNextOverlay";
 import { loadPlaylists } from "./core/playlistStore";
@@ -57,6 +58,7 @@ const CHILD_ROLE_CACHE_KEY = "iptvmate_child_channels_cache";
 const ADULT_PLAYLIST_ID_KEY = "iptvmate_adult_playlist_id";
 const CHILD_PLAYLIST_ID_KEY = "iptvmate_child_playlist_id";
 const SHARED_PLAYLIST_ID_KEY = "iptvmate_shared_playlist_id";
+const MOVIES_SORT_DIRECTION_KEY = "iptvmate_movies_sort_direction";
 
 function readStoredItem(key: string): string | null {
   try {
@@ -103,6 +105,7 @@ export function App() {
   const [showNowNext, setShowNowNext] = useState(false);
   const [showOpeningScreen, setShowOpeningScreen] = useState(true);
   const [categoryRefreshTick, setCategoryRefreshTick] = useState(0);
+  const [channelUpdateTick, setChannelUpdateTick] = useState(0);  // Track channel data changes separately
   const [activeGroup, setActiveGroup] = useState(ROOT_GROUP);
   const [contentMode, setContentMode] = useState<"tv" | "movies" | "series">("tv");
   const [showLiveMenu, setShowLiveMenu] = useState(true);
@@ -120,12 +123,18 @@ export function App() {
   const [seriesMainSearchDebouncedTerm, setSeriesMainSearchDebouncedTerm] = useState("");
   const [seriesMainSearchResults, setSeriesMainSearchResults] = useState<any[] | null>(null);
   const [moviesMainSearchTerm, setMoviesMainSearchTerm] = useState("");
-  const [moviesSortDirection, setMoviesSortDirection] = useState<ItemSortDirection>(null);
+  const [moviesSortDirection, setMoviesSortDirection] = useState<ItemSortDirection>(() => {
+    try {
+      const saved = localStorage.getItem(MOVIES_SORT_DIRECTION_KEY);
+      if (saved === "asc" || saved === "desc") return saved;
+    } catch {
+      // Ignore localStorage errors
+    }
+    return null;
+  });
   const [accessLevel, setAccessLevel] = useState<AccessLevel>(null);
   const [loginCodeInput, setLoginCodeInput] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [channelWriteTraceLabel, setChannelWriteTraceLabel] = useState("");
-  const [roleRestoreDebugLabel, setRoleRestoreDebugLabel] = useState("");
   const [activePlaylistId, setActivePlaylistId] = useState("");
   const accessLevelRef = useRef<AccessLevel>(accessLevel);
   const autoLoadTokenRef = useRef(0);
@@ -189,27 +198,18 @@ export function App() {
   }, [accessLevel]);
 
   useEffect(() => {
-    const formatTrace = (trace: any) => {
-      const when = new Date(Number(trace?.at || Date.now())).toLocaleTimeString();
-      const source = String(trace?.source || "unknown");
-      const applied = trace?.applied ? "applied" : "blocked";
-      const count = Number(trace?.channelCount || 0);
-      const lock = trace?.roleLock ? String(trace.roleLock) : "none";
-      return `Channels write: ${source} (${applied}) count=${count} lock=${lock} @ ${when}`;
-    };
+    try {
+      if (moviesSortDirection) {
+        localStorage.setItem(MOVIES_SORT_DIRECTION_KEY, moviesSortDirection);
+      } else {
+        localStorage.removeItem(MOVIES_SORT_DIRECTION_KEY);
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+  }, [moviesSortDirection]);
 
-    setChannelWriteTraceLabel(formatTrace(getLastChannelWriteTrace()));
 
-    const onTrace = (event: Event) => {
-      const custom = event as CustomEvent<any>;
-      setChannelWriteTraceLabel(formatTrace(custom.detail));
-    };
-
-    window.addEventListener("channelsWriteTrace", onTrace as EventListener);
-    return () => {
-      window.removeEventListener("channelsWriteTrace", onTrace as EventListener);
-    };
-  }, []);
 
   useEffect(() => {
     if (accessLevel === "adult" || accessLevel === "child") {
@@ -222,7 +222,7 @@ export function App() {
 
   const allChannels = useMemo(() => {
     return getAllChannels().filter((channel) => isChannelRecord(channel));
-  }, [categoryRefreshTick, currentChannel]);
+  }, [channelUpdateTick, currentChannel]);
   const hasPlayableChannels = useMemo(
     () => allChannels.some((ch) => typeof ch?.url === "string" && ch.url.trim().length > 0),
     [allChannels]
@@ -377,10 +377,6 @@ export function App() {
     moviesSortDirection
   ]);
   const showIdlePlayerStatus = !showOpeningScreen && !currentChannel && activePanel === null && filteredChannels.length === 0;
-  const liveTvDebugLabel =
-    !showOpeningScreen && contentPage === "live"
-      ? `Live debug: playlist=${activePlaylistId || "none"} all=${allChannels.length} tv=${channelsByMode.tv.length} visibleTv=${visibleTvChannels.length} group=${activeGroup} filtered=${filteredChannels.length}`
-      : "";
 
   function commitSeriesMainSearch(nextTerm: string) {
     setSeriesMainSearchDebouncedTerm(nextTerm);
@@ -661,15 +657,14 @@ export function App() {
       if (!canApply()) return;
       prepareRoleContentSwitch();
       setChannels([], "role-clear");
+      setChannelUpdateTick((t) => t + 1);
       resetVisibilityForCurrentChannels();
       setCategoryRefreshTick((tick) => tick + 1);
     };
 
     const sharedPlaylistId = (activePlaylistId || readStoredItem(SHARED_PLAYLIST_ID_KEY) || loadPlaylists()[0]?.id || "").trim();
-    setRoleRestoreDebugLabel(`Role restore: ${kind} shared=${sharedPlaylistId || "none"}`);
 
     if (!sharedPlaylistId) {
-      setRoleRestoreDebugLabel(`Role restore failed: ${kind} no shared playlist id`);
       clearInheritedRoleContent();
       return false;
     }
@@ -677,7 +672,6 @@ export function App() {
     const fromCache = readRoleCache(kind, sharedPlaylistId);
     const sharedPlaylist = loadPlaylists().find((playlist) => String(playlist.id) === sharedPlaylistId);
     if (!sharedPlaylist) {
-      setRoleRestoreDebugLabel(`Role restore failed: ${kind} shared playlist not found (${sharedPlaylistId})`);
       clearInheritedRoleContent();
       return false;
     }
@@ -685,37 +679,37 @@ export function App() {
     try {
       const existingChannels = getAllChannels();
       const channels =
-        activePlaylistId === sharedPlaylist.id && existingChannels.length > 0
+        existingChannels.length > 0
           ? existingChannels
           : await loadChannelsForPlaylist(sharedPlaylist);
 
       if (!Array.isArray(channels) || channels.length === 0) {
-        setRoleRestoreDebugLabel(`Role restore failed: ${kind} loaded 0 channels from ${sharedPlaylist.name}`);
         clearInheritedRoleContent();
         return false;
       }
       if (!canApply()) {
-        setRoleRestoreDebugLabel(`Role restore cancelled: ${kind} canApply=false`);
         return false;
       }
 
       prepareRoleContentSwitch();
       setChannels(channels, "role-restore");
+      setChannelUpdateTick((t) => t + 1);
       setActivePlaylistId(sharedPlaylist.id);
       writeStoredItem(SHARED_PLAYLIST_ID_KEY, sharedPlaylist.id);
-      resetVisibilityForCurrentChannels();
-      applyVisibilitySnapshotForCurrentChannels(fromCache?.visibility as any);
       setActiveGroup(pickDefaultLiveGroup(channels));
-      setCategoryRefreshTick((tick) => tick + 1);
-      setRoleRestoreDebugLabel(
-        `Role restore ok: ${kind} playlist=${sharedPlaylist.name} channels=${channels.length} visibleTv=${channels.filter((channel) => matchesContentMode(channel, "tv")).length}`
-      );
+      
+      // Defer visibility role application to after initial render (avoids blocking on large playlists)
+      if (typeof requestIdleCallback !== "undefined") {
+        requestIdleCallback(() => setActiveVisibilityRole(kind));
+      } else {
+        setTimeout(() => setActiveVisibilityRole(kind), 0);
+      }
+      
       void loadEPGForPlaylist(sharedPlaylist).catch(() => {
         // EPG is optional during login-role restore.
       });
       return true;
     } catch {
-      setRoleRestoreDebugLabel(`Role restore failed: ${kind} threw while loading ${sharedPlaylist.name}`);
       clearInheritedRoleContent();
       return false;
     }
@@ -745,7 +739,6 @@ export function App() {
       setAccessLevel("adult");
       setLoginError(null);
       setLoginCodeInput("");
-      setRoleRestoreDebugLabel("Role login: adult selected");
       setShowOpeningScreen(true);
       setActivePanel(null);
       return;
@@ -756,7 +749,6 @@ export function App() {
       setAccessLevel("child");
       setLoginError(null);
       setLoginCodeInput("");
-      setRoleRestoreDebugLabel("Role login: child selected");
       setShowOpeningScreen(true);
       setActivePanel(null);
       return;
@@ -782,6 +774,9 @@ export function App() {
 
   function canOpenPanelWithSecurity(panel: string | null) {
     if (panel === null) return true;
+
+    // TV Guide is always available regardless of login.
+    if (panel === "epgSearch" || panel === "timeline") return true;
 
     const { loginRequired } = readSetupSecurity();
     if (!loginRequired) return true;
@@ -930,22 +925,98 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (readSetupSecurity().loginRequired && !accessLevel) return;
+    // Apply the correct visibility filter whenever the login level changes.
+    // No login or adult login → adult visibility; child login → child visibility.
+    setActiveVisibilityRole(accessLevel === "child" ? "child" : "adult");
+    setCategoryRefreshTick((tick) => tick + 1);
+  }, [accessLevel]);
+
+  useEffect(() => {
+    if (readSetupSecurity().loginRequired && !accessLevel) {
+      // Pre-warm the channel cache in the background so role login is instant.
+      void restoreChannelsCache();
+      return;
+    }
     if (accessLevel === "adult" || accessLevel === "child") return;
-    if (getAllChannels().length > 0) return;
+
+    const playlists = loadPlaylists();
+    if (playlists.length === 0) {
+      // No playlists configured — go straight to the Add Playlist panel.
+      setActivePanel("playlist");
+      setShowOpeningScreen(false);
+      return;
+    }
+
+    // If channels are already in memory from a same-session load, just dismiss.
+    if (getAllChannels().length > 0) {
+      const storedPlaylistId = readStoredItem(SHARED_PLAYLIST_ID_KEY);
+      if (storedPlaylistId) setActivePlaylistId(storedPlaylistId);
+      setShowOpeningScreen(false);
+      setActivePanel(null);
+      return;
+    }
 
     let cancelled = false;
 
     (async () => {
+      // 1. Try restoring from local cache for an instant start.
       const restored = await restoreChannelsCache();
-      if (cancelled || restored.length === 0) return;
-      setCategoryRefreshTick((tick) => tick + 1);
-      try {
-        await ensureGuideEPGLoaded();
-        await prefetchGuideListingsAheadOfTime();
-      } catch {
-        // Keep app startup resilient even if guide warmup fails.
+      if (cancelled) return;
+
+      function applyAndOpen(channelList: any[], playlistId: string, visibilityRole?: "adult" | "child") {
+        if (playlistId) setActivePlaylistId(playlistId);
+        const preferredMode = pickPreferredContentMode(channelList);
+        setContentMode(preferredMode);
+        setActiveGroup(preferredMode === "tv" ? pickDefaultLiveGroup(channelList) : ROOT_GROUP);
+        setShowOpeningScreen(false);
+        setActivePanel(null);
+        
+        // Defer visibility role application to after initial render (avoids blocking on large playlists)
+        if (visibilityRole) {
+          if (typeof requestIdleCallback !== "undefined") {
+            requestIdleCallback(() => setActiveVisibilityRole(visibilityRole));
+          } else {
+            setTimeout(() => setActiveVisibilityRole(visibilityRole), 0);
+          }
+        } else {
+          setCategoryRefreshTick((tick) => tick + 1);
+        }
       }
+
+      if (restored.length > 0) {
+        const storedPlaylistId =
+          readStoredItem(SHARED_PLAYLIST_ID_KEY) || playlists[0]?.id || "";
+        // Pass visibility role to applyAndOpen to batch updates
+        applyAndOpen(restored, storedPlaylistId, "adult");
+        // Load EPG in background without blocking
+        void ensureGuideEPGLoaded().catch(() => {});
+        void prefetchGuideListingsAheadOfTime().catch(() => {});
+        return;
+      }
+
+      // No local cache — load from the saved playlist configuration.
+      const storedPlaylistId = readStoredItem(SHARED_PLAYLIST_ID_KEY);
+      const targetPlaylist =
+        (storedPlaylistId && playlists.find((p) => p.id === storedPlaylistId)) ||
+        playlists[0];
+      if (!targetPlaylist) return;
+
+      try {
+        const freshChannels = await loadChannelsForPlaylist(targetPlaylist);
+        if (cancelled) return;
+        if (!freshChannels || freshChannels.length === 0) return;
+
+        writeStoredItem(SHARED_PLAYLIST_ID_KEY, targetPlaylist.id);
+        setChannels(freshChannels);
+        setChannelUpdateTick((t) => t + 1);
+        // Pass visibility role to applyAndOpen to batch updates
+        applyAndOpen(freshChannels, targetPlaylist.id, "adult");
+        // Load EPG in background without blocking
+        void loadEPGForPlaylist(targetPlaylist).catch(() => {});
+      } catch {
+        // Silent fail — user can load manually from the opening screen.
+      }
+      // No cache — leave the opening screen so the user can load manually.
     })();
 
     return () => {
@@ -1782,7 +1853,9 @@ export function App() {
             if (accessLevelRef.current === "adult" || accessLevelRef.current === "child") return;
 
             setActivePlaylistId(playlist.id);
+            writeStoredItem(SHARED_PLAYLIST_ID_KEY, playlist.id);
             setChannels(channels);
+            setChannelUpdateTick((t) => t + 1);
             resetVisibilityForCurrentChannels();
             setCategoryRefreshTick((tick) => tick + 1);
 
@@ -2153,7 +2226,8 @@ export function App() {
     if (accessLevel === "adult" || accessLevel === "child") {
       const restoredForRole = await restoreRoleContentForLogin(accessLevel);
       if (restoredForRole) {
-        await ensureGuideEPGLoaded();
+        void ensureGuideEPGLoaded();  // Load EPG in background, don't block UI
+        void prefetchGuideListingsAheadOfTime();  // Prefetch guide data
         return;
       }
 
@@ -2162,6 +2236,20 @@ export function App() {
           ? "Adult playlist is not assigned or failed to load."
           : "Child playlist is not assigned or failed to load."
       );
+      setActivePanel(null);
+      setShowOpeningScreen(false);
+      return;
+    }
+
+    if (accessLevel === "master") {
+      const restoredForRole = await restoreRoleContentForLogin("adult");
+      if (restoredForRole) {
+        void ensureGuideEPGLoaded();  // Load EPG in background, don't block UI
+        void prefetchGuideListingsAheadOfTime();  // Prefetch guide data
+        return;
+      }
+
+      setLoginError("Master playlist is not assigned or failed to load.");
       setActivePanel(null);
       setShowOpeningScreen(false);
       return;
@@ -2215,23 +2303,11 @@ export function App() {
       {showIdlePlayerStatus && (
         <div className="player-status">
           {allChannels.length > 0 ? "No channels available in this view." : "Add a playlist to load channels."}
-          {liveTvDebugLabel && <div>{liveTvDebugLabel}</div>}
-          {roleRestoreDebugLabel && <div>{roleRestoreDebugLabel}</div>}
-          {(accessLevel === "adult" || accessLevel === "child") && channelWriteTraceLabel && <div>{channelWriteTraceLabel}</div>}
         </div>
-      )}
-      {(accessLevel === "adult" || accessLevel === "child") && liveTvDebugLabel && (
-        <div className="player-status player-status-info">{liveTvDebugLabel}</div>
-      )}
-      {(accessLevel === "adult" || accessLevel === "child") && roleRestoreDebugLabel && (
-        <div className="player-status player-status-info">{roleRestoreDebugLabel}</div>
       )}
       {currentChannel && playerStatus && <div className="player-status player-status-info">{playerStatus}</div>}
       {currentChannel && !playerStatus && playerWarning && <div className="player-status player-status-info">{playerWarning}</div>}
       {currentChannel && playerError && <div className="player-status player-status-error">{playerError}</div>}
-      {(accessLevel === "adult" || accessLevel === "child") && channelWriteTraceLabel && (
-        <div className="player-status player-status-info">{channelWriteTraceLabel}</div>
-      )}
       {isVodPlaybackFullscreen && (
         <button
           type="button"

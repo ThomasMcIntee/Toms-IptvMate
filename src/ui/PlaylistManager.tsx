@@ -12,6 +12,8 @@ import {
   getAllChannels,
   getVisibilitySnapshotForChannelIds,
   applyVisibilitySnapshotForCurrentChannels,
+  setActiveVisibilityRole,
+  saveRoleVisibility,
   ChannelVisibilitySnapshot
 } from "../core/channelStore";
 import { loadEPGForPlaylist } from "../core/loaders/epgLoader";
@@ -227,7 +229,7 @@ export default function PlaylistManager({
   const [playlists, setPlaylists] = useState<PlaylistEntry[]>([]);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [activeRoleContext, setActiveRoleContext] = useState<"adult" | "child" | null>(null);
+  const [activeRoleContext, setActiveRoleContext] = useState<"adult" | "child">("adult");
   const [currentPlaylistId, setCurrentPlaylistId] = useState<string>("");
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string>("");
   const loadRequestTokenRef = useRef(0);
@@ -249,6 +251,9 @@ export default function PlaylistManager({
 
   useEffect(() => {
     if (!visible) return;
+    // Default to adult visibility when the screen opens.
+    setActiveRoleContext("adult");
+    setActiveVisibilityRole("adult");
 
     const refresh = () => {
       setPlaylists(loadPlaylists());
@@ -322,33 +327,16 @@ export default function PlaylistManager({
 
     writeStorageItem(SHARED_PLAYLIST_ID_KEY, targetPlaylist.id);
 
+    // Write to the protected saved-role key (never overwritten by playlist resets).
+    saveRoleVisibility(kind);
     await persistRoleSnapshot(kind, targetPlaylist.id);
     setStatusMessage(`✓ Saved ${kind} visibility for "${targetPlaylist.name}".`);
   }
 
   async function applyActiveRoleVisibility(kind: "adult" | "child") {
     setActiveRoleContext(kind);
-
-    const targetPlaylistId = activePlaylistId || selectedPlaylistId || currentPlaylistId;
-    if (!targetPlaylistId) {
-      setStatusMessage(`${kind === "adult" ? "Adult" : "Child"} visibility selected. Load the shared playlist first.`);
-      return;
-    }
-
-    const targetPlaylist = playlists.find((playlist) => playlist.id === targetPlaylistId);
-    if (!targetPlaylist) {
-      setStatusMessage(`${kind === "adult" ? "Adult" : "Child"} visibility selected. Shared playlist is not available.`);
-      return;
-    }
-
-    const cached = await readRoleCache(kind, targetPlaylist.id);
-    if (!cached?.visibility) {
-      setStatusMessage(`No saved ${kind} hidden-channel profile for "${targetPlaylist.name}" yet.`);
-      return;
-    }
-
-    applyVisibilitySnapshotForCurrentChannels(cached.visibility);
-    setStatusMessage(`Applied ${kind} hidden-channel profile for "${targetPlaylist.name}".`);
+    setActiveVisibilityRole(kind);
+    setStatusMessage(`Showing ${kind === "adult" ? "Adult" : "Child"} visibility. Edit checkmarks then press Save.`);
   }
 
   function remove(id: string) {
@@ -367,8 +355,10 @@ export default function PlaylistManager({
     if (selectedPlaylistId === id) {
       setSelectedPlaylistId("");
     }
-    if (activeRoleContext && ((activeRoleContext === "adult" && adultPlaylistId === id) || (activeRoleContext === "child" && childPlaylistId === id))) {
-      setActiveRoleContext(null);
+    if (activeRoleContext === "adult" && adultPlaylistId === id) {
+      setActiveRoleContext("child");
+    } else if (activeRoleContext === "child" && childPlaylistId === id) {
+      setActiveRoleContext("adult");
     }
     setPlaylists(loadPlaylists());
     setStatusMessage(`Deleted playlist "${id}".`);
@@ -449,27 +439,21 @@ export default function PlaylistManager({
       <div className="playlist-manager-parental-actions">
         <button
           className={`btn-secondary btn-flex${activeRoleContext === "adult" ? " playlist-role-toggle-active" : ""}`}
-          onClick={() => {
-            void applyActiveRoleVisibility("adult");
-          }}
+          onClick={() => { void applyActiveRoleVisibility("adult"); }}
         >
           Adult
         </button>
         <button
           className={`btn-secondary btn-flex${activeRoleContext === "child" ? " playlist-role-toggle-active" : ""}`}
-          onClick={() => {
-            void applyActiveRoleVisibility("child");
-          }}
+          onClick={() => { void applyActiveRoleVisibility("child"); }}
         >
           Child
         </button>
         <button
           className="btn-primary btn-flex"
-          onClick={() => {
-            void saveActiveRoleSnapshot();
-          }}
+          onClick={() => { void saveActiveRoleSnapshot(); }}
         >
-          {activeRoleContext ? `Save ${activeRoleContext === "adult" ? "Adult" : "Child"} Visibility` : "Save Visibility"}
+          Save {activeRoleContext === "child" ? "Child" : "Adult"} Visibility
         </button>
       </div>
 

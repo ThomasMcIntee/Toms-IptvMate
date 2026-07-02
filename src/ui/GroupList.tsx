@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { sortGroupNames, type GroupSortDirection } from "./groupSorting";
+
+const SORT_DIRECTION_KEY = "iptvmate_group_sort_direction";
 
 type Props = {
   groups: string[];
@@ -22,7 +24,27 @@ export function GroupList({
   className = "",
   onSetAllVisible
 }: Props) {
-  const [sortDirection, setSortDirection] = useState<GroupSortDirection>(null);
+  const [sortDirection, setSortDirection] = useState<GroupSortDirection>(() => {
+    try {
+      const saved = localStorage.getItem(SORT_DIRECTION_KEY);
+      if (saved === "asc" || saved === "desc") return saved;
+    } catch {
+      // Ignore localStorage errors
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    try {
+      if (sortDirection) {
+        localStorage.setItem(SORT_DIRECTION_KEY, sortDirection);
+      } else {
+        localStorage.removeItem(SORT_DIRECTION_KEY);
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+  }, [sortDirection]);
 
   const sortedGroups = useMemo(() => {
     return sortGroupNames(groups, sortDirection, ["Favorites"]);

@@ -18,7 +18,10 @@ export type Channel = {
 let channels: Channel[] = [];
 let activeGroup: string = "All";
 let roleChannelWriteLock: "adult" | "child" | null = null;
-const VISIBILITY_KEY = "iptvmate_visibility";
+const VISIBILITY_KEY = "iptvmate_visibility";             // live/runtime — overwritten by reset
+const ADULT_SAVED_KEY = "iptvmate_visibility_adult";       // admin-saved adult settings (never reset)
+const CHILD_SAVED_KEY = "iptvmate_visibility_child";       // admin-saved child settings (never reset)
+let activeVisibilityRole: "adult" | "child" = "adult";
 const FAVORITES_KEY = "iptvmate_favorites";
 const FAVORITES_GROUP = "Favorites";
 const CHANNELS_CACHE_KEY = "iptvmate_channels_cache";
@@ -293,8 +296,10 @@ async function loadCachedChannelsIndexedDb(): Promise<Channel[]> {
 }
 
 function loadVisibilityState(): VisibilityState {
+  // On module init, activeVisibilityRole is always "adult" — read the adult key.
+  const key = VISIBILITY_KEY;
   try {
-    const raw = localStorage.getItem(VISIBILITY_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) {
       return { groups: {}, channels: {} };
     }
@@ -310,11 +315,50 @@ function loadVisibilityState(): VisibilityState {
 }
 
 function saveVisibilityState() {
+  // Always write to the live/runtime key. Saved role keys are only written
+  // by saveRoleVisibility() so that resetVisibilityForCurrentChannels() can
+  // never overwrite the admin's configured hide/show settings.
   try {
     localStorage.setItem(VISIBILITY_KEY, JSON.stringify(visibilityState));
   } catch {
     // Ignore persistence errors.
   }
+}
+
+/** Persist the current visibility state as the saved settings for the given role.
+ *  This is the ONLY function that writes to ADULT_SAVED_KEY / CHILD_SAVED_KEY. */
+export function saveRoleVisibility(role: "adult" | "child") {
+  const key = role === "child" ? CHILD_SAVED_KEY : ADULT_SAVED_KEY;
+  try {
+    localStorage.setItem(key, JSON.stringify(visibilityState));
+  } catch {
+    // Ignore persistence errors.
+  }
+}
+
+/** Switch between adult (default) and child visibility states.
+ *  Reads from the explicitly-saved role key so admin settings survive resets.
+ *  Never mixes with the live key, which is reset on every playlist load. */
+export function setActiveVisibilityRole(role: "adult" | "child") {
+  activeVisibilityRole = role;
+  const savedKey = role === "child" ? CHILD_SAVED_KEY : ADULT_SAVED_KEY;
+  try {
+    // Only read from the saved key. Reset never touches it.
+    const raw = localStorage.getItem(savedKey);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<VisibilityState>;
+      visibilityState = {
+        groups: parsed.groups ?? {},
+        channels: parsed.channels ?? {}
+      };
+    } else {
+      // No saved settings yet — start fully visible.
+      visibilityState = { groups: {}, channels: {} };
+    }
+  } catch {
+    visibilityState = { groups: {}, channels: {} };
+  }
+  dispatchVisibilityChanged();
 }
 
 function dispatchVisibilityChanged() {

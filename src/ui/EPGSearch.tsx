@@ -8,6 +8,7 @@ import { loadXtreamEPGForStream } from "../core/loaders/xtreamEPG";
 import { sortGroupNames, type GroupSortDirection } from "./groupSorting";
 
 const GUIDE_OFFSET_KEY = "iptvmate_guide_only_offset_minutes";
+const GUIDE_SORT_DIRECTION_KEY = "iptvmate_guide_sort_direction";
 const GUIDE_OFFSET_STEP_MINUTES = 30;
 const GUIDE_OFFSET_MINUTES_MIN = -720;
 const GUIDE_OFFSET_MINUTES_MAX = 720;
@@ -27,7 +28,15 @@ export default function EPGSearch({
   const [epgRefreshTick, setEpgRefreshTick] = useState(0);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [bootstrapRefreshRequested, setBootstrapRefreshRequested] = useState(false);
-  const [sortDirection, setSortDirection] = useState<GroupSortDirection>(null);
+  const [sortDirection, setSortDirection] = useState<GroupSortDirection>(() => {
+    try {
+      const saved = localStorage.getItem(GUIDE_SORT_DIRECTION_KEY);
+      if (saved === "asc" || saved === "desc") return saved;
+    } catch {
+      // Ignore localStorage errors
+    }
+    return null;
+  });
   const [guideOffsetMinutes, setGuideOffsetMinutes] = useState(() => loadGuideOffsetMinutes());
   const prefetchCursorRef = useRef(0);
   const bulkPrefetchBusyRef = useRef(false);
@@ -36,6 +45,18 @@ export default function EPGSearch({
   useEffect(() => {
     saveGuideOffsetMinutes(guideOffsetMinutes);
   }, [guideOffsetMinutes]);
+
+  useEffect(() => {
+    try {
+      if (sortDirection) {
+        localStorage.setItem(GUIDE_SORT_DIRECTION_KEY, sortDirection);
+      } else {
+        localStorage.removeItem(GUIDE_SORT_DIRECTION_KEY);
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+  }, [sortDirection]);
 
   useEffect(() => {
     if (!visible) {
