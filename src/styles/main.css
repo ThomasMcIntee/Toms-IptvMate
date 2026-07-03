@@ -199,8 +199,8 @@ body.theme-light .app-login-input {
 :root {
   --live-preview-right: 20px;
   --live-preview-top: 20px;
-  --live-preview-width: 1400px;
-  --live-preview-height: 788px;
+  --live-preview-width: 420px;
+  --live-preview-height: 236px;
 }
 
 .app-root {
@@ -265,13 +265,43 @@ body.theme-light .app-login-input {
   .series-episode-btn:focus-visible {
     outline: 2px solid #7ec5ff;
     outline-offset: 2px;
-  position: relative;
-  max-width: 420px !important;
-  max-height: 236px !important;
+  }
+
+.live-preview-shell {
+  position: fixed;
+  top: var(--live-preview-top);
+  right: var(--live-preview-right);
+  left: auto;
+  width: var(--live-preview-width);
+  height: var(--live-preview-height);
+  max-width: var(--live-preview-width);
+  max-height: var(--live-preview-height);
   min-width: 280px;
   min-height: 158px;
   border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
   box-shadow: 0 26px 80px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  z-index: 40;
+}
+
+.live-preview-shell.live-preview-shell-fullscreen {
+  top: 0;
+  right: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: 100vw;
+  max-height: 100vh;
+  border-radius: 0;
+  border: 0;
+}
+
+.player-main-shell-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .app-root video.player-main.player-main-force-preview {
@@ -297,12 +327,12 @@ body.theme-light .app-login-input {
   top: var(--live-preview-top);
   right: var(--live-preview-right);
   left: auto;
-  width: 700px;
-  height: 394px;
-  max-width: 700px;
-  max-height: 394px;
-  min-width: 420px;
-  min-height: 236px;
+  width: var(--live-preview-width);
+  height: var(--live-preview-height);
+  max-width: var(--live-preview-width);
+  max-height: var(--live-preview-height);
+  min-width: 280px;
+  min-height: 158px;
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.22);
   background:
@@ -321,10 +351,10 @@ body.theme-light .app-login-input {
   .live-preview-shell,
   .app-root video.player-main.player-main-force-preview,
   .live-preview-placeholder {
-    width: 840px !important;
-    height: 472px !important;
-    max-width: 840px !important;
-    max-height: 472px !important;
+    width: 360px !important;
+    height: 202px !important;
+    max-width: 360px !important;
+    max-height: 202px !important;
   }
 }
 
@@ -631,6 +661,65 @@ body.theme-light .app-login-input {
   padding: 13px 16px;
 }
 
+.exit-confirm-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 350;
+}
+
+.exit-confirm-card {
+  width: min(480px, 92vw);
+  background: rgba(10, 18, 30, 0.98);
+  border: 1px solid rgba(126, 197, 255, 0.38);
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.48);
+}
+
+.exit-confirm-title {
+  margin: 0 0 10px;
+  color: #f3f8ff;
+  font-size: 24px;
+}
+
+.exit-confirm-text {
+  margin: 0 0 14px;
+  color: rgba(228, 238, 252, 0.9);
+  font-size: 14px;
+}
+
+.exit-confirm-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.opening-btn:focus,
+.opening-btn:focus-visible,
+.tab:focus,
+.tab:focus-visible,
+.tab-active:focus,
+.tab-active:focus-visible,
+.btn-primary:focus,
+.btn-primary:focus-visible,
+.btn-secondary:focus,
+.btn-secondary:focus-visible,
+.btn-danger:focus,
+.btn-danger:focus-visible,
+.group-select-btn:focus,
+.group-select-btn:focus-visible,
+.channel-select-btn:focus,
+.channel-select-btn:focus-visible,
+input:focus,
+input:focus-visible {
+  outline: 3px solid #7ec5ff;
+  outline-offset: 2px;
+}
+
 
 .playlist-manager-actions {
   display: flex;
@@ -660,6 +749,34 @@ body.theme-light .app-login-input {
   background: rgba(30, 144, 255, 0.34);
   border: 1px solid rgba(126, 197, 255, 0.75);
   color: #ffffff;
+}
+
+.playlist-diagnostics-text {
+  margin: 6px 0 12px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.playlist-recovery-fixed-card {
+  border: 1px solid rgba(126, 197, 255, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(126, 197, 255, 0.18);
+}
+
+.playlist-status-banner {
+  padding: 8px 12px;
+  margin: 8px 0;
+  background: rgba(60, 180, 100, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.playlist-status-banner-loading {
+  background: rgba(80, 140, 220, 0.18);
+}
+
+.playlist-status-spinner {
+  margin-right: 8px;
 }
 
 body.theme-light .playlist-role-toggle-active {

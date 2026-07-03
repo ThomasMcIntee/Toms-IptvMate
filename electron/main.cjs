@@ -5,11 +5,42 @@ const { app, BrowserWindow } = require("electron");
 
 const DEV_URL = process.env.ELECTRON_START_URL || "";
 
-const runtimeDataRoot = path.join(os.tmpdir(), "toms-iptvmate-electron");
+const runtimeDataRoot = path.join(app.getPath("appData"), "toms-iptvmate-electron");
 const runtimeUserData = path.join(runtimeDataRoot, "userData");
 const runtimeSessionData = path.join(runtimeDataRoot, "sessionData");
+const legacyDataRoot = path.join(os.tmpdir(), "toms-iptvmate-electron");
+const legacyUserData = path.join(legacyDataRoot, "userData");
+const legacySessionData = path.join(legacyDataRoot, "sessionData");
+
+function directoryHasFiles(dirPath) {
+  try {
+    return fs.existsSync(dirPath) && fs.readdirSync(dirPath).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function migrateLegacyRuntimeData() {
+  try {
+    const shouldMigrateUserData = directoryHasFiles(legacyUserData) && !directoryHasFiles(runtimeUserData);
+    const shouldMigrateSessionData = directoryHasFiles(legacySessionData) && !directoryHasFiles(runtimeSessionData);
+
+    if (shouldMigrateUserData) {
+      fs.mkdirSync(runtimeUserData, { recursive: true });
+      fs.cpSync(legacyUserData, runtimeUserData, { recursive: true, force: false });
+    }
+
+    if (shouldMigrateSessionData) {
+      fs.mkdirSync(runtimeSessionData, { recursive: true });
+      fs.cpSync(legacySessionData, runtimeSessionData, { recursive: true, force: false });
+    }
+  } catch (err) {
+    console.warn(`[electron] failed to migrate legacy runtime data: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 
 try {
+  migrateLegacyRuntimeData();
   fs.mkdirSync(runtimeUserData, { recursive: true });
   fs.mkdirSync(runtimeSessionData, { recursive: true });
   app.setPath("userData", runtimeUserData);

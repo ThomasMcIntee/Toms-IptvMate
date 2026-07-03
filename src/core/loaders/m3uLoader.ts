@@ -35,6 +35,15 @@ function normalizeM3uId(value: string): string {
     .replace(/[^a-zA-Z0-9_.-]+/g, "_");
 }
 
+function hashText(value: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 export async function loadM3U(url: string): Promise<Channel[]> {
   const { requestUrl, baseUrl } = await resolveReachableUrl(url, "M3U");
   const res = await fetch(requestUrl);
@@ -63,7 +72,7 @@ export async function loadM3U(url: string): Promise<Channel[]> {
       const normalizedTvgId = parsedTvgId ? normalizeM3uId(parsedTvgId) : "";
 
       current = {
-        id: normalizedTvgId ? `m3u_${normalizedTvgId}` : Math.random().toString(36).substring(2),
+        id: normalizedTvgId ? `m3u_${normalizedTvgId}` : `m3u_line_${counter}`,
         name: nameMatch ? nameMatch[1] : "Unknown",
         logo: logoMatch ? logoMatch[1] : "",
         group: groupMatch ? groupMatch[1] : ""
@@ -76,15 +85,19 @@ export async function loadM3U(url: string): Promise<Channel[]> {
       const group = current.group || "";
       const contentType = detectContentType(name, group);
       const contentTypePrefix = contentType === "movie" ? "Movies: " : contentType === "series" ? "Series: " : "TV: ";
+      const streamHash = hashText(streamUrl).slice(0, 8);
+      const rawId = String(current.id || `m3u-${counter}`).trim();
+      const stableId = `${rawId}_${streamHash}`;
       
       channels.push({
-        id: current.id || `m3u-${counter++}`,
+        id: stableId,
         name: name,
         logo: current.logo || "",
         group: `${contentTypePrefix}${group || "Uncategorized"}`,
         url: streamUrl,
         contentType: contentType
       });
+      counter += 1;
       current = {};
     }
   }

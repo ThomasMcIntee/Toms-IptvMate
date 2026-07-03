@@ -34,6 +34,13 @@ type VisibilityState = {
   channels: Record<string, boolean>;
 };
 
+type FavoriteEntry = {
+  key: string;
+  id: string;
+  url: string;
+  name?: string;
+};
+
 export type ChannelVisibilitySnapshot = {
   groups: Record<string, boolean>;
   channels: Record<string, boolean>;
@@ -81,31 +88,129 @@ export function getLastChannelWriteTrace(): ChannelWriteTrace {
 }
 
 let visibilityState: VisibilityState = loadVisibilityState();
-let favoriteChannelIds = loadFavoriteChannelIds();
+let favoriteEntries = loadFavoriteEntries();
+let favoriteChannelIds = buildFavoriteIdSet(favoriteEntries);
 
-function loadFavoriteChannelIds(): Set<string> {
-  try {
-    const raw = localStorage.getItem(FAVORITES_KEY);
-    if (!raw) return new Set<string>();
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return new Set<string>();
-
-    return new Set(
-      parsed
-        .map((value) => String(value || "").trim())
-        .filter((value) => value.length > 0)
-    );
-  } catch {
-    return new Set<string>();
-  }
+function normalizeFavoriteUrl(value: string): string {
+  return String(value || "").trim();
 }
 
-function saveFavoriteChannelIds() {
+function buildFavoriteKey(input: Partial<Channel> | null | undefined): string {
+  if (!input) return "";
+  const id = String(input.id || "").trim();
+  if (!id) return "";
+  const url = normalizeFavoriteUrl(String(input.url || ""));
+  return url ? `id:${id}|url:${url}` : `id:${id}`;
+}
+
+function buildFavoriteIdSet(entries: Map<string, FavoriteEntry>): Set<string> {
+  const result = new Set<string>();
+  for (const entry of entries.values()) {
+    if (entry.id) result.add(entry.id);
+  }
+  return result;
+}
+
+function loadFavoriteEntries(): Map<string, FavoriteEntry> {
+  const result = new Map<string, FavoriteEntry>();
+
   try {
-    localStorage.setItem(FAVORITES_KEY, JSON.stringify(Array.from(favoriteChannelIds)));
+    const raw = localStorage.getItem(FAVORITES_KEY);
+    if (!raw) return result;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return result;
+
+    for (const item of parsed) {
+      if (typeof item === "string") {
+        const id = String(item || "").trim();
+        if (!id) continue;
+        const key = `id:${id}`;
+        result.set(key, { key, id, url: "" });
+        continue;
+      }
+
+      if (!item || typeof item !== "object") continue;
+      const record = item as Partial<FavoriteEntry>;
+      const id = String(record.id || "").trim();
+      if (!id) continue;
+      const url = normalizeFavoriteUrl(String(record.url || ""));
+      const key = String(record.key || "").trim() || (url ? `id:${id}|url:${url}` : `id:${id}`);
+
+      result.set(key, {
+        key,
+        id,
+        url,
+        name: typeof record.name === "string" ? record.name : undefined
+      });
+    }
+  } catch {
+    return result;
+  }
+
+  return result;
+}
+
+function saveFavoriteEntries() {
+  try {
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify(Array.from(favoriteEntries.values())));
   } catch {
     // Ignore persistence errors.
   }
+}
+
+function dispatchFavoritesChanged() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("favoritesChanged"));
+  }
+}
+
+function hasLegacyIdOnlyFavorite(id: string): boolean {
+  const entry = favoriteEntries.get(`id:${id}`);
+  return !!entry && !String(entry.url || "").trim();
+}
+
+function hasUniqueCurrentChannelId(id: string): boolean {
+  let count = 0;
+  for (const channel of channels) {
+    if (String(channel.id || "") !== id) continue;
+    count += 1;
+    if (count > 1) return false;
+  }
+  return count === 1;
+}
+
+function migrateLegacyFavoritesForCurrentChannels() {
+  let changed = false;
+
+  for (const [key, entry] of favoriteEntries.entries()) {
+    if (!key.startsWith("id:")) continue;
+    if (String(entry.url || "").trim()) continue;
+
+    const id = String(entry.id || "").trim();
+    if (!id) continue;
+    if (!hasUniqueCurrentChannelId(id)) continue;
+
+    const channel = channels.find((candidate) => String(candidate.id || "") === id);
+    if (!channel) continue;
+
+    const nextKey = buildFavoriteKey(channel);
+    if (!nextKey) continue;
+
+    favoriteEntries.delete(key);
+    favoriteEntries.set(nextKey, {
+      key: nextKey,
+      id,
+      url: normalizeFavoriteUrl(String(channel.url || "")),
+      name: String(channel.name || "").trim() || undefined
+    });
+    changed = true;
+  }
+
+  if (!changed) return;
+
+  favoriteChannelIds = buildFavoriteIdSet(favoriteEntries);
+  saveFavoriteEntries();
+  dispatchFavoritesChanged();
 }
 
 function toCacheChannel(item: Channel): Channel {
@@ -382,6 +487,7 @@ export function setChannels(list: Channel[], source: string = "unknown") {
   }
 
   applyCachedChannels(list);
+  migrateLegacyFavoritesForCurrentChannels();
   recordChannelWriteTrace(source, true, channels.length);
   saveCachedChannels(channels);
   void saveCachedChannelsIndexedDb(channels);
@@ -517,20 +623,89 @@ export function setChannelVisible(channelId: string, visible: boolean) {
 }
 
 export function isFavoriteChannel(channelId: string): boolean {
-  return favoriteChannelIds.has(String(channelId || ""));
+  return favoriteChannelIds.has(String(channelId || "").trim());
 }
 
 export function setChannelFavorite(channelId: string, isFavorite: boolean) {
   const id = String(channelId || "").trim();
   if (!id) return;
 
-  if (isFavorite) {
+  const key = `id:${id}`;
+  const wasFavorite = favoriteEntries.has(key);
+
+  if (isFavorite && !wasFavorite) {
+    favoriteEntries.set(key, { key, id, url: "" });
     favoriteChannelIds.add(id);
-  } else {
-    favoriteChannelIds.delete(id);
+    saveFavoriteEntries();
+    dispatchFavoritesChanged();
+    return;
   }
 
-  saveFavoriteChannelIds();
+  if (!isFavorite && wasFavorite) {
+    favoriteEntries.delete(key);
+    favoriteChannelIds = buildFavoriteIdSet(favoriteEntries);
+    saveFavoriteEntries();
+    dispatchFavoritesChanged();
+  }
+}
+
+export function isFavoriteChannelRecord(channel: Partial<Channel> | null | undefined): boolean {
+  if (!channel) return false;
+
+  const key = buildFavoriteKey(channel);
+  if (key && favoriteEntries.has(key)) return true;
+
+  const id = String(channel.id || "").trim();
+  if (!id) return false;
+
+  // Legacy compatibility: only trust id-only favorites when that id maps to
+  // exactly one current channel, otherwise it is ambiguous across providers.
+  return hasLegacyIdOnlyFavorite(id) && hasUniqueCurrentChannelId(id);
+}
+
+export function setChannelFavoriteRecord(channel: Partial<Channel> | null | undefined, isFavorite: boolean) {
+  if (!channel) return;
+
+  const id = String(channel.id || "").trim();
+  if (!id) return;
+
+  const key = buildFavoriteKey(channel);
+  if (!key) return;
+
+  let changed = false;
+
+  if (isFavorite) {
+    const legacyKey = `id:${id}`;
+    if (favoriteEntries.delete(legacyKey)) {
+      changed = true;
+    }
+
+    if (!favoriteEntries.has(key)) {
+      favoriteEntries.set(key, {
+        key,
+        id,
+        url: normalizeFavoriteUrl(String(channel.url || "")),
+        name: typeof channel.name === "string" ? channel.name : undefined
+      });
+      changed = true;
+    }
+  } else {
+    if (favoriteEntries.delete(key)) {
+      changed = true;
+    }
+
+    // Remove legacy id-only favorite so toggling off behaves consistently.
+    const legacyKey = `id:${id}`;
+    if (legacyKey !== key && favoriteEntries.delete(legacyKey)) {
+      changed = true;
+    }
+  }
+
+  if (!changed) return;
+
+  favoriteChannelIds = buildFavoriteIdSet(favoriteEntries);
+  saveFavoriteEntries();
+  dispatchFavoritesChanged();
 }
 
 export function resetVisibilityForCurrentChannels() {

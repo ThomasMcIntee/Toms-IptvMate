@@ -4,6 +4,32 @@ import { App } from "./App";
 import { ProfileProvider } from "./profiles/ProfileContext";
 import "./styles/main.css";
 
+function normalizeRemoteKeyEvents() {
+  const keepKeyboardFocus = () => {
+    if (!document.body) return;
+    if (!document.body.hasAttribute("tabindex")) {
+      document.body.setAttribute("tabindex", "-1");
+    }
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.documentElement) {
+      document.body.focus();
+    }
+  };
+
+  window.addEventListener("pointerdown", () => {
+    window.setTimeout(keepKeyboardFocus, 0);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      keepKeyboardFocus();
+    }
+  });
+
+  keepKeyboardFocus();
+}
+
+normalizeRemoteKeyEvents();
+
 type RootErrorBoundaryState = {
   hasError: boolean;
   message: string;

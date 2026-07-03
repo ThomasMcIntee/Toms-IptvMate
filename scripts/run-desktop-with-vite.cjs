@@ -57,6 +57,26 @@ function waitForPort(host, port, timeoutMs = 45000) {
   });
 }
 
+function canBindPort(host, port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+
+    server.once("error", () => {
+      resolve(false);
+    });
+
+    server.once("listening", () => {
+      server.close(() => resolve(true));
+    });
+
+    try {
+      server.listen(port, host);
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
 function spawnInherit(command, args, extraEnv = {}) {
   return spawn(command, args, {
     cwd: rootDir,
@@ -67,12 +87,55 @@ function spawnInherit(command, args, extraEnv = {}) {
   });
 }
 
+function runProcess(command, args, extraEnv = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: rootDir,
+      stdio: "inherit",
+      env: { ...process.env, ...extraEnv },
+      shell: false,
+      windowsHide: false
+    });
+
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      resolve(typeof code === "number" ? code : 1);
+    });
+  });
+}
+
+async function resolveElectronBinary() {
+  try {
+    return require("electron");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!/Electron failed to install correctly/i.test(message)) {
+      throw err;
+    }
+
+    console.warn("[desktop-launch] Electron binary missing, attempting self-repair...");
+    const code = await runProcess(process.execPath, [path.join(rootDir, "scripts", "repair-electron-install.cjs")]);
+    if (code !== 0) {
+      throw new Error(`Electron repair failed with exit code ${code}`);
+    }
+
+    return require("electron");
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  const portIsAvailable = await canBindPort(options.host, options.port);
+  if (!portIsAvailable) {
+    throw new Error(
+      `Port ${options.host}:${options.port} is already in use. Stop existing Vite/Electron sessions or launch with --port <free-port>.`
+    );
+  }
+
   const viteCliPath = path.join(rootDir, "node_modules", "vite", "bin", "vite.js");
   const viteArgs = options.mode === "dev"
-    ? [viteCliPath, "--host", options.host, "--port", String(options.port)]
-    : [viteCliPath, "preview", "--host", options.host, "--port", String(options.port)];
+    ? [viteCliPath, "--host", options.host, "--port", String(options.port), "--strictPort"]
+    : [viteCliPath, "preview", "--host", options.host, "--port", String(options.port), "--strictPort"];
 
   const viteProc = spawnInherit(process.execPath, viteArgs);
   let electronProc = null;
@@ -110,7 +173,7 @@ async function main() {
     return;
   }
 
-  const electronBinary = require("electron");
+  const electronBinary = await resolveElectronBinary();
   const startUrl = `http://${options.host}:${options.port}`;
   electronProc = spawnInherit(electronBinary, ["."], {
     ELECTRON_START_URL: startUrl

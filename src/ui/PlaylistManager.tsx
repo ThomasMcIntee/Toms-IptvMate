@@ -34,6 +34,14 @@ type RoleCachePayload = {
   visibility?: ChannelVisibilitySnapshot;
 };
 
+type PlaylistStorageDiagnostics = {
+  parsed: number;
+  primaryRawCount: number;
+  sessionRawCount: number;
+  legacyRawCount: number;
+  storageKeysWithPlaylist: number;
+};
+
 function roleCacheStorageKey(kind: "adult" | "child"): string {
   return kind === "adult" ? ADULT_CACHE_KEY : CHILD_CACHE_KEY;
 }
@@ -94,6 +102,69 @@ function sanitizeChannel(candidate: any): Channel | null {
   }
 
   return channel;
+}
+
+function extractArrayCount(raw: string | null): number {
+  if (!raw) return 0;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) return parsed.length;
+    if (parsed && typeof parsed === "object") {
+      const obj = parsed as Record<string, unknown>;
+      if (Array.isArray(obj.playlists)) return obj.playlists.length;
+      if (Array.isArray(obj.items)) return obj.items.length;
+      if (Array.isArray(obj.entries)) return obj.entries.length;
+    }
+  } catch {
+    // Ignore malformed values.
+  }
+
+  return 0;
+}
+
+function countStorageKeysContainingPlaylist(area: Storage | null): number {
+  if (!area) return 0;
+
+  const seen = new Set<string>();
+  const length = Number(area.length || 0);
+
+  for (let index = 0; index < length; index += 1) {
+    const key = String(area.key(index) || "").trim();
+    if (!key) continue;
+    if (!key.toLowerCase().includes("playlist")) continue;
+    seen.add(key);
+  }
+
+  return seen.size;
+}
+
+function readPlaylistStorageDiagnostics(parsedCount: number): PlaylistStorageDiagnostics {
+  const primaryRaw = readStorageItem("iptvmate_playlists");
+  const sessionRaw = readStorageItem("iptvmate_playlists_session");
+  const legacyRaw = readStorageItem("streambase_playlists");
+
+  let localKeys = 0;
+  let sessionKeys = 0;
+
+  try {
+    localKeys = countStorageKeysContainingPlaylist(typeof localStorage !== "undefined" ? localStorage : null);
+  } catch {
+    localKeys = 0;
+  }
+
+  try {
+    sessionKeys = countStorageKeysContainingPlaylist(typeof sessionStorage !== "undefined" ? sessionStorage : null);
+  } catch {
+    sessionKeys = 0;
+  }
+
+  return {
+    parsed: parsedCount,
+    primaryRawCount: extractArrayCount(primaryRaw),
+    sessionRawCount: extractArrayCount(sessionRaw),
+    legacyRawCount: extractArrayCount(legacyRaw),
+    storageKeysWithPlaylist: localKeys + sessionKeys
+  };
 }
 
 function parseRoleCache(raw: string | null, playlistId: string): RoleCachePayload | null {
@@ -227,6 +298,13 @@ export default function PlaylistManager({
   activePlaylistId: string;
 }) {
   const [playlists, setPlaylists] = useState<PlaylistEntry[]>([]);
+  const [storageDiagnostics, setStorageDiagnostics] = useState<PlaylistStorageDiagnostics>({
+    parsed: 0,
+    primaryRawCount: 0,
+    sessionRawCount: 0,
+    legacyRawCount: 0,
+    storageKeysWithPlaylist: 0
+  });
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [activeRoleContext, setActiveRoleContext] = useState<"adult" | "child">("adult");
@@ -256,14 +334,47 @@ export default function PlaylistManager({
     setActiveVisibilityRole("adult");
 
     const refresh = () => {
-      setPlaylists(loadPlaylists());
+      const loaded = loadPlaylists();
+      setPlaylists(loaded);
+      setStorageDiagnostics(readPlaylistStorageDiagnostics(loaded.length));
+      return loaded.length;
     };
 
-    refresh();
+    const scheduleRetryRefresh = (delaysMs: number[]) => {
+      for (const delay of delaysMs) {
+        window.setTimeout(() => {
+          if (!visibleRef.current) return;
+          refresh();
+        }, delay);
+      }
+    };
+
+    const initialCount = refresh();
+    if (initialCount === 0) {
+      // Electron storage hydration can complete slightly after first mount.
+      scheduleRetryRefresh([150, 600, 1500]);
+    }
+
+    const onVisibilityChanged = () => {
+      if (!visibleRef.current) return;
+      if (document.visibilityState === "visible") {
+        refresh();
+      }
+    };
+
+    const onFocus = () => {
+      if (!visibleRef.current) return;
+      refresh();
+    };
+
     window.addEventListener("playlistsChanged", refresh);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChanged);
 
     return () => {
       window.removeEventListener("playlistsChanged", refresh);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChanged);
     };
   }, [visible]);
 
@@ -360,7 +471,9 @@ export default function PlaylistManager({
     } else if (activeRoleContext === "child" && childPlaylistId === id) {
       setActiveRoleContext("adult");
     }
-    setPlaylists(loadPlaylists());
+    const loaded = loadPlaylists();
+    setPlaylists(loaded);
+    setStorageDiagnostics(readPlaylistStorageDiagnostics(loaded.length));
     setStatusMessage(`Deleted playlist "${id}".`);
   }
 
@@ -373,6 +486,7 @@ export default function PlaylistManager({
     setStatusMessage(`Loading "${p.name}"… this can take up to a minute for large playlists.`);
     try {
       const channels = await loadChannelsForPlaylist(p);
+
       if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
 
       if (channels.length === 0) {
@@ -436,6 +550,10 @@ export default function PlaylistManager({
     <div className="side-panel">
       <h2>Playlist Manager</h2>
 
+      <p className="playlist-diagnostics-text" aria-live="polite">
+        Parsed: {storageDiagnostics.parsed} | raw main: {storageDiagnostics.primaryRawCount} | raw session: {storageDiagnostics.sessionRawCount} | raw legacy: {storageDiagnostics.legacyRawCount} | playlist keys: {storageDiagnostics.storageKeysWithPlaylist}
+      </p>
+
       <div className="playlist-manager-parental-actions">
         <button
           className={`btn-secondary btn-flex${activeRoleContext === "adult" ? " playlist-role-toggle-active" : ""}`}
@@ -473,19 +591,11 @@ export default function PlaylistManager({
 
       {statusMessage && (
         <div
-          className="playlist-status-banner"
+          className={`playlist-status-banner${loadingId ? " playlist-status-banner-loading" : ""}`}
           role="status"
           aria-live="polite"
-          style={{
-            padding: "8px 12px",
-            margin: "8px 0",
-            background: loadingId ? "rgba(80, 140, 220, 0.18)" : "rgba(60, 180, 100, 0.18)",
-            border: "1px solid rgba(255,255,255,0.15)",
-            borderRadius: 6,
-            fontSize: 14
-          }}
         >
-          {loadingId && <span style={{ marginRight: 8 }}>⏳</span>}
+          {loadingId && <span className="playlist-status-spinner">⏳</span>}
           {statusMessage}
         </div>
       )}
@@ -518,9 +628,7 @@ export default function PlaylistManager({
             <button
               className="btn-primary btn-flex"
               disabled={loadingId !== null}
-              onClick={() => {
-                void loadPlaylistIntoApp(p, null);
-              }}
+              onClick={() => { void loadPlaylistIntoApp(p, null); }}
             >
               {loadingId === p.id ? "Loading…" : "Load"}
             </button>

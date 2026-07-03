@@ -15,8 +15,8 @@ type ItemProps = {
   activeChannel: any | null;
   isChannelVisible: (id: string) => boolean;
   onToggleChannelVisible: (id: string, visible: boolean) => void;
-  isFavoriteChannel: (id: string) => boolean;
-  onToggleFavorite?: (id: string) => void;
+  isFavoriteChannel: (channel: any) => boolean;
+  onToggleFavorite?: (channel: any) => void;
   onSelect: (ch: any) => void;
   showVisibilityControls: boolean;
   showFavoriteControls: boolean;
@@ -77,14 +77,14 @@ function ChannelItem({
           {showFavoriteControls && onToggleFavorite && (
             <button
               type="button"
-              className={`channel-icon-favorite${isFavoriteChannel(String(ch.id || "")) ? " active" : ""}`}
-              aria-label={`${isFavoriteChannel(String(ch.id || "")) ? "Remove" : "Add"} ${ch.name} to favorites`}
+              className={`channel-icon-favorite${isFavoriteChannel(ch) ? " active" : ""}`}
+              aria-label={`${isFavoriteChannel(ch) ? "Remove" : "Add"} ${ch.name} to favorites`}
               onClick={(e) => {
                 e.stopPropagation();
-                onToggleFavorite(String(ch.id || ""));
+                onToggleFavorite(ch);
               }}
             >
-              {isFavoriteChannel(String(ch.id || "")) ? "★" : "☆"}
+              {isFavoriteChannel(ch) ? "★" : "☆"}
             </button>
           )}
           <button
@@ -149,8 +149,8 @@ type Props = {
   activeChannel: any | null;
   isChannelVisible: (channelId: string) => boolean;
   onToggleChannelVisible: (channelId: string, visible: boolean) => void;
-  isFavoriteChannel?: (channelId: string) => boolean;
-  onToggleFavorite?: (channelId: string) => void;
+  isFavoriteChannel?: (channel: any) => boolean;
+  onToggleFavorite?: (channel: any) => void;
   showVisibilityControls?: boolean;
   showFavoriteControls?: boolean;
   showAsIcons?: boolean;
@@ -220,7 +220,7 @@ export function ChannelList({
     >
       {visibleChannels.map((ch) => (
         <ChannelItem
-          key={ch.id}
+          key={`${String(ch?.id || "")}|${String(ch?.url || "")}`}
           ch={ch}
           activeChannel={activeChannel}
           isChannelVisible={isChannelVisible}

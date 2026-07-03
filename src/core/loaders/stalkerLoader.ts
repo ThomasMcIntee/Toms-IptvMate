@@ -74,7 +74,7 @@ export async function loadStalker(portal: string, mac: string): Promise<Channel[
       const contentTypePrefix = contentType === "movie" ? "Movies: " : contentType === "series" ? "Series: " : "TV: ";
       
       return {
-        id: item.id.toString(),
+        id: `stalker_${item.id}`,
         name: name,
         logo: item.logo,
         url: item.cmd,
