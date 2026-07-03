@@ -881,6 +881,19 @@ export function App() {
   }, [showOpeningScreen, contentPage, currentChannel]);
 
   useEffect(() => {
+    if (!showOpeningScreen) return;
+    if (!currentChannel) return;
+
+    // Prevent hidden/background playback from consuming resources while menu is open.
+    stopPlayback();
+    setCurrentChannel(null);
+    setPlayerError(null);
+    setPlayerStatus(null);
+    setPlayerWarning(null);
+    setShowNowNext(false);
+  }, [showOpeningScreen, currentChannel]);
+
+  useEffect(() => {
     if (contentPage !== "live") return;
     if (hasSelectedLiveChannel && currentChannel) return;
     if (!isLiveFullscreenRequested) return;
@@ -1526,6 +1539,11 @@ export function App() {
   }
 
   function playChannel(ch: any) {
+    if (showOpeningScreen) {
+      // Ignore tune attempts until the user leaves the opening screen.
+      return;
+    }
+
     console.log(`[playChannel] attempting to play: name=${ch?.name} url=${String(ch?.url).slice(0, 80)}...`);
     if (!ch?.url || typeof ch.url !== "string") {
       const msg = "This channel has no playable stream URL.";
