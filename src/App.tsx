@@ -882,11 +882,14 @@ export function App() {
 
   useEffect(() => {
     if (!showOpeningScreen) return;
-    if (!currentChannel) return;
 
     // Prevent hidden/background playback from consuming resources while menu is open.
+    // stopPlayback also cancels in-flight retry/transcode chains even if channel state
+    // is already null.
     stopPlayback();
-    setCurrentChannel(null);
+    if (currentChannel) {
+      setCurrentChannel(null);
+    }
     setPlayerError(null);
     setPlayerStatus(null);
     setPlayerWarning(null);
