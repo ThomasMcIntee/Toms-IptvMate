@@ -1,4 +1,5 @@
 const net = require("net");
+const http = require("http");
 const path = require("path");
 const { spawn } = require("child_process");
 
@@ -54,6 +55,46 @@ function waitForPort(host, port, timeoutMs = 45000) {
     };
 
     tryConnect();
+  });
+}
+
+function waitForHttpReady(url, timeoutMs = 45000) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+
+    const tryRequest = () => {
+      const req = http.get(url, (res) => {
+        const statusCode = typeof res.statusCode === "number" ? res.statusCode : 0;
+        res.resume();
+
+        if (statusCode >= 200 && statusCode < 500) {
+          resolve();
+          return;
+        }
+
+        if (Date.now() - started > timeoutMs) {
+          reject(new Error(`Timed out waiting for HTTP readiness at ${url}`));
+          return;
+        }
+
+        setTimeout(tryRequest, 250);
+      });
+
+      req.on("error", () => {
+        if (Date.now() - started > timeoutMs) {
+          reject(new Error(`Timed out waiting for HTTP readiness at ${url}`));
+          return;
+        }
+
+        setTimeout(tryRequest, 250);
+      });
+
+      req.setTimeout(1200, () => {
+        req.destroy();
+      });
+    };
+
+    tryRequest();
   });
 }
 
@@ -167,6 +208,7 @@ async function main() {
 
   try {
     await waitForPort(options.host, options.port);
+    await waitForHttpReady(`http://${options.host}:${options.port}`);
   } catch (err) {
     console.error(`[desktop-launch] ${err instanceof Error ? err.message : String(err)}`);
     shutdown(1);

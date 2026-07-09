@@ -29,13 +29,13 @@ import {
   setActiveVisibilityRole
 } from "./core/channelStore";
 import NowNextOverlay from "./ui/NowNextOverlay";
-import { loadPlaylists } from "./core/playlistStore";
+import { isPlaylistsHydrationPending, loadPlaylists } from "./core/playlistStore";
 import { loadEPGForPlaylist } from "./core/loaders/epgLoader";
 import { getEPG, getEPGForChannel, setEPG } from "./core/epgStore";
 import { loadRecordings } from "./core/recordingEngine";
 import MainMenuScreen from "./ui/MainMenuScreen";
 import { loadChannelsForPlaylist, loadFromAnyPlaylist } from "./core/loaders/playlistLoader";
-import { loadXtreamSeriesEpisodesFromChannel } from "./core/loaders/xtreamLoader";
+import { loadXtream, loadXtreamSeriesEpisodesFromChannel } from "./core/loaders/xtreamLoader";
 import { loadXtreamEPGForStream } from "./core/loaders/xtreamEPG";
 import SeriesEpisodePicker from "./ui/SeriesEpisodePicker";
 
@@ -156,6 +156,7 @@ export function App() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [activePlaylistId, setActivePlaylistId] = useState("");
   const [hasPlaylists, setHasPlaylists] = useState(false);
+  const [playlistsRevision, setPlaylistsRevision] = useState(0);
   const accessLevelRef = useRef<AccessLevel>(accessLevel);
   const autoLoadTokenRef = useRef(0);
   const liveRoleRestoreAttemptRef = useRef("");
@@ -211,16 +212,20 @@ export function App() {
   const guidePrefetchInFlightRef = useRef(false);
   const guidePrefetchedIdsRef = useRef<Set<string>>(new Set());
   const guidePrefetchCursorRef = useRef(0);
+  const startupAutoLoadInFlightRef = useRef(false);
 
   useEffect(() => {
     const refreshPlaylistsPresence = () => {
       setHasPlaylists(loadPlaylists().length > 0);
+      setPlaylistsRevision((revision) => revision + 1);
     };
 
     refreshPlaylistsPresence();
     window.addEventListener("playlistsChanged", refreshPlaylistsPresence);
+    window.addEventListener("playlistsHydrationComplete", refreshPlaylistsPresence);
     return () => {
       window.removeEventListener("playlistsChanged", refreshPlaylistsPresence);
+      window.removeEventListener("playlistsHydrationComplete", refreshPlaylistsPresence);
     };
   }, []);
 
@@ -1003,43 +1008,102 @@ export function App() {
   }, [accessLevel]);
 
   useEffect(() => {
+    if (!showOpeningScreen) return;
     if (readSetupSecurity().loginRequired && !accessLevel) {
       // Pre-warm the channel cache in the background so role login is instant.
       void restoreChannelsCache();
       return;
     }
     if (accessLevel === "adult" || accessLevel === "child") return;
+    if (startupAutoLoadInFlightRef.current) return;
 
     const playlists = loadPlaylists();
-    if (playlists.length === 0) {
-      // Keep startup on main menu even when no playlists are configured.
-      setActivePanel(null);
-      setShowOpeningScreen(true);
+    const playlistsHydrationPending = isPlaylistsHydrationPending();
+
+    // IndexedDB hydration may populate playlists shortly after startup.
+    // Wait for hydration events instead of finalizing an empty auto-load path.
+    if (playlists.length === 0 && playlistsHydrationPending) {
       return;
     }
 
-    // If channels are already in memory from a same-session load, keep menu visible
-    // and only ensure state is aligned.
+    // If channels are already in memory from a same-session load, keep the
+    // opening menu visible and align shared playlist state.
     if (getAllChannels().length > 0) {
       const storedPlaylistId = readStoredItem(SHARED_PLAYLIST_ID_KEY);
       if (storedPlaylistId) setActivePlaylistId(storedPlaylistId);
+      setContentPage("live");
+      setContentMode("tv");
+      setActiveGroup(pickDefaultLiveGroup(getAllChannels()));
       setActivePanel(null);
       setShowOpeningScreen(true);
       return;
     }
 
     let cancelled = false;
+    startupAutoLoadInFlightRef.current = true;
 
     (async () => {
-      // 1. Try restoring from local cache for an instant start.
-      const restored = await restoreChannelsCache();
+      // 1. Try restoring from local cache for an instant start, but do not
+      // block startup for a long time on slow IndexedDB/storage reads.
+      const restored = await Promise.race<any[]>([
+        restoreChannelsCache(),
+        new Promise<any[]>((resolve) => {
+          window.setTimeout(() => resolve([]), 1800);
+        })
+      ]);
       if (cancelled) return;
+
+      function mergeChannelsById(existingChannels: any[], incomingChannels: any[]): any[] {
+        const byId = new Map<string, any>();
+        for (const channel of existingChannels) {
+          const key = String(channel?.id || "");
+          if (!key) continue;
+          byId.set(key, channel);
+        }
+        for (const channel of incomingChannels) {
+          const key = String(channel?.id || "");
+          if (!key) continue;
+          byId.set(key, channel);
+        }
+        return Array.from(byId.values()).filter((channel) => isChannelRecord(channel));
+      }
+
+      function hasMode(channels: any[], mode: "movies" | "series") {
+        return channels.some((channel) => matchesContentMode(channel, mode));
+      }
+
+      function enrichMissingContentInBackground(candidatePlaylists: any[], initialChannels: any[]) {
+        if (!Array.isArray(candidatePlaylists) || candidatePlaylists.length === 0) return;
+
+        void (async () => {
+          let mergedChannels = initialChannels;
+
+          for (const scope of ["movies", "series"] as const) {
+            if (cancelled) return;
+            if (hasMode(mergedChannels, scope)) continue;
+
+            try {
+              const scoped = await loadFromAnyPlaylist(candidatePlaylists, scope);
+              if (cancelled) return;
+              if (!Array.isArray(scoped.channels) || scoped.channels.length === 0) continue;
+
+              mergedChannels = mergeChannelsById(mergedChannels, scoped.channels);
+              setChannels(mergedChannels, `startup-enrich-${scope}`);
+              setChannelUpdateTick((tick) => tick + 1);
+              writeStoredItem(SHARED_PLAYLIST_ID_KEY, scoped.playlist.id);
+              setActivePlaylistId(scoped.playlist.id);
+            } catch {
+              // Best-effort enrichment only.
+            }
+          }
+        })();
+      }
 
       function applyPreparedContent(channelList: any[], playlistId: string, visibilityRole?: "adult" | "child") {
         if (playlistId) setActivePlaylistId(playlistId);
-        const preferredMode = pickPreferredContentMode(channelList);
-        setContentMode(preferredMode);
-        setActiveGroup(preferredMode === "tv" ? pickDefaultLiveGroup(channelList) : ROOT_GROUP);
+        setContentPage("live");
+        setContentMode("tv");
+        setActiveGroup(pickDefaultLiveGroup(channelList));
         setActivePanel(null);
         setShowOpeningScreen(true);
         
@@ -1058,15 +1122,31 @@ export function App() {
       if (restored.length > 0) {
         const storedPlaylistId =
           readStoredItem(SHARED_PLAYLIST_ID_KEY) || playlists[0]?.id || "";
+        const orderedPlaylists = storedPlaylistId
+          ? [
+              ...playlists.filter((playlist) => String(playlist.id) === String(storedPlaylistId)),
+              ...playlists.filter((playlist) => String(playlist.id) !== String(storedPlaylistId))
+            ]
+          : playlists;
         // Pass visibility role to applyPreparedContent to batch updates
         applyPreparedContent(restored, storedPlaylistId, "adult");
-        // Load EPG in background without blocking
+        setChannelUpdateTick((tick) => tick + 1);
+        setCategoryRefreshTick((tick) => tick + 1);
+        enrichMissingContentInBackground(orderedPlaylists, restored);
+        // Load EPG in background without blocking.
+        // Avoid expensive prefetch on startup/opening screen to keep browser responsive.
         void ensureGuideEPGLoaded().catch(() => {});
-        void prefetchGuideListingsAheadOfTime().catch(() => {});
+        return;
+      }
+
+      if (playlists.length === 0) {
+        setActivePanel(null);
+        setShowOpeningScreen(true);
         return;
       }
 
       // No local cache — load from the saved playlist configuration.
+      // Try live scope first for fast startup, then fallback to full load.
       const storedPlaylistId = readStoredItem(SHARED_PLAYLIST_ID_KEY);
       const targetPlaylist =
         (storedPlaylistId && playlists.find((p) => p.id === storedPlaylistId)) ||
@@ -1074,27 +1154,50 @@ export function App() {
       if (!targetPlaylist) return;
 
       try {
-        const freshChannels = await loadChannelsForPlaylist(targetPlaylist);
+        const orderedPlaylists = [
+          targetPlaylist,
+          ...playlists.filter((playlist) => playlist.id !== targetPlaylist.id)
+        ];
+        let resolvedPlaylist: any;
+        let freshChannels: any[] = [];
+
+        try {
+          const liveResult = await loadFromAnyPlaylist(orderedPlaylists, "live");
+          resolvedPlaylist = liveResult.playlist;
+          freshChannels = liveResult.channels;
+        } catch {
+          const allResult = await loadFromAnyPlaylist(orderedPlaylists, "all");
+          resolvedPlaylist = allResult.playlist;
+          freshChannels = allResult.channels;
+        }
+
         if (cancelled) return;
         if (!freshChannels || freshChannels.length === 0) return;
 
-        writeStoredItem(SHARED_PLAYLIST_ID_KEY, targetPlaylist.id);
+        writeStoredItem(SHARED_PLAYLIST_ID_KEY, resolvedPlaylist.id);
         setChannels(freshChannels);
         setChannelUpdateTick((t) => t + 1);
+        enrichMissingContentInBackground(orderedPlaylists, freshChannels);
         // Pass visibility role to applyPreparedContent to batch updates
-        applyPreparedContent(freshChannels, targetPlaylist.id, "adult");
+        applyPreparedContent(freshChannels, resolvedPlaylist.id, "adult");
         // Load EPG in background without blocking
-        void loadEPGForPlaylist(targetPlaylist).catch(() => {});
-      } catch {
+        void loadEPGForPlaylist(resolvedPlaylist).catch(() => {});
+      } catch (err) {
+        console.warn("[startup] auto-load failed", err);
         // Silent fail — user can load manually from the opening screen.
       }
       // No cache — leave the opening screen so the user can load manually.
-    })();
+    })().finally(() => {
+      if (!cancelled) {
+        startupAutoLoadInFlightRef.current = false;
+      }
+    });
 
     return () => {
       cancelled = true;
+      startupAutoLoadInFlightRef.current = false;
     };
-  }, [accessLevel]);
+  }, [showOpeningScreen, accessLevel, hasPlaylists, playlistsRevision]);
 
   useEffect(() => {
     const handler = () => setShowNowNext(true);
@@ -1119,7 +1222,6 @@ export function App() {
       void (async () => {
         try {
           await ensureGuideEPGLoaded();
-          await prefetchGuideListingsAheadOfTime();
         } catch {
           // Keep refresh resilient if guide endpoints are temporarily unavailable.
         }
@@ -1763,22 +1865,12 @@ export function App() {
     }
 
     if (panel === "vod") {
-      stopCurrentVodPlaybackIfNeeded();
-      setContentPage("movies");
-      setContentMode("movies");
-      setActivePanel(null);
-      setShowOpeningScreen(false);
-      setActiveGroup(ROOT_GROUP);
+      selectContent("movies");
       return;
     }
 
     if (panel === "series") {
-      stopCurrentVodPlaybackIfNeeded();
-      setContentPage("series");
-      setContentMode("series");
-      setActivePanel(null);
-      setShowOpeningScreen(false);
-      setActiveGroup(ROOT_GROUP);
+      selectContent("series");
       return;
     }
 
@@ -1871,12 +1963,13 @@ export function App() {
       // one (and force a content-mode preference for the user's choice) instead
       // of dropping a confusing "no channels" alert.
       if (latestChannels.length === 0) {
-        if (accessLevel === "adult" || accessLevel === "child") {
+        const roleAccessLevel = accessLevel as "adult" | "child";
+        if (roleAccessLevel === "adult" || roleAccessLevel === "child") {
           void (async () => {
-            const restored = await restoreRoleContentForLogin(accessLevel);
+            const restored = await restoreRoleContentForLogin(roleAccessLevel);
             if (!restored) {
               setLoginError(
-                accessLevel === "adult"
+                roleAccessLevel === "adult"
                   ? "Adult playlist is not assigned or failed to load."
                   : "Child playlist is not assigned or failed to load."
               );
@@ -1889,7 +1982,7 @@ export function App() {
             const refreshedChannels = getAllChannels();
             const refreshedModeChannels = refreshedChannels.filter((channel) => matchesContentMode(channel, content));
             if (refreshedModeChannels.length === 0) {
-              alert(`Assigned ${accessLevel} playlist has no ${content} entries.`);
+              alert(`Assigned ${roleAccessLevel} playlist has no ${content} entries.`);
               return;
             }
 
@@ -1987,8 +2080,82 @@ export function App() {
         return;
       }
 
-      // Channels are loaded but none match this mode in the current playlist.
-      alert(`No ${content} entries found in the loaded playlist.`);
+      // Channels are already loaded, but not for this mode yet. Lazily load
+      // the requested scope from the current/saved playlist and merge.
+      const playlists = loadPlaylists();
+      const preferredPlaylistId =
+        (activePlaylistId || readStoredItem(SHARED_PLAYLIST_ID_KEY) || playlists[0]?.id || "").trim();
+      const orderedPlaylists = [
+        ...(preferredPlaylistId
+          ? playlists.filter((playlist) => String(playlist.id) === preferredPlaylistId)
+          : []),
+        ...playlists.filter((playlist) => String(playlist.id) !== preferredPlaylistId)
+      ];
+
+      if (orderedPlaylists.length === 0) {
+        alert(`No ${content} entries found in the loaded playlist.`);
+        return;
+      }
+
+      void (async () => {
+        const requestToken = autoLoadTokenRef.current + 1;
+        autoLoadTokenRef.current = requestToken;
+
+        const scope = content === "tv" ? "live" : content;
+
+        for (const playlist of orderedPlaylists) {
+          try {
+            const scopedChannels = await loadChannelsForPlaylist(playlist, scope);
+            if (requestToken !== autoLoadTokenRef.current) return;
+            if (!Array.isArray(scopedChannels) || scopedChannels.length === 0) continue;
+
+            const byId = new Map<string, any>();
+            latestChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
+            scopedChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
+            const mergedChannels = Array.from(byId.values()).filter((channel) => isChannelRecord(channel));
+
+            setActivePlaylistId(playlist.id);
+            writeStoredItem(SHARED_PLAYLIST_ID_KEY, playlist.id);
+            setChannels(mergedChannels as any[], `lazy-${scope}-load`);
+            setChannelUpdateTick((tick) => tick + 1);
+            setCategoryRefreshTick((tick) => tick + 1);
+
+            const refreshedModeChannels = mergedChannels.filter((channel) => matchesContentMode(channel, content));
+            if (refreshedModeChannels.length === 0) continue;
+
+            const nextGroups = Array.from(
+              new Set(
+                refreshedModeChannels
+                  .map((channel) => (channel.group && String(channel.group).trim()) || "Uncategorized")
+                  .filter((group) => group !== ROOT_GROUP)
+              )
+            );
+
+            setShowOpeningScreen(false);
+            setActivePanel(null);
+            setContentMode(content);
+
+            if (!keepPlaylistManagerPage) {
+              if (content === "tv") setContentPage("live");
+              if (content === "movies") setContentPage("movies");
+              if (content === "series") setContentPage("series");
+            }
+
+            if (content === "tv") {
+              setActiveGroup(pickDefaultLiveGroup(mergedChannels));
+              await loadEPGForPlaylist(playlist).catch(() => {});
+            } else {
+              setActiveGroup(nextGroups[0] || ROOT_GROUP);
+            }
+
+            return;
+          } catch {
+            // Try the next playlist candidate.
+          }
+        }
+
+        alert(`No ${content} entries found in the loaded playlist.`);
+      })();
       return;
     }
 
@@ -2024,8 +2191,15 @@ export function App() {
   function handlePlaylistLoaded(channels: any[]) {
     resetVisibilityForCurrentChannels();
     const preferredMode = pickPreferredContentMode(channels);
+    const keepPlaylistManagerPage = contentPage === "playlistManager";
 
+    // PlaylistManager writes channels directly to the shared store; bump the
+    // local tick so App recomputes memoized channel/group views immediately.
+    setChannelUpdateTick((tick) => tick + 1);
     setContentMode(preferredMode);
+    if (!keepPlaylistManagerPage) {
+      setContentPage(preferredMode === "tv" ? "live" : preferredMode);
+    }
     setActiveGroup(preferredMode === "tv" ? pickDefaultLiveGroup(channels) : ROOT_GROUP);
     setShowOpeningScreen(false);
     setActivePanel(null);
@@ -2294,22 +2468,6 @@ export function App() {
     setPlayerWarning(null);
     setShowNowNext(false);
 
-    setContentPage("live");
-    setContentMode("tv");
-    setActivePanel(null);
-    setShowLiveMenu(true);
-    setHasSelectedLiveChannel(false);
-    setIsLiveFullscreenRequested(false);
-    setShowOpeningScreen(false);
-    setActiveGroup(ROOT_GROUP);
-
-    // If no playlists are configured, always route to Add Playlist first.
-    // Cached channels from previous sessions should not bypass setup.
-    if (!hasPlaylists) {
-      setLoginError("No playlists are configured. Open Playlist Manager to add one.");
-      return;
-    }
-
     if (accessLevel === "adult" || accessLevel === "child") {
       const restoredForRole = await restoreRoleContentForLogin(accessLevel);
       if (restoredForRole) {
@@ -2328,26 +2486,74 @@ export function App() {
       return;
     }
 
-    if (accessLevel === "master") {
-      const restoredForRole = await restoreRoleContentForLogin("adult");
-      if (restoredForRole) {
-        void ensureGuideEPGLoaded();  // Load EPG in background, don't block UI
-        void prefetchGuideListingsAheadOfTime();  // Prefetch guide data
+    const openLiveView = (channels: any[]) => {
+      setContentPage("live");
+      setContentMode("tv");
+      setActivePanel(null);
+      setShowLiveMenu(true);
+      setHasSelectedLiveChannel(false);
+      setIsLiveFullscreenRequested(false);
+      setShowOpeningScreen(false);
+      setActiveGroup(pickDefaultLiveGroup(channels));
+      setLoginError(null);
+      setPlayerStatus(null);
+    };
+
+    const currentChannels = getAllChannels();
+    if (currentChannels.length > 0) {
+      openLiveView(currentChannels);
+      return;
+    }
+
+    const playlists = loadPlaylists();
+    const preferredPlaylistId = (activePlaylistId || readStoredItem(SHARED_PLAYLIST_ID_KEY) || playlists[0]?.id || "").trim();
+    const targetPlaylist =
+      (preferredPlaylistId && playlists.find((playlist) => String(playlist.id) === preferredPlaylistId)) ||
+      playlists[0];
+
+    if (playlists.length > 0) {
+      const orderedPlaylists = targetPlaylist
+        ? [targetPlaylist, ...playlists.filter((playlist) => playlist.id !== targetPlaylist.id)]
+        : playlists;
+
+      try {
+        const { playlist: resolvedPlaylist, channels: loadedChannels } = await loadFromAnyPlaylist(orderedPlaylists, "live");
+        if (!Array.isArray(loadedChannels) || loadedChannels.length === 0) {
+          setLoginError("Saved playlists returned no live channels.");
+          setActivePanel(null);
+          setShowOpeningScreen(false);
+          return;
+        }
+
+        setChannels(loadedChannels, "start-live-load");
+        setChannelUpdateTick((tick) => tick + 1);
+        writeStoredItem(SHARED_PLAYLIST_ID_KEY, resolvedPlaylist.id);
+        setActivePlaylistId(resolvedPlaylist.id);
+        openLiveView(loadedChannels);
+        resetVisibilityForCurrentChannels();
+        setCategoryRefreshTick((tick) => tick + 1);
+        void loadEPGForPlaylist(resolvedPlaylist).catch(() => {});
+        return;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        setLoginError(`Saved playlists failed to load: ${message}`);
+        setActivePanel(null);
+        setShowOpeningScreen(false);
         return;
       }
+    }
 
-      setLoginError("Master playlist is not assigned or failed to load.");
-      setActivePanel(null);
-      setShowOpeningScreen(false);
+    const restored = await restoreChannelsCache();
+    if (restored.length > 0) {
+      setChannels(restored, "start-live-cache-restore");
+      setChannelUpdateTick((tick) => tick + 1);
+      openLiveView(restored);
       return;
     }
 
-    if (getAllChannels().length === 0) {
-      setLoginError("No channels are loaded. Open Playlist Manager and load a playlist.");
-      setActivePanel(null);
-      setShowOpeningScreen(false);
-      return;
-    }
+    setLoginError("No saved playlist or cached channels are available. Open Playlist Manager to add one.");
+    setActivePanel(null);
+    setShowOpeningScreen(false);
   }
 
   return (
@@ -2435,6 +2641,8 @@ export function App() {
       <MainMenuScreen
         visible={showOpeningScreen}
         hasPlaylists={hasPlaylists || hasPlayableChannels}
+        playlistsHydrationPending={isPlaylistsHydrationPending()}
+        totalCount={allChannels.length}
         liveCount={channelsByMode.tv.length}
         movieCount={channelsByMode.movies.length}
         seriesCount={channelsByMode.series.length}
@@ -2673,7 +2881,10 @@ export function App() {
         visibleTvGuideChannels={visibleTvGuideChannels}
         visibilityVersion={categoryRefreshTick}
         onSelectContent={selectContent}
-        onPlaylistLoaded={handlePlaylistLoadedWithId}
+        onPlaylistLoadedWithId={handlePlaylistLoadedWithId}
+        onPlaylistAdded={() => {
+          setHasPlaylists(loadPlaylists().length > 0);
+        }}
         activePlaylistId={activePlaylistId}
         onPlaylistsChanged={() => {
           setCategoryRefreshTick(tick => tick + 1);
@@ -2689,7 +2900,7 @@ export function App() {
   );
 }
 
-function matchesContentMode(channel: any, mode: "tv" | "movies" | "series") {
+function resolveContentMode(channel: any): "tv" | "movies" | "series" {
   // First, use explicit contentType if available (from Xtream/proper loaders)
   if (channel?.contentType) {
     const contentTypeMap: Record<string, "tv" | "movies" | "series"> = {
@@ -2698,7 +2909,7 @@ function matchesContentMode(channel: any, mode: "tv" | "movies" | "series") {
       "series": "series"
     };
     const mappedType = contentTypeMap[channel.contentType];
-    if (mappedType) return mappedType === mode;
+    if (mappedType) return mappedType;
   }
 
   // Fallback: use keyword-based detection for channels without explicit type
@@ -2722,10 +2933,18 @@ function matchesContentMode(channel: any, mode: "tv" | "movies" | "series") {
     "serial"
   ]);
 
-  if (mode === "movies") return isMovie;
-  if (mode === "series") return isSeries;
+  if (isMovie && !isSeries) return "movies";
+  if (isSeries && !isMovie) return "series";
+  if (isMovie && isSeries) {
+    // Mixed labels like "Movies / Series" should still surface movie entries.
+    return "movies";
+  }
 
-  return !isMovie && !isSeries;
+  return "tv";
+}
+
+function matchesContentMode(channel: any, mode: "tv" | "movies" | "series") {
+  return resolveContentMode(channel) === mode;
 }
 
 function hasAnyKeyword(text: string, keywords: string[]) {

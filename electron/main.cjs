@@ -1,7 +1,7 @@
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, screen } = require("electron");
 
 const DEV_URL = process.env.ELECTRON_START_URL || "";
 
@@ -50,13 +50,23 @@ try {
 }
 
 function createMainWindow() {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const workArea = primaryDisplay?.workAreaSize || { width: 1366, height: 768 };
+  const initialWidth = Math.max(1024, Math.min(1366, workArea.width));
+  const initialHeight = Math.max(576, Math.min(768, workArea.height));
+
   const win = new BrowserWindow({
-    width: 1366,
-    height: 768,
+    width: initialWidth,
+    height: initialHeight,
     minWidth: 1024,
     minHeight: 576,
+    show: false,
     backgroundColor: "#000000",
     autoHideMenuBar: true,
+    minimizable: true,
+    maximizable: true,
+    resizable: true,
+    fullscreenable: true,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -77,8 +87,32 @@ function createMainWindow() {
     console.log(`[electron] did-finish-load url=${win.webContents.getURL()}`);
   });
 
+  win.once("ready-to-show", () => {
+    win.show();
+  });
+
+  const loadWithRetry = async (url, retries = 8) => {
+    for (let attempt = 1; attempt <= retries; attempt += 1) {
+      try {
+        await win.loadURL(url);
+        return true;
+      } catch (err) {
+        if (attempt === retries) {
+          console.warn(`[electron] failed to load dev url after ${retries} attempts: ${url}`);
+          return false;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      }
+    }
+
+    return false;
+  };
+
   if (!app.isPackaged && DEV_URL) {
-    win.loadURL(DEV_URL).catch(() => {
+    void loadWithRetry(DEV_URL).then((loaded) => {
+      if (loaded) return;
+
       console.warn(`[electron] dev url unavailable, falling back to dist: ${DEV_URL}`);
       void win.loadFile(distIndex);
     });

@@ -25,9 +25,18 @@ let activeVisibilityRole: "adult" | "child" = "adult";
 const FAVORITES_KEY = "iptvmate_favorites";
 const FAVORITES_GROUP = "Favorites";
 const CHANNELS_CACHE_KEY = "iptvmate_channels_cache";
+const CHANNELS_CACHE_META_KEY = "iptvmate_channels_cache_meta";
 const CHANNELS_CACHE_DB = "iptvmate_cache";
 const CHANNELS_CACHE_STORE = "channels";
 const CHANNELS_CACHE_RECORD_KEY = "latest";
+
+export type ChannelCacheScope = "live" | "movies" | "series";
+
+export type ChannelCacheMeta = {
+  playlistId: string;
+  scopes: ChannelCacheScope[];
+  updatedAt: number;
+};
 
 type VisibilityState = {
   groups: Record<string, boolean>;
@@ -78,9 +87,7 @@ function recordChannelWriteTrace(source: string, applied: boolean, channelCount:
     at: Date.now()
   };
 
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("channelsWriteTrace", { detail: lastChannelWriteTrace }));
-  }
+  dispatchStoreEvent("channelsWriteTrace", lastChannelWriteTrace);
 }
 
 export function getLastChannelWriteTrace(): ChannelWriteTrace {
@@ -90,6 +97,27 @@ export function getLastChannelWriteTrace(): ChannelWriteTrace {
 let visibilityState: VisibilityState = loadVisibilityState();
 let favoriteEntries = loadFavoriteEntries();
 let favoriteChannelIds = buildFavoriteIdSet(favoriteEntries);
+
+function dispatchStoreEvent(name: string, detail?: unknown): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    if (typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent(name, { detail }));
+      return;
+    }
+  } catch {
+    // Fall through to legacy event creation.
+  }
+
+  try {
+    const legacyEvent = document.createEvent("CustomEvent");
+    legacyEvent.initCustomEvent(name, false, false, detail);
+    window.dispatchEvent(legacyEvent);
+  } catch {
+    // Keep dispatch best-effort to avoid runtime crashes on older engines.
+  }
+}
 
 function normalizeFavoriteUrl(value: string): string {
   return String(value || "").trim();
@@ -159,9 +187,7 @@ function saveFavoriteEntries() {
 }
 
 function dispatchFavoritesChanged() {
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("favoritesChanged"));
-  }
+  dispatchStoreEvent("favoritesChanged");
 }
 
 function hasLegacyIdOnlyFavorite(id: string): boolean {
@@ -294,6 +320,12 @@ function applyCachedChannels(list: Channel[]) {
   activeGroup = firstGroup || "All";
 }
 
+export function clearCurrentChannels(source: string = "unknown") {
+  channels = [];
+  activeGroup = "All";
+  recordChannelWriteTrace(source, false, 0);
+}
+
 function loadCachedChannelsWithPresence(): { hasValue: boolean; channels: Channel[] } {
   try {
     const raw = localStorage.getItem(CHANNELS_CACHE_KEY);
@@ -316,6 +348,46 @@ function loadCachedChannelsWithPresence(): { hasValue: boolean; channels: Channe
 function saveCachedChannels(list: Channel[]) {
   try {
     localStorage.setItem(CHANNELS_CACHE_KEY, JSON.stringify(list.map(toCacheChannel)));
+  } catch {
+    // Ignore persistence errors.
+  }
+}
+
+export function loadChannelsCacheMeta(): ChannelCacheMeta | null {
+  try {
+    const raw = localStorage.getItem(CHANNELS_CACHE_META_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as Partial<ChannelCacheMeta>;
+    const playlistId = String(parsed?.playlistId || "").trim();
+    if (!playlistId) return null;
+
+    const scopes = Array.isArray(parsed?.scopes)
+      ? parsed.scopes.filter((scope): scope is ChannelCacheScope => scope === "live" || scope === "movies" || scope === "series")
+      : [];
+
+    return {
+      playlistId,
+      scopes,
+      updatedAt: Number(parsed?.updatedAt || 0) || 0
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveChannelsCacheMeta(meta: ChannelCacheMeta | null): void {
+  try {
+    if (!meta) {
+      localStorage.removeItem(CHANNELS_CACHE_META_KEY);
+      return;
+    }
+
+    localStorage.setItem(CHANNELS_CACHE_META_KEY, JSON.stringify({
+      playlistId: String(meta.playlistId || "").trim(),
+      scopes: Array.isArray(meta.scopes) ? meta.scopes : [],
+      updatedAt: Number(meta.updatedAt || Date.now()) || Date.now()
+    }));
   } catch {
     // Ignore persistence errors.
   }
@@ -467,9 +539,7 @@ export function setActiveVisibilityRole(role: "adult" | "child") {
 }
 
 function dispatchVisibilityChanged() {
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("visibilityChanged"));
-  }
+  dispatchStoreEvent("visibilityChanged");
 }
 
 function normalizeGroupName(group?: string): string {

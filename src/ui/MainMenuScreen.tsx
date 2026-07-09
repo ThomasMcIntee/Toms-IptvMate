@@ -26,6 +26,8 @@ function normalizedMenuKey(event: KeyboardEvent): { key: string; fromFallback: b
 type Props = {
   visible: boolean;
   hasPlaylists: boolean;
+  playlistsHydrationPending: boolean;
+  totalCount: number;
   liveCount: number;
   movieCount: number;
   seriesCount: number;
@@ -48,6 +50,8 @@ function formatCount(count: number) {
 export default function MainMenuScreen({
   visible,
   hasPlaylists,
+  playlistsHydrationPending,
+  totalCount,
   liveCount,
   movieCount,
   seriesCount,
@@ -56,6 +60,13 @@ export default function MainMenuScreen({
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const lastBackHandledAtRef = useRef(0);
+  const [hydrationWaitExpired, setHydrationWaitExpired] = useState(false);
+  const hasLoadedContent = liveCount > 0 || movieCount > 0 || seriesCount > 0;
+  const waitingForPlaylists =
+    playlistsHydrationPending &&
+    !hydrationWaitExpired &&
+    !hasPlaylists &&
+    !hasLoadedContent;
 
   const focusFirstMenuButton = () => {
     const firstBtn = containerRef.current?.querySelector<HTMLButtonElement>(".opening-btn");
@@ -68,6 +79,26 @@ export default function MainMenuScreen({
     const timer = window.setTimeout(focusFirstMenuButton, 0);
     return () => window.clearTimeout(timer);
   }, [visible]);
+
+  useEffect(() => {
+    if (!visible) {
+      setHydrationWaitExpired(false);
+      return;
+    }
+
+    if (!playlistsHydrationPending) {
+      setHydrationWaitExpired(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setHydrationWaitExpired(true);
+    }, 3000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [visible, playlistsHydrationPending]);
 
   useEffect(() => {
     if (!visible) return;
@@ -143,8 +174,6 @@ export default function MainMenuScreen({
 
   if (!visible) return null;
 
-  const hasLoadedContent = liveCount > 0 || movieCount > 0 || seriesCount > 0;
-
   return (
     <div ref={containerRef} className="opening-screen" role="dialog" aria-modal="true" aria-label="Main menu">
       <div className="opening-glow" />
@@ -154,8 +183,12 @@ export default function MainMenuScreen({
         <p className="opening-subtitle">Choose an action to start your session</p>
 
         <div className="opening-actions">
-          <button className="opening-btn opening-btn-primary" onClick={onStartLive}>
-            {hasPlaylists ? `Start Live TV${liveCount > 0 ? ` (${formatCount(liveCount)})` : ""}` : "Add Your First Playlist"}
+          <button className="opening-btn opening-btn-primary" onClick={onStartLive} disabled={waitingForPlaylists}>
+            {waitingForPlaylists
+              ? "Loading Saved Playlists..."
+              : hasPlaylists
+                ? `Start Live TV${liveCount > 0 ? ` (${formatCount(liveCount)} live${totalCount > liveCount ? ` / ${formatCount(totalCount)} total` : ""})` : ""}`
+                : "Add Your First Playlist"}
           </button>
         </div>
 
@@ -170,11 +203,17 @@ export default function MainMenuScreen({
 
         {hasLoadedContent && (
           <div className="opening-hint">
-            Loaded: {formatCount(liveCount)} live, {formatCount(movieCount)} movies, {formatCount(seriesCount)} series.
+            Loaded: {formatCount(totalCount)} total ({formatCount(liveCount)} live, {formatCount(movieCount)} movies, {formatCount(seriesCount)} series).
           </div>
         )}
 
-        {!hasPlaylists && (
+        {waitingForPlaylists && (
+          <div className="opening-hint">
+            Checking browser storage for saved playlists.
+          </div>
+        )}
+
+        {!hasPlaylists && !waitingForPlaylists && (
           <div className="opening-warning">
             No playlists found. Add one first to load channels.
           </div>

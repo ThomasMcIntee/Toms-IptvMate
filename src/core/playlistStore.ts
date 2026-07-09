@@ -7,24 +7,392 @@ export type PlaylistEntry = {
   data: any;
 };
 
+export type PlaylistBridgeStatus = {
+  attempts: number;
+  inFlight: boolean;
+  lastOrigin: string;
+  lastImportedCount: number;
+  lastError: string;
+  lastAttemptAt: number;
+  lastSuccessAt: number;
+};
+
 const KEY = "iptvmate_playlists";
 const LEGACY_KEY = "streambase_playlists";
 const SESSION_KEY = "iptvmate_playlists_session";
 const PLAYLISTS_DB = "iptvmate_playlists_cache";
 const PLAYLISTS_STORE = "playlists";
 const PLAYLISTS_RECORD_KEY = "latest";
+const PLAYLISTS_DB_OPEN_TIMEOUT_MS = 1500;
+const PLAYLISTS_DB_LOAD_TIMEOUT_MS = 1800;
+const PLAYLIST_BRIDGE_TIMEOUT_MS = 3200;
+const DEV_PLAYLIST_BRIDGE_RETRY_COOLDOWN_MS = 2000;
+const DEV_PLAYLIST_BRIDGE_MAX_ATTEMPTS = 6;
+const DEV_PLAYLIST_BRIDGE_ORIGINS = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:4000",
+  "http://127.0.0.1:4000",
+  "http://localhost:40000",
+  "http://127.0.0.1:40000",
+  "http://localhost:5137",
+  "http://127.0.0.1:5137",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173"
+];
 const RECOVERY_PLAYLIST_URL = "recovery://cached-channels";
 const RECOVERY_PLAYLIST_NAME = "recovered channels";
+const WINDOW_NAME_PLAYLIST_PREFIX = "iptvmate_playlists=";
 let inMemoryPlaylists: PlaylistEntry[] = [];
 let indexedDbHydrationStarted = false;
+let indexedDbHydrationCompleted = false;
 let storageKeyRecoveryAttempted = false;
+let crossOriginImportAttempts = 0;
+let crossOriginImportInFlight = false;
+let crossOriginImportLastAttemptAt = 0;
 let playlistMutationRevision = 0;
+let playlistBridgeStatus: PlaylistBridgeStatus = {
+  attempts: 0,
+  inFlight: false,
+  lastOrigin: "",
+  lastImportedCount: 0,
+  lastError: "",
+  lastAttemptAt: 0,
+  lastSuccessAt: 0
+};
+
+function updatePlaylistBridgeStatus(patch: Partial<PlaylistBridgeStatus>): void {
+  playlistBridgeStatus = {
+    ...playlistBridgeStatus,
+    ...patch
+  };
+  dispatchPlaylistStoreEvent("playlistsBridgeStatus");
+}
+
+export function getPlaylistBridgeStatus(): PlaylistBridgeStatus {
+  return { ...playlistBridgeStatus };
+}
+
+function isLocalDevOrigin(value: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(String(value || ""));
+}
+
+async function requestPlaylistsFromOrigin(origin: string): Promise<PlaylistEntry[]> {
+  if (typeof window === "undefined" || typeof document === "undefined") return [];
+
+  updatePlaylistBridgeStatus({
+    lastOrigin: origin,
+    lastError: "",
+    lastImportedCount: 0
+  });
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const iframe = document.createElement("iframe");
+    iframe.style.display = "none";
+    iframe.setAttribute("aria-hidden", "true");
+    iframe.src = `${origin}/`;
+
+    const finish = (entries: PlaylistEntry[]) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      window.removeEventListener("message", onMessage);
+      try {
+        iframe.remove();
+      } catch {
+        // Ignore iframe cleanup failures.
+      }
+      resolve(entries);
+    };
+
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== origin) return;
+      const payload = event.data as {
+        type?: unknown;
+        requestId?: unknown;
+        playlists?: unknown;
+      };
+      if (!payload || payload.type !== "iptvmate:response-playlists") return;
+      if (String(payload.requestId || "") !== requestId) return;
+
+      const imported = dedupePlaylists(
+        extractPlaylistCollection(payload.playlists)
+          .map(toPlaylistEntry)
+          .filter((entry): entry is PlaylistEntry => !!entry)
+      );
+      updatePlaylistBridgeStatus({
+        lastOrigin: origin,
+        lastImportedCount: imported.length,
+        lastError: imported.length > 0 ? "" : "origin responded with 0 playlists"
+      });
+      finish(imported);
+    };
+
+    const timeout = window.setTimeout(() => {
+      updatePlaylistBridgeStatus({
+        lastOrigin: origin,
+        lastError: `timeout after ${PLAYLIST_BRIDGE_TIMEOUT_MS}ms`
+      });
+      finish([]);
+    }, PLAYLIST_BRIDGE_TIMEOUT_MS);
+
+    window.addEventListener("message", onMessage);
+
+    iframe.onload = () => {
+      try {
+        iframe.contentWindow?.postMessage(
+          {
+            type: "iptvmate:request-playlists",
+            requestId
+          },
+          origin
+        );
+      } catch {
+        finish([]);
+      }
+    };
+
+    iframe.onerror = () => {
+      updatePlaylistBridgeStatus({
+        lastOrigin: origin,
+        lastError: "iframe load failed"
+      });
+      finish([]);
+    };
+
+    try {
+      (document.body || document.documentElement).appendChild(iframe);
+    } catch {
+      finish([]);
+    }
+  });
+}
+
+async function requestPlaylistsFromOriginPopup(origin: string): Promise<PlaylistEntry[]> {
+  if (typeof window === "undefined") return [];
+
+  const currentOrigin = String(window.location?.origin || "");
+  if (!currentOrigin) return [];
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const requestId = `popup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const exportUrl = `${origin}/?iptvmate_export_target=${encodeURIComponent(currentOrigin)}&iptvmate_export_request=${encodeURIComponent(requestId)}`;
+    const popup = window.open(exportUrl, "iptvmate-playlist-export", "width=560,height=560,noopener=no,noreferrer=no");
+
+    const finish = (entries: PlaylistEntry[]) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      window.removeEventListener("message", onMessage);
+      try {
+        popup?.close();
+      } catch {
+        // Ignore popup close failures.
+      }
+      resolve(entries);
+    };
+
+    if (!popup) {
+      updatePlaylistBridgeStatus({
+        lastOrigin: origin,
+        lastError: "popup blocked by browser"
+      });
+      finish([]);
+      return;
+    }
+
+    updatePlaylistBridgeStatus({
+      lastOrigin: origin,
+      lastError: "",
+      lastImportedCount: 0
+    });
+
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== origin) return;
+      const payload = event.data as {
+        type?: unknown;
+        requestId?: unknown;
+        playlists?: unknown;
+      };
+      if (!payload || payload.type !== "iptvmate:popup-playlists") return;
+      if (String(payload.requestId || "") !== requestId) return;
+
+      const imported = dedupePlaylists(
+        extractPlaylistCollection(payload.playlists)
+          .map(toPlaylistEntry)
+          .filter((entry): entry is PlaylistEntry => !!entry)
+      );
+
+      updatePlaylistBridgeStatus({
+        lastOrigin: origin,
+        lastImportedCount: imported.length,
+        lastError: imported.length > 0 ? "" : "popup responded with 0 playlists"
+      });
+      finish(imported);
+    };
+
+    const timeout = window.setTimeout(() => {
+      updatePlaylistBridgeStatus({
+        lastOrigin: origin,
+        lastError: "popup import timeout"
+      });
+      finish([]);
+    }, 9000);
+
+    window.addEventListener("message", onMessage);
+  });
+}
+
+function tryImportPlaylistsFromDevOrigins() {
+  if (crossOriginImportInFlight) return;
+  if (typeof window === "undefined") return;
+
+  const currentOrigin = String(window.location?.origin || "");
+  if (!isLocalDevOrigin(currentOrigin)) return;
+  if (crossOriginImportAttempts >= DEV_PLAYLIST_BRIDGE_MAX_ATTEMPTS) return;
+
+  const now = Date.now();
+  if (now - crossOriginImportLastAttemptAt < DEV_PLAYLIST_BRIDGE_RETRY_COOLDOWN_MS) return;
+
+  crossOriginImportInFlight = true;
+  crossOriginImportAttempts += 1;
+  crossOriginImportLastAttemptAt = now;
+  updatePlaylistBridgeStatus({
+    attempts: crossOriginImportAttempts,
+    inFlight: true,
+    lastAttemptAt: now,
+    lastError: ""
+  });
+
+  const candidates = DEV_PLAYLIST_BRIDGE_ORIGINS.filter((origin) => origin !== currentOrigin);
+  if (candidates.length === 0) {
+    crossOriginImportInFlight = false;
+    updatePlaylistBridgeStatus({
+      inFlight: false,
+      lastError: "no bridge origin candidates"
+    });
+    return;
+  }
+
+  void (async () => {
+    try {
+      for (const origin of candidates) {
+        const imported = await requestPlaylistsFromOrigin(origin);
+        if (imported.length === 0) continue;
+
+        safeSetPlaylists(imported, true);
+        updatePlaylistBridgeStatus({
+          inFlight: false,
+          lastOrigin: origin,
+          lastImportedCount: imported.length,
+          lastSuccessAt: Date.now(),
+          lastError: ""
+        });
+        return;
+      }
+      updatePlaylistBridgeStatus({
+        inFlight: false,
+        lastImportedCount: 0,
+        lastError: "all bridge origins returned no playlists"
+      });
+    } finally {
+      crossOriginImportInFlight = false;
+      updatePlaylistBridgeStatus({
+        inFlight: false
+      });
+    }
+  })();
+}
+
+export async function forceImportPlaylistsFromDevOrigins(): Promise<number> {
+  if (crossOriginImportInFlight) return 0;
+  if (typeof window === "undefined") return 0;
+
+  const currentOrigin = String(window.location?.origin || "");
+  if (!isLocalDevOrigin(currentOrigin)) return 0;
+
+  crossOriginImportInFlight = true;
+  crossOriginImportAttempts += 1;
+  crossOriginImportLastAttemptAt = Date.now();
+  updatePlaylistBridgeStatus({
+    attempts: crossOriginImportAttempts,
+    inFlight: true,
+    lastAttemptAt: crossOriginImportLastAttemptAt,
+    lastError: ""
+  });
+
+  const candidates = DEV_PLAYLIST_BRIDGE_ORIGINS.filter((origin) => origin !== currentOrigin);
+  if (candidates.length === 0) {
+    crossOriginImportInFlight = false;
+    updatePlaylistBridgeStatus({
+      inFlight: false,
+      lastError: "no bridge origin candidates"
+    });
+    return 0;
+  }
+
+  try {
+    for (const origin of candidates) {
+      const imported = await requestPlaylistsFromOrigin(origin);
+      const resolved = imported.length > 0 ? imported : await requestPlaylistsFromOriginPopup(origin);
+      if (resolved.length === 0) continue;
+
+      safeSetPlaylists(resolved, true);
+      updatePlaylistBridgeStatus({
+        inFlight: false,
+        lastOrigin: origin,
+        lastImportedCount: resolved.length,
+        lastSuccessAt: Date.now(),
+        lastError: ""
+      });
+      return resolved.length;
+    }
+
+    updatePlaylistBridgeStatus({
+      inFlight: false,
+      lastImportedCount: 0,
+      lastError: "all bridge origins returned no playlists"
+    });
+    return 0;
+  } finally {
+    crossOriginImportInFlight = false;
+    updatePlaylistBridgeStatus({
+      inFlight: false
+    });
+  }
+}
+
+function dispatchPlaylistStoreEvent(name: string): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    if (typeof CustomEvent === "function") {
+      window.dispatchEvent(new CustomEvent(name));
+      return;
+    }
+  } catch {
+    // Fall through to legacy event creation.
+  }
+
+  try {
+    const legacyEvent = document.createEvent("CustomEvent");
+    legacyEvent.initCustomEvent(name, false, false, undefined);
+    window.dispatchEvent(legacyEvent);
+  } catch {
+    // Keep dispatch best-effort so playlist persistence still works.
+  }
+}
 
 function isRecoveryPlaylistUrl(value: string): boolean {
   return String(value || "").trim().toLowerCase().startsWith("recovery://");
 }
 
-function safeSetPlaylists(entries: PlaylistEntry[]) {
+function safeSetPlaylists(entries: PlaylistEntry[], emitChangeEvent = true) {
   playlistMutationRevision += 1;
   inMemoryPlaylists = [...entries];
   try {
@@ -46,10 +414,16 @@ function safeSetPlaylists(entries: PlaylistEntry[]) {
     // Ignore legacy cleanup errors.
   }
 
+  try {
+    writePlaylistsToWindowName(entries);
+  } catch {
+    // Ignore window.name fallback errors.
+  }
+
   void savePlaylistsIndexedDb(entries);
 
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("playlistsChanged"));
+  if (emitChangeEvent) {
+    dispatchPlaylistStoreEvent("playlistsChanged");
   }
 }
 
@@ -57,6 +431,17 @@ async function openPlaylistsDb(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === "undefined") return null;
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (db: IDBDatabase | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(db);
+    };
+
+    const timeout = window.setTimeout(() => {
+      finish(null);
+    }, PLAYLISTS_DB_OPEN_TIMEOUT_MS);
+
     try {
       const request = indexedDB.open(PLAYLISTS_DB, 1);
       request.onupgradeneeded = () => {
@@ -65,10 +450,21 @@ async function openPlaylistsDb(): Promise<IDBDatabase | null> {
           db.createObjectStore(PLAYLISTS_STORE);
         }
       };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => resolve(null);
+      request.onsuccess = () => {
+        window.clearTimeout(timeout);
+        finish(request.result);
+      };
+      request.onerror = () => {
+        window.clearTimeout(timeout);
+        finish(null);
+      };
+      request.onblocked = () => {
+        window.clearTimeout(timeout);
+        finish(null);
+      };
     } catch {
-      resolve(null);
+      window.clearTimeout(timeout);
+      finish(null);
     }
   });
 }
@@ -154,19 +550,35 @@ function hydratePlaylistsFromIndexedDb() {
   const hydrationRevision = playlistMutationRevision;
 
   void (async () => {
-    const indexedDbPlaylists = dedupePlaylists(await loadPlaylistsIndexedDb());
-    if (indexedDbPlaylists.length === 0) return;
-    if (hydrationRevision !== playlistMutationRevision) return;
+    try {
+      const indexedDbPlaylists = dedupePlaylists(
+        await Promise.race<PlaylistEntry[]>([
+          loadPlaylistsIndexedDb(),
+          new Promise<PlaylistEntry[]>((resolve) => {
+            window.setTimeout(() => resolve([]), PLAYLISTS_DB_LOAD_TIMEOUT_MS);
+          })
+        ])
+      );
+      if (indexedDbPlaylists.length === 0) return;
+      if (hydrationRevision !== playlistMutationRevision) return;
 
-    const current = readJsonArray(KEY).map(toPlaylistEntry).filter((x): x is PlaylistEntry => !!x);
-    const legacy = readJsonArray(LEGACY_KEY).map(toPlaylistEntry).filter((x): x is PlaylistEntry => !!x);
-    const mergedCurrent = dedupePlaylists([...current, ...legacy]);
-    if (mergedCurrent.length > 0) return;
+      const current = readJsonArray(KEY).map(toPlaylistEntry).filter((x): x is PlaylistEntry => !!x);
+      const legacy = readJsonArray(LEGACY_KEY).map(toPlaylistEntry).filter((x): x is PlaylistEntry => !!x);
+      const mergedCurrent = dedupePlaylists([...current, ...legacy]);
+      if (mergedCurrent.length > 0) return;
 
-    if (hydrationRevision !== playlistMutationRevision) return;
+      if (hydrationRevision !== playlistMutationRevision) return;
 
-    safeSetPlaylists(indexedDbPlaylists);
+      safeSetPlaylists(indexedDbPlaylists);
+    } finally {
+      indexedDbHydrationCompleted = true;
+      dispatchPlaylistStoreEvent("playlistsHydrationComplete");
+    }
   })();
+}
+
+export function isPlaylistsHydrationPending(): boolean {
+  return indexedDbHydrationStarted && !indexedDbHydrationCompleted;
 }
 
 function normalizeType(rawType: unknown, rawSource: unknown): PlaylistType | null {
@@ -398,9 +810,11 @@ function readJsonArray(key: string): unknown[] {
     if (!raw) {
       if (key === KEY) {
         const sessionRaw = sessionStorage.getItem(SESSION_KEY);
-        if (!sessionRaw) return [];
-        const sessionParsed = JSON.parse(sessionRaw) as unknown;
-        return extractPlaylistCollection(sessionParsed);
+        if (sessionRaw) {
+          const sessionParsed = JSON.parse(sessionRaw) as unknown;
+          return extractPlaylistCollection(sessionParsed);
+        }
+        return readPlaylistsFromWindowName();
       }
       return [];
     }
@@ -410,11 +824,13 @@ function readJsonArray(key: string): unknown[] {
     if (key === KEY) {
       try {
         const sessionRaw = sessionStorage.getItem(SESSION_KEY);
-        if (!sessionRaw) return [];
-        const sessionParsed = JSON.parse(sessionRaw) as unknown;
-        return extractPlaylistCollection(sessionParsed);
+        if (sessionRaw) {
+          const sessionParsed = JSON.parse(sessionRaw) as unknown;
+          return extractPlaylistCollection(sessionParsed);
+        }
+        return readPlaylistsFromWindowName();
       } catch {
-        return [];
+        return readPlaylistsFromWindowName();
       }
     }
     return [];
@@ -430,6 +846,43 @@ function parseJsonSafely(raw: string | null): unknown {
   }
 }
 
+function writePlaylistsToWindowName(entries: PlaylistEntry[]): void {
+  if (typeof window === "undefined") return;
+
+  const encoded = encodeURIComponent(JSON.stringify(entries));
+  const current = String(window.name || "");
+  const cleaned = current
+    .split("|")
+    .filter((segment) => !segment.startsWith(WINDOW_NAME_PLAYLIST_PREFIX))
+    .join("|");
+
+  const nextSegment = `${WINDOW_NAME_PLAYLIST_PREFIX}${encoded}`;
+  window.name = cleaned ? `${cleaned}|${nextSegment}` : nextSegment;
+}
+
+function readPlaylistsFromWindowName(): unknown[] {
+  if (typeof window === "undefined") return [];
+
+  const raw = String(window.name || "");
+  if (!raw) return [];
+
+  const segment = raw
+    .split("|")
+    .find((part) => part.startsWith(WINDOW_NAME_PLAYLIST_PREFIX));
+  if (!segment) return [];
+
+  const encodedPayload = segment.slice(WINDOW_NAME_PLAYLIST_PREFIX.length);
+  if (!encodedPayload) return [];
+
+  try {
+    const decoded = decodeURIComponent(encodedPayload);
+    const parsed = JSON.parse(decoded) as unknown;
+    return extractPlaylistCollection(parsed);
+  } catch {
+    return [];
+  }
+}
+
 function collectPlaylistsFromStorageArea(area: Storage | null): PlaylistEntry[] {
   if (!area) return [];
 
@@ -439,9 +892,6 @@ function collectPlaylistsFromStorageArea(area: Storage | null): PlaylistEntry[] 
   for (let index = 0; index < length; index += 1) {
     const key = String(area.key(index) || "");
     if (!key) continue;
-
-    const normalizedKey = key.toLowerCase();
-    if (!normalizedKey.includes("playlist")) continue;
 
     const parsed = parseJsonSafely(area.getItem(key));
     const entries = extractPlaylistCollection(parsed)
@@ -581,7 +1031,7 @@ function migrateLegacyPlaylists(): PlaylistEntry[] {
   const parsed = readJsonArray(LEGACY_KEY);
   const migrated = dedupePlaylists(parsed.map(toPlaylistEntry).filter((x): x is PlaylistEntry => !!x));
   if (migrated.length > 0) {
-    safeSetPlaylists(migrated);
+    safeSetPlaylists(migrated, false);
   }
   return migrated;
 }
@@ -594,9 +1044,19 @@ export function loadPlaylists(): PlaylistEntry[] {
   const merged = dedupePlaylists([...current, ...legacy]);
 
   if (merged.length > 0) {
-    safeSetPlaylists(merged);
+    const shouldNormalizePersist = legacy.length > 0 || current.length !== merged.length;
+    if (shouldNormalizePersist) {
+      safeSetPlaylists(merged, false);
+    } else {
+      inMemoryPlaylists = [...merged];
+    }
     return merged;
   }
+
+  // On localhost dev ports, playlists are origin-scoped by port.
+  // If this origin is empty, attempt a one-time import from the common
+  // dev origins so localhost:4000 can reuse localhost:5173 data.
+  tryImportPlaylistsFromDevOrigins();
 
   // One-time compatibility recovery for installs where playlists were saved
   // under provider/version-specific storage keys.
@@ -604,7 +1064,7 @@ export function loadPlaylists(): PlaylistEntry[] {
     storageKeyRecoveryAttempted = true;
     const recovered = recoverPlaylistsFromAnyStorageKey();
     if (recovered.length > 0) {
-      safeSetPlaylists(recovered);
+      safeSetPlaylists(recovered, false);
       return recovered;
     }
   }

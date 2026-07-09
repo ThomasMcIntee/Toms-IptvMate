@@ -38,7 +38,8 @@ type TranscodeSession = {
   directInputRestartCount: number;
   audioEnabled: boolean;
   audioMode: AudioMode;
-  audioPipeline: "aac-transcode" | "aac-copy" | null;
+  selectedAudioStreamOrder: number | null;
+  audioPipeline: "aac-transcode" | "aac-copy" | "mp3-transcode" | null;
   profile: string;
   baseDir: string;
   dir: string;
@@ -81,11 +82,17 @@ function reapStaleTranscodeSessions() {
   }
 }
 
-function getTranscodeSessionId(sourceUrl: string, audioEnabled: boolean, audioMode: AudioMode): string {
+function getTranscodeSessionId(
+  sourceUrl: string,
+  audioEnabled: boolean,
+  audioMode: AudioMode,
+  selectedAudioStreamOrder: number | null
+): string {
   const avLabel = audioEnabled ? "av" : "video-only";
+  const audioStreamLabel = audioEnabled && selectedAudioStreamOrder !== null ? `aidx:${selectedAudioStreamOrder}` : "aidx:auto";
   return crypto
     .createHash("sha1")
-    .update(`${CURRENT_TRANSCODE_PROFILE}|${avLabel}|${audioEnabled ? audioMode : "na"}|${sourceUrl}`)
+    .update(`${CURRENT_TRANSCODE_PROFILE}|${avLabel}|${audioEnabled ? audioMode : "na"}|${audioStreamLabel}|${sourceUrl}`)
     .digest("hex")
     .slice(0, 16);
 }
@@ -265,7 +272,18 @@ function normalizeProblematicLiveSourceUrl(sourceUrl: string): string {
 function shouldPreferRelayInput(sourceUrl: string): boolean {
   // Some VOD movie endpoints return upstream 5xx when FFmpeg connects directly,
   // while the same URL works through the local relay path.
-  return /\/movie\/[^/]+\/[^/]+\/\d+\.[a-z0-9]+(?:\?|$)/i.test(sourceUrl);
+  if (/\/movie\/[^/]+\/[^/]+\/\d+\.[a-z0-9]+(?:\?|$)/i.test(sourceUrl)) {
+    return true;
+  }
+
+  // Live provider endpoints are frequently unstable when FFmpeg connects
+  // directly (bitstream corruption / decoder init failures). Prefer relay
+  // ingest so retries share the same normalization path as browser playback.
+  if (/\/live\/[^/]+\/[^/]+\/\d+\.[a-z0-9]+(?:\?|$)/i.test(sourceUrl)) {
+    return true;
+  }
+
+  return false;
 }
 
 function startTranscoder(session: TranscodeSession) {
@@ -327,15 +345,39 @@ function startTranscoder(session: TranscodeSession) {
   const effectiveInputMode: "relay" | "direct" = shouldUseRelayFirst ? "relay" : session.inputMode;
   const inputUrl = effectiveInputMode === "direct" ? session.sourceUrl : session.relaySourceUrl;
 
-  const useFmp4Segments = false;
-  const segmentPattern = path.join(session.dir, useFmp4Segments ? "seg_%06d.m4s" : "seg_%06d.ts");
   const preferredAudioStreamOrder = session.probeInfo.preferredAudioStreamOrder;
+  const selectedAudioStreamOrder =
+    typeof session.selectedAudioStreamOrder === "number"
+      ? session.selectedAudioStreamOrder
+      : preferredAudioStreamOrder;
   const audioMap =
-    typeof preferredAudioStreamOrder === "number" ? `0:a:${preferredAudioStreamOrder}?` : "0:a:0?";
+    typeof selectedAudioStreamOrder === "number" ? `0:a:${selectedAudioStreamOrder}?` : "0:a:0?";
+  const sourceForModeCheck = (() => {
+    try {
+      return decodeURIComponent(session.sourceUrl);
+    } catch {
+      return session.sourceUrl;
+    }
+  })();
+  const isLiveLikeSource = /\/live\//i.test(sourceForModeCheck) || /%2Flive%2F/i.test(session.sourceUrl);
+  const isVodLikeSource = /\/(movie|series)\//i.test(sourceForModeCheck) || /%2F(movie|series)%2F/i.test(session.sourceUrl);
+  const useFmp4Segments = session.audioEnabled && !isLiveLikeSource;
+  const segmentPattern = path.join(session.dir, useFmp4Segments ? "seg_%06d.m4s" : "seg_%06d.ts");
+
   const shouldCopyAacAudio = false;
-  session.audioPipeline = session.audioEnabled ? "aac-transcode" : null;
-  const audioSampleRate = "48000";
+  const shouldUseMp3Audio = session.audioEnabled && session.audioMode === "safe" && isLiveLikeSource;
+  session.audioPipeline = session.audioEnabled
+    ? shouldUseMp3Audio
+      ? "mp3-transcode"
+      : shouldCopyAacAudio
+      ? "aac-copy"
+      : "aac-transcode"
+    : null;
+  const audioSampleRate = session.audioMode === "safe" ? "44100" : "48000";
+  // Keep AAC output on a conservative LC-compatible envelope across all modes.
+  // Lower bitrates can trigger decoder-incompatible AAC profiles on some builds.
   const audioBitrate = session.audioMode === "safe" ? "64k" : session.audioMode === "compat" ? "96k" : "128k";
+  const audioChannelCount = session.audioMode === "safe" ? "1" : "2";
   const audioArgs = session.audioEnabled
     ? shouldCopyAacAudio
       ? [
@@ -343,8 +385,25 @@ function startTranscoder(session: TranscodeSession) {
           audioMap,
           "-c:a",
           "copy",
-          "-bsf:a",
-          "aac_adtstoasc",
+          "-disposition:a:0",
+          "default",
+          "-metadata:s:a:0",
+          "language=eng"
+        ]
+      : shouldUseMp3Audio
+      ? [
+          "-map",
+          audioMap,
+          "-c:a",
+          "libmp3lame",
+          "-b:a",
+          "128k",
+          "-ac",
+          "2",
+          "-ar",
+          "44100",
+          "-af",
+          "aresample=async=1:first_pts=0:osr=44100",
           "-disposition:a:0",
           "default",
           "-metadata:s:a:0",
@@ -357,10 +416,12 @@ function startTranscoder(session: TranscodeSession) {
           "aac",
           "-profile:a",
           "aac_low",
+          "-aac_coder",
+          "twoloop",
           "-b:a",
           audioBitrate,
           "-ac",
-          "2",
+          audioChannelCount,
           "-ar",
           audioSampleRate,
           "-af",
@@ -406,15 +467,6 @@ function startTranscoder(session: TranscodeSession) {
           "15000000"
         ]
       : [];
-  const sourceForModeCheck = (() => {
-    try {
-      return decodeURIComponent(session.sourceUrl);
-    } catch {
-      return session.sourceUrl;
-    }
-  })();
-  const isLiveLikeSource = /\/live\//i.test(sourceForModeCheck) || /%2Flive%2F/i.test(session.sourceUrl);
-  const isVodLikeSource = /\/(movie|series)\//i.test(sourceForModeCheck) || /%2F(movie|series)%2F/i.test(session.sourceUrl);
   const hlsOutputArgs = (isVodLikeSource && !isLiveLikeSource)
     ? [
         "-hls_time",
@@ -633,17 +685,19 @@ function getOrCreateTranscodeSession(
   sourceUrl: string,
   audioEnabled: boolean,
   audioMode: AudioMode,
+  selectedAudioStreamOrder: number | null,
   host: string | undefined
 ): TranscodeSession {
   sourceUrl = normalizeProblematicLiveSourceUrl(sourceUrl);
   const preferRelayInput = shouldPreferRelayInput(sourceUrl);
-  const id = getTranscodeSessionId(sourceUrl, audioEnabled, audioMode);
+  const id = getTranscodeSessionId(sourceUrl, audioEnabled, audioMode, selectedAudioStreamOrder);
   const existing = transcodeSessions.get(id);
   if (existing) {
     if (
       existing.profile !== CURRENT_TRANSCODE_PROFILE ||
       existing.audioEnabled !== audioEnabled ||
-      existing.audioMode !== audioMode
+      existing.audioMode !== audioMode ||
+      existing.selectedAudioStreamOrder !== selectedAudioStreamOrder
     ) {
       if (existing.proc && !existing.proc.killed) {
         existing.proc.kill();
@@ -658,6 +712,7 @@ function getOrCreateTranscodeSession(
       existing.profile = CURRENT_TRANSCODE_PROFILE;
       existing.audioEnabled = audioEnabled;
       existing.audioMode = audioMode;
+      existing.selectedAudioStreamOrder = selectedAudioStreamOrder;
     }
 
     // Re-apply input preference for resumed sessions.
@@ -687,6 +742,7 @@ function getOrCreateTranscodeSession(
     directInputRestartCount: 0,
     audioEnabled,
     audioMode,
+    selectedAudioStreamOrder,
     audioPipeline: null,
     profile: CURRENT_TRANSCODE_PROFILE,
     baseDir,
@@ -1023,6 +1079,11 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
     const requestedSourceUrl = requestUrl.searchParams.get("url");
     const audioEnabled = requestUrl.searchParams.get("audio") !== "0";
     const rawAudioMode = requestUrl.searchParams.get("amode");
+    const rawAudioStreamOrder = requestUrl.searchParams.get("aidx");
+    const selectedAudioStreamOrder =
+      rawAudioStreamOrder !== null && /^\d+$/.test(rawAudioStreamOrder)
+        ? Math.max(0, Math.min(7, Number(rawAudioStreamOrder)))
+        : null;
     const audioMode: AudioMode =
       rawAudioMode === "compat" ? "compat" : rawAudioMode === "safe" ? "safe" : "standard";
     if (!requestedSourceUrl) {
@@ -1048,7 +1109,13 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
       return;
     }
 
-    const session = getOrCreateTranscodeSession(sourceUrl, audioEnabled, audioMode, req.headers.host);
+    const session = getOrCreateTranscodeSession(
+      sourceUrl,
+      audioEnabled,
+      audioMode,
+      selectedAudioStreamOrder,
+      req.headers.host
+    );
     if (shouldPreferRelayInput(sourceUrl)) {
       session.inputMode = "relay";
       session.hasTriedDirectInputFallback = false;
@@ -1064,7 +1131,7 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
     }
 
     res.statusCode = 302;
-    const entryPlaylist = audioEnabled ? "master.m3u8" : "index.m3u8";
+    const entryPlaylist = "index.m3u8";
     const pipelineSuffix = "";
     res.setHeader(
       "Location",
@@ -1195,7 +1262,6 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
 }
 
 export default defineConfig({
-  base: "./",
   plugins: [
     react({ fastRefresh: false }),
     {
@@ -1214,6 +1280,10 @@ export default defineConfig({
     outDir: "dist"
   },
   server: {
+    host: "0.0.0.0",
     hmr: false
+  },
+  preview: {
+    host: "0.0.0.0"
   }
 });

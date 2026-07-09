@@ -17,6 +17,7 @@ import RecordingPlayback from "./RecordingPlayback";
 import RecordingStorageManager from "./RecordingStorageManager";
 import PlaylistManager from "./PlaylistManager";
 import PlaylistInputMenu from "./PlaylistInputMenu";
+import type { PlaylistEntry } from "../core/playlistStore";
 export function PanelsHost({
   activePanel,
   setActivePanel,
@@ -25,7 +26,8 @@ export function PanelsHost({
   visibleTvGuideChannels,
   visibilityVersion,
   onSelectContent,
-  onPlaylistLoaded,
+  onPlaylistLoadedWithId,
+  onPlaylistAdded,
   activePlaylistId,
   onPlaylistsChanged
 }: {
@@ -37,7 +39,8 @@ export function PanelsHost({
   visibleTvGuideChannels: any[];
   visibilityVersion: number;
   onSelectContent: (content: "tv" | "movies" | "series") => void;
-  onPlaylistLoaded: (channels: any[], playlistId: string) => void;
+  onPlaylistLoadedWithId: (channels: any[], playlistId: string) => void;
+  onPlaylistAdded: (playlist: PlaylistEntry) => void;
   activePlaylistId: string;
   onPlaylistsChanged?: () => void;
 }) {
@@ -54,16 +57,18 @@ export function PanelsHost({
       <SubtitlePanel visible={activePanel === "subtitles"} />
       <PlaylistInputMenu 
         visible={activePanel === "playlist"}
-        onPlaylistSaved={() => {
+        onPlaylistSaved={(playlist) => {
           setActivePanel(null);
           onPlaylistsChanged?.();
+          onPlaylistAdded(playlist);
         }}
       />
       <PlaylistManager
         visible={showPlaylistManager}
         onSelectContent={onSelectContent}
-        onPlaylistLoaded={onPlaylistLoaded}
+        onPlaylistLoadedWithId={onPlaylistLoadedWithId}
         activePlaylistId={activePlaylistId}
+        onOpenAddPlaylist={() => setActivePanel("playlist")}
       />
       <RecordingPlayback visible={activePanel === "recordingPlayback"} />
       <EPGTimelinePanel key={`timeline-${visibilityVersion}`} visible={activePanel === "timeline"} channels={visibleTvGuideChannels} />

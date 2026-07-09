@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  isPlaylistsHydrationPending,
   loadPlaylists,
+  updatePlaylist,
   deletePlaylist,
   PlaylistEntry
 } from "../core/playlistStore";
@@ -289,13 +291,15 @@ async function readRoleCache(kind: "adult" | "child", playlistId: string): Promi
 export default function PlaylistManager({
   visible,
   onSelectContent,
-  onPlaylistLoaded,
-  activePlaylistId
+  onPlaylistLoadedWithId,
+  activePlaylistId,
+  onOpenAddPlaylist
 }: {
   visible: boolean;
   onSelectContent: (content: "tv" | "movies" | "series") => void;
-  onPlaylistLoaded: (channels: any[], playlistId: string) => void;
+  onPlaylistLoadedWithId: (channels: any[], playlistId: string) => void;
   activePlaylistId: string;
+  onOpenAddPlaylist?: () => void;
 }) {
   const [playlists, setPlaylists] = useState<PlaylistEntry[]>([]);
   const [storageDiagnostics, setStorageDiagnostics] = useState<PlaylistStorageDiagnostics>({
@@ -310,8 +314,18 @@ export default function PlaylistManager({
   const [activeRoleContext, setActiveRoleContext] = useState<"adult" | "child">("adult");
   const [currentPlaylistId, setCurrentPlaylistId] = useState<string>("");
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string>("");
+  const [editingPlaylistId, setEditingPlaylistId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editUrl, setEditUrl] = useState("");
+  const [editEpg, setEditEpg] = useState("");
+  const [editUser, setEditUser] = useState("");
+  const [editPass, setEditPass] = useState("");
+  const [showEditPass, setShowEditPass] = useState(false);
+  const [editPortal, setEditPortal] = useState("");
+  const [editMac, setEditMac] = useState("");
   const loadRequestTokenRef = useRef(0);
   const visibleRef = useRef(visible);
+  const playlistsRef = useRef<PlaylistEntry[]>([]);
   const [adultPlaylistId, setAdultPlaylistId] = useState<string>(() => {
     return readStorageItem(ADULT_PLAYLIST_ID_KEY) || "";
   });
@@ -328,6 +342,10 @@ export default function PlaylistManager({
   }, [visible]);
 
   useEffect(() => {
+    playlistsRef.current = playlists;
+  }, [playlists]);
+
+  useEffect(() => {
     if (!visible) return;
     // Default to adult visibility when the screen opens.
     setActiveRoleContext("adult");
@@ -335,9 +353,16 @@ export default function PlaylistManager({
 
     const refresh = () => {
       const loaded = loadPlaylists();
-      setPlaylists(loaded);
-      setStorageDiagnostics(readPlaylistStorageDiagnostics(loaded.length));
-      return loaded.length;
+      const hydrationPending = isPlaylistsHydrationPending();
+      const effectiveLoaded =
+        loaded.length === 0 && hydrationPending && playlistsRef.current.length > 0
+          ? playlistsRef.current
+          : loaded;
+
+      playlistsRef.current = effectiveLoaded;
+      setPlaylists(effectiveLoaded);
+      setStorageDiagnostics(readPlaylistStorageDiagnostics(effectiveLoaded.length));
+      return effectiveLoaded.length;
     };
 
     const scheduleRetryRefresh = (delaysMs: number[]) => {
@@ -368,11 +393,13 @@ export default function PlaylistManager({
     };
 
     window.addEventListener("playlistsChanged", refresh);
+    window.addEventListener("playlistsHydrationComplete", refresh);
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisibilityChanged);
 
     return () => {
       window.removeEventListener("playlistsChanged", refresh);
+      window.removeEventListener("playlistsHydrationComplete", refresh);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibilityChanged);
     };
@@ -385,6 +412,126 @@ export default function PlaylistManager({
   }, [visible]);
 
   if (!visible) return null;
+
+  function normalizeUrlInput(rawValue: string, fieldLabel: string) {
+    const trimmed = rawValue.trim();
+    if (!trimmed) {
+      throw new Error(`${fieldLabel} is required.`);
+    }
+
+    if (/\s/.test(trimmed)) {
+      throw new Error(`${fieldLabel} cannot contain spaces.`);
+    }
+
+    const withProtocol =
+      trimmed.startsWith("http://") || trimmed.startsWith("https://")
+        ? trimmed
+        : `http://${trimmed}`;
+
+    try {
+      const parsed = new URL(withProtocol);
+      return parsed.toString();
+    } catch {
+      throw new Error(`${fieldLabel} is not a valid URL.`);
+    }
+  }
+
+  function startEdit(playlist: PlaylistEntry) {
+    setEditingPlaylistId(playlist.id);
+    setEditName(String(playlist.name || ""));
+
+    if (playlist.type === "m3u") {
+      setEditUrl(String(playlist.data?.url || ""));
+      setEditEpg(String(playlist.data?.epg || ""));
+      setEditUser("");
+      setEditPass("");
+      setShowEditPass(false);
+      setEditPortal("");
+      setEditMac("");
+      return;
+    }
+
+    if (playlist.type === "xtream") {
+      setEditUrl(String(playlist.data?.url || ""));
+      setEditUser(String(playlist.data?.user || ""));
+      setEditPass(String(playlist.data?.pass || ""));
+      setShowEditPass(false);
+      setEditEpg("");
+      setEditPortal("");
+      setEditMac("");
+      return;
+    }
+
+    setEditPortal(String(playlist.data?.portal || ""));
+    setEditMac(String(playlist.data?.mac || ""));
+    setEditUrl("");
+    setEditEpg("");
+    setEditUser("");
+    setEditPass("");
+    setShowEditPass(false);
+  }
+
+  function cancelEdit() {
+    setEditingPlaylistId(null);
+    setEditName("");
+    setEditUrl("");
+    setEditEpg("");
+    setEditUser("");
+    setEditPass("");
+    setShowEditPass(false);
+    setEditPortal("");
+    setEditMac("");
+  }
+
+  function saveEdit(playlist: PlaylistEntry) {
+    try {
+      const nextName = String(editName || "").trim();
+      if (!nextName) {
+        throw new Error("Playlist name is required.");
+      }
+
+      let nextData: any = {};
+
+      if (playlist.type === "m3u") {
+        const url = normalizeUrlInput(editUrl, "M3U URL");
+        const epg = String(editEpg || "").trim()
+          ? normalizeUrlInput(editEpg, "EPG URL")
+          : "";
+        nextData = { url, epg };
+      } else if (playlist.type === "xtream") {
+        const url = normalizeUrlInput(editUrl, "Server URL");
+        const user = String(editUser || "").trim();
+        const pass = String(editPass || "").trim();
+        if (!user || !pass) {
+          throw new Error("Xtream username and password are required.");
+        }
+        nextData = { url, user, pass };
+      } else {
+        const portal = normalizeUrlInput(editPortal, "Portal URL");
+        const mac = String(editMac || "").trim();
+        if (!mac) {
+          throw new Error("MAC address is required.");
+        }
+        nextData = { portal, mac };
+      }
+
+      updatePlaylist(playlist.id, {
+        ...playlist,
+        name: nextName,
+        data: nextData
+      });
+
+      const loaded = loadPlaylists();
+      playlistsRef.current = loaded;
+      setPlaylists(loaded);
+      setStorageDiagnostics(readPlaylistStorageDiagnostics(loaded.length));
+      setStatusMessage(`Saved changes for "${nextName}".`);
+      cancelEdit();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to save playlist changes.";
+      setStatusMessage(`✗ ${message}`);
+    }
+  }
 
   function setAdultPlaylist(id: string) {
     setAdultPlaylistId(id);
@@ -485,7 +632,44 @@ export default function PlaylistManager({
     setLoadingId(p.id);
     setStatusMessage(`Loading "${p.name}"… this can take up to a minute for large playlists.`);
     try {
-      const channels = await loadChannelsForPlaylist(p);
+      let channels = await loadChannelsForPlaylist(p);
+      const initialMovieCount = channels.filter(
+        (channel) => String(channel?.contentType || "").toLowerCase() === "movie"
+      ).length;
+      let finalMovieStatus = `all=${initialMovieCount.toLocaleString()}`;
+      let finalMovieError = "";
+
+      const hasMovies = channels.some((channel) => String(channel?.contentType || "").toLowerCase() === "movie");
+      if (!hasMovies && p.type === "xtream") {
+        try {
+          const movieChannels = await loadChannelsForPlaylist(p, "movies");
+          if (Array.isArray(movieChannels) && movieChannels.length > 0) {
+            const byId = new Map<string, Channel>();
+            channels.forEach((channel) => byId.set(String(channel.id || ""), channel));
+            movieChannels.forEach((channel) => byId.set(String(channel.id || ""), channel));
+            channels = Array.from(byId.values());
+          }
+          const mergedMovieCount = channels.filter(
+            (channel) => String(channel?.contentType || "").toLowerCase() === "movie"
+          ).length;
+          finalMovieStatus = `all=${initialMovieCount.toLocaleString()} backfill=${movieChannels.length.toLocaleString()} merged=${mergedMovieCount.toLocaleString()}`;
+          if (movieChannels.length === 0) {
+            finalMovieError = "movie scope returned 0 entries";
+          }
+          setStatusMessage(
+            `Movie backfill: all=${initialMovieCount.toLocaleString()} movies=${movieChannels.length.toLocaleString()} merged=${mergedMovieCount.toLocaleString()}${movieChannels.length === 0 ? " error=movie scope returned 0 entries" : ""}`
+          );
+        } catch (movieErr) {
+          const movieMessage = movieErr instanceof Error ? movieErr.message : "Unknown movie load error";
+          finalMovieStatus = `all=${initialMovieCount.toLocaleString()} backfill=failed`;
+          finalMovieError = movieMessage;
+          setStatusMessage(`Movie backfill failed after all-load=${initialMovieCount.toLocaleString()}: ${movieMessage}`);
+          // Keep the primary load result if movie backfill fails.
+        }
+      } else {
+        finalMovieStatus = `all=${initialMovieCount.toLocaleString()}`;
+        setStatusMessage(`Initial load: total=${channels.length.toLocaleString()} movies=${initialMovieCount.toLocaleString()}`);
+      }
 
       if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
 
@@ -498,7 +682,7 @@ export default function PlaylistManager({
       setSelectedPlaylistId(p.id);
       writeStorageItem(SHARED_PLAYLIST_ID_KEY, p.id);
       setChannels(channels, roleToPersist ? "playlist-manager-role-load" : "playlist-manager-generic-load");
-      onPlaylistLoaded(channels, p.id);
+      onPlaylistLoadedWithId(channels, p.id);
       setStatusMessage(`Loaded ${channels.length.toLocaleString()} entries from "${p.name}". Fetching EPG…`);
 
       try {
@@ -534,7 +718,12 @@ export default function PlaylistManager({
         });
       }
 
-      setStatusMessage(`✓ Loaded ${channels.length.toLocaleString()} entries from "${p.name}".`);
+      const finalMovieCount = channels.filter(
+        (channel) => String(channel?.contentType || "").toLowerCase() === "movie"
+      ).length;
+      setStatusMessage(
+        `${finalMovieError ? `Movie error=${finalMovieError} | ` : ""}✓ Loaded ${channels.length.toLocaleString()} entries from "${p.name}". Movies: ${finalMovieStatus} final=${finalMovieCount.toLocaleString()}`
+      );
     } catch (err) {
       if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
       const message = err instanceof Error ? err.message : "Unknown error";
@@ -576,6 +765,9 @@ export default function PlaylistManager({
       </div>
 
       <div className="playlist-manager-actions">
+        <button className="btn-primary btn-flex" onClick={() => onOpenAddPlaylist?.()}>
+          Add Playlist
+        </button>
         <button className="btn-primary btn-flex" onClick={() => onSelectContent("tv")}>
           Live TV
         </button>
@@ -636,7 +828,7 @@ export default function PlaylistManager({
             <button
               className="btn-secondary btn-flex"
               disabled={loadingId !== null}
-              onClick={() => alert("TODO: Edit playlist")}
+              onClick={() => startEdit(p)}
             >
               Edit
             </button>
@@ -649,6 +841,117 @@ export default function PlaylistManager({
               Delete
             </button>
           </div>
+
+          {editingPlaylistId === p.id && (
+            <div className="playlist-edit-form playlist-actions-top-gap">
+              <strong aria-live="polite">Editing: {p.name}</strong>
+              <label>Playlist name</label>
+              <input
+                type="text"
+                placeholder="Playlist name"
+                value={editName}
+                onChange={(event) => setEditName(event.target.value)}
+                onKeyDown={(event) => event.stopPropagation()}
+              />
+
+              {p.type === "m3u" && (
+                <>
+                  <label>M3U URL</label>
+                  <input
+                    type="text"
+                    placeholder="M3U URL"
+                    value={editUrl}
+                    onChange={(event) => setEditUrl(event.target.value)}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  />
+                  <label>EPG URL (optional)</label>
+                  <input
+                    type="text"
+                    placeholder="EPG URL (optional)"
+                    value={editEpg}
+                    onChange={(event) => setEditEpg(event.target.value)}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  />
+                </>
+              )}
+
+              {p.type === "xtream" && (
+                <>
+                  <label>Server URL</label>
+                  <input
+                    type="text"
+                    placeholder="Server URL"
+                    value={editUrl}
+                    onChange={(event) => setEditUrl(event.target.value)}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  />
+                  <label>Username</label>
+                  <input
+                    type="text"
+                    placeholder="Username"
+                    value={editUser}
+                    onChange={(event) => setEditUser(event.target.value)}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  />
+                  <label>Password</label>
+                  <div className="password-input-row">
+                    <input
+                      type={showEditPass ? "text" : "password"}
+                      placeholder="Password"
+                      value={editPass}
+                      onChange={(event) => setEditPass(event.target.value)}
+                      onKeyDown={(event) => event.stopPropagation()}
+                    />
+                    <button
+                      type="button"
+                      className="btn-secondary password-toggle-btn"
+                      onClick={() => setShowEditPass((value) => !value)}
+                    >
+                      {showEditPass ? "Hide" : "Show"}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {p.type === "stalker" && (
+                <>
+                  <label>Portal URL</label>
+                  <input
+                    type="text"
+                    placeholder="Portal URL"
+                    value={editPortal}
+                    onChange={(event) => setEditPortal(event.target.value)}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  />
+                  <label>MAC Address</label>
+                  <input
+                    type="text"
+                    placeholder="MAC Address"
+                    value={editMac}
+                    onChange={(event) => setEditMac(event.target.value)}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  />
+                </>
+              )}
+
+              <div className="playlist-edit-form-buttons">
+                <button
+                  className="btn-primary btn-flex"
+                  disabled={loadingId !== null}
+                  onClick={() => saveEdit(p)}
+                >
+                  Save Changes
+                </button>
+                <button
+                  className="btn-secondary btn-flex"
+                  disabled={loadingId !== null}
+                  onClick={cancelEdit}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       ))}
     </div>

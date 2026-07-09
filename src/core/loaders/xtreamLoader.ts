@@ -1,4 +1,5 @@
 import { Channel, ContentType } from "../channelStore";
+import type { PlaylistLoadScope } from "./playlistLoader";
 
 type XtreamSeriesEpisodeRaw = {
   id?: number | string;
@@ -14,7 +15,35 @@ type XtreamSeriesEpisodeRaw = {
   info?: unknown;
 };
 
-export async function loadXtream(url: string, user: string, pass: string): Promise<Channel[]> {
+function extractXtreamCollection(payload: unknown): any[] {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+
+  const obj = payload as Record<string, unknown>;
+  const wrapped = [obj.result, obj.data, obj.vod, obj.series, obj.items, obj.channels, obj.js];
+  for (const candidate of wrapped) {
+    const extracted = extractXtreamCollection(candidate);
+    if (extracted.length > 0) return extracted;
+  }
+
+  const values = Object.values(obj);
+  if (values.length > 0 && values.every((value) => value && typeof value === "object" && !Array.isArray(value))) {
+    return values as any[];
+  }
+
+  if (values.length > 0 && values.every((_, index) => String(index) in obj)) {
+    return values as any[];
+  }
+
+  return [];
+}
+
+export async function loadXtream(
+  url: string,
+  user: string,
+  pass: string,
+  scope: PlaylistLoadScope = "all"
+): Promise<Channel[]> {
   const { baseUrl, apiUrl, useProxy } = await resolveReachableBaseUrl(url, user, pass);
   const baseApiUrl = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`;
 
@@ -30,32 +59,51 @@ export async function loadXtream(url: string, user: string, pass: string): Promi
   }
 
   const result: Channel[] = [];
+  const scopeErrors: string[] = [];
 
-  // Load Live TV (most important)
-  try {
-    const liveChannels = await loadLiveStreams(baseUrl, user, pass, useProxy);
-    result.push(...liveChannels);
-  } catch (err) {
-    console.warn("Failed to load live streams:", err instanceof Error ? err.message : err);
+  if (scope === "all" || scope === "live") {
+    try {
+      const liveChannels = await loadLiveStreams(baseUrl, user, pass, useProxy);
+      for (const channel of liveChannels) {
+        result.push(channel);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err || "Unknown error");
+      scopeErrors.push(`live: ${message}`);
+      console.warn("Failed to load live streams:", message);
+    }
   }
 
-  // Load Movies (VOD) - optional, may be large
-  try {
-    const movies = await loadVODStreams(baseUrl, user, pass, useProxy);
-    result.push(...movies);
-  } catch (err) {
-    console.warn("Failed to load movies:", err instanceof Error ? err.message : err);
+  if (scope === "all" || scope === "movies") {
+    try {
+      const movies = await loadVODStreams(baseUrl, user, pass, useProxy);
+      for (const channel of movies) {
+        result.push(channel);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err || "Unknown error");
+      scopeErrors.push(`movies: ${message}`);
+      console.warn("Failed to load movies:", message);
+    }
   }
 
-  // Load Series - optional
-  try {
-    const series = await loadSeriesStreams(baseUrl, user, pass, useProxy);
-    result.push(...series);
-  } catch (err) {
-    console.warn("Failed to load series:", err instanceof Error ? err.message : err);
+  if (scope === "all" || scope === "series") {
+    try {
+      const series = await loadSeriesStreams(baseUrl, user, pass, useProxy);
+      for (const channel of series) {
+        result.push(channel);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err || "Unknown error");
+      scopeErrors.push(`series: ${message}`);
+      console.warn("Failed to load series:", message);
+    }
   }
 
   if (result.length === 0) {
+    if (scopeErrors.length > 0) {
+      throw new Error(`Xtream ${scope} load failed. ${scopeErrors.join(" | ")}`);
+    }
     throw new Error("Xtream returned no content (live, movies, or series).");
   }
 
@@ -95,13 +143,8 @@ async function loadLiveStreams(baseUrl: string, user: string, pass: string, useP
   }
 
   const filtered = liveStreams.filter((item: any) => item.stream_id != null);
-  const MAX_LIVE_PER_LOAD = 50000;
-  if (filtered.length > MAX_LIVE_PER_LOAD) {
-    console.log(`Loading first ${MAX_LIVE_PER_LOAD} of ${filtered.length} live channels. ${filtered.length - MAX_LIVE_PER_LOAD} more available.`);
-  }
 
   return filtered
-    .slice(0, MAX_LIVE_PER_LOAD)
     .map((item: any) => {
       let group = "Uncategorized";
       const liveExtension = String(item.container_extension || "ts").trim() || "ts";
@@ -130,67 +173,40 @@ async function loadVODStreams(baseUrl: string, user: string, pass: string, usePr
   let vodCategoryMap: Record<string, string> = {};
   try {
     const catApi = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_vod_categories`;
-    const catUrl = useProxy ? toCorsProxyUrl(catApi) : catApi;
-    const catRes = await fetch(catUrl);
-    if (catRes.ok) {
-      const catData = await catRes.json();
-      console.log("VOD Categories API response:", { isArray: Array.isArray(catData), count: Array.isArray(catData) ? catData.length : 0 });
-      if (Array.isArray(catData)) {
+    const catData = await fetchJsonWithModeFallback(catApi, useProxy);
+    if (catData) {
+      const categoryItems = Array.isArray(catData)
+        ? catData
+        : catData && typeof catData === "object"
+          ? ((catData as any).result || (catData as any).data || (catData as any).vod || [])
+          : [];
+      if (categoryItems.length > 0) {
         vodCategoryMap = Object.fromEntries(
-          catData.map((c: any) => [c.category_id.toString(), c.category_name || `Category ${c.category_id}`])
+          categoryItems.map((c: any) => [c.category_id.toString(), c.category_name || `Category ${c.category_id}`])
         );
-        console.log("VOD Category Map built:", Object.keys(vodCategoryMap).length, "categories");
       }
-    } else {
-      console.warn(`VOD Categories API returned status ${catRes.status}`);
     }
-  } catch (err) {
-    console.warn("VOD Categories fetch error:", err instanceof Error ? err.message : err);
+  } catch {
     // Categories not available
   }
 
   let vodStreams = [];
   try {
     const vodApi = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_vod_streams`;
-    const vodUrl = useProxy ? toCorsProxyUrl(vodApi) : vodApi;
-    console.log("Fetching VOD from:", vodUrl.substring(0, 100) + "...");
-    const vodRes = await fetch(vodUrl);
-    if (vodRes.ok) {
-      const vodData = await vodRes.json();
-      console.log("VOD Streams API raw response:", { 
-        isArray: Array.isArray(vodData), 
-        isObject: vodData && typeof vodData === "object",
-        type: typeof vodData,
-        keys: vodData && typeof vodData === "object" ? Object.keys(vodData) : []
-      });
+    const vodData = await fetchJsonWithModeFallback(vodApi, useProxy);
+    if (vodData) {
       if (Array.isArray(vodData)) {
         vodStreams = vodData;
       } else if (vodData && typeof vodData === "object") {
-        // Try common response patterns: {"result": []}, {"data": []}, etc.
-        vodStreams = vodData.result || vodData.data || vodData.vod || [];
-        console.log("Extracted VOD array from object property, count:", vodStreams.length);
+        vodStreams = (vodData as any).result || (vodData as any).data || (vodData as any).vod || [];
       }
-      console.log("Total VOD streams before filtering:", vodStreams.length);
-    } else {
-      console.warn(`VOD Streams API returned status ${vodRes.status}`);
     }
-  } catch (err) {
+  } catch {
     // VOD streams not available
-    console.warn("VOD fetch error:", err instanceof Error ? err.message : err);
   }
-
   const filtered = vodStreams.filter((item: any) => item.stream_id != null);
-  console.log("VOD streams after filter (stream_id != null):", filtered.length);
-
-  // Paginate: load only first 10000 to prevent stack overflow
-  const MAX_MOVIES_PER_LOAD = 50000;
-  const remaining = filtered.length - MAX_MOVIES_PER_LOAD;
-  if (remaining > 0) {
-    console.log(`Loading first ${MAX_MOVIES_PER_LOAD} of ${filtered.length} movies. ${remaining} more available.`);
-  }
 
   return filtered
-    .slice(0, MAX_MOVIES_PER_LOAD)
     .map((item: any) => {
       let group = "Movies";
       const vodExtension = String(item.container_extension || "mp4").trim() || "mp4";
@@ -223,9 +239,10 @@ async function loadSeriesStreams(baseUrl: string, user: string, pass: string, us
     const catRes = await fetch(catUrl);
     if (catRes.ok) {
       const catData = await catRes.json();
-      if (Array.isArray(catData)) {
+      const categoryItems = extractXtreamCollection(catData);
+      if (categoryItems.length > 0) {
         seriesCategoryMap = Object.fromEntries(
-          catData.map((c: any) => [c.category_id.toString(), c.category_name || `Category ${c.category_id}`])
+          categoryItems.map((c: any) => [c.category_id.toString(), c.category_name || `Category ${c.category_id}`])
         );
       }
     }
@@ -240,23 +257,16 @@ async function loadSeriesStreams(baseUrl: string, user: string, pass: string, us
     const seriesRes = await fetch(seriesUrl);
     if (seriesRes.ok) {
       const seriesData = await seriesRes.json();
-      seriesStreams = Array.isArray(seriesData) ? seriesData : [];
+      seriesStreams = extractXtreamCollection(seriesData);
     }
   } catch {
     // Series not available
   }
 
   const result: Channel[] = [];
-  
-  // Paginate: load only first 5000 series to prevent stack overflow
-  const MAX_SERIES_PER_LOAD = 20000;
-  const seriesLimit = Math.min(seriesStreams.length, MAX_SERIES_PER_LOAD);
-  if (seriesStreams.length > MAX_SERIES_PER_LOAD) {
-    console.log(`Loading first ${MAX_SERIES_PER_LOAD} of ${seriesStreams.length} series. ${seriesStreams.length - MAX_SERIES_PER_LOAD} more available.`);
-  }
 
   // Create one entry per series
-  for (let i = 0; i < seriesLimit; i++) {
+  for (let i = 0; i < seriesStreams.length; i++) {
     const series = seriesStreams[i];
     if (!series.series_id) continue;
 
@@ -288,8 +298,14 @@ function getBaseCandidates(url: string): string[] {
     throw new Error("Xtream server URL is empty");
   }
 
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-    return [trimmed];
+  if (trimmed.startsWith("http://")) {
+    const httpsVariant = `https://${trimmed.slice("http://".length)}`;
+    return [trimmed, httpsVariant];
+  }
+
+  if (trimmed.startsWith("https://")) {
+    const httpVariant = `http://${trimmed.slice("https://".length)}`;
+    return [trimmed, httpVariant];
   }
 
   return [`https://${trimmed}`, `http://${trimmed}`];
@@ -309,6 +325,16 @@ async function resolveReachableBaseUrl(
       const res = await fetch(api);
       if (res.ok) return { baseUrl, apiUrl: api, useProxy: false };
       reasons.push(`${baseUrl} -> ${res.status}`);
+
+      // Some providers block browser-origin probes with non-2xx statuses; try proxy fallback as well.
+      const proxiedApi = toCorsProxyUrl(api);
+      try {
+        const proxyRes = await fetch(proxiedApi);
+        if (proxyRes.ok) return { baseUrl, apiUrl: proxiedApi, useProxy: true };
+        reasons.push(`${proxiedApi} -> ${proxyRes.status}`);
+      } catch {
+        reasons.push(`${proxiedApi} -> proxy network error`);
+      }
     } catch {
       reasons.push(`${baseUrl} -> network error`);
 
@@ -420,12 +446,45 @@ function parseXtreamSeriesUrl(url: string): {
 async function fetchJsonWithProxyFallback(url: string): Promise<unknown> {
   const direct = await fetch(url).catch(() => null);
   if (direct?.ok) {
-    return direct.json();
+    try {
+      return await direct.json();
+    } catch {
+      // Fall through to proxy retry if direct JSON parsing fails.
+    }
   }
 
   const proxied = await fetch(toCorsProxyUrl(url)).catch(() => null);
   if (proxied?.ok) {
-    return proxied.json();
+    try {
+      return await proxied.json();
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+async function fetchJsonWithModeFallback(url: string, preferProxy: boolean): Promise<unknown> {
+  const first = preferProxy ? toCorsProxyUrl(url) : url;
+  const second = preferProxy ? url : toCorsProxyUrl(url);
+
+  const firstRes = await fetch(first).catch(() => null);
+  if (firstRes?.ok) {
+    try {
+      return await firstRes.json();
+    } catch {
+      // Fall through to alternate mode.
+    }
+  }
+
+  const secondRes = await fetch(second).catch(() => null);
+  if (secondRes?.ok) {
+    try {
+      return await secondRes.json();
+    } catch {
+      return null;
+    }
   }
 
   return null;
