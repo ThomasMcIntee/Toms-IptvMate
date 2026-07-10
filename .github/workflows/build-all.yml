@@ -1,0 +1,47 @@
+name: Build All Targets
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-all:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Build web app
+        run: npm run build
+
+      - name: Build WebOS package
+        run: npm run webos:package
+
+      - name: Stage WebOS package artifact
+        run: cp tv.toms.iptvmate_*.ipk webos/
+
+      - name: Sync Capacitor
+        run: npx cap sync
+
+      - name: Upload web build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: dist/
+
+      - name: Upload WebOS package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webos-ipk
+          path: webos/*.ipk
