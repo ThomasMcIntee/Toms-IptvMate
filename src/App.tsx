@@ -213,6 +213,19 @@ export function App() {
   const guidePrefetchedIdsRef = useRef<Set<string>>(new Set());
   const guidePrefetchCursorRef = useRef(0);
   const startupAutoLoadInFlightRef = useRef(false);
+  const setupSecurity = readSetupSecurity();
+  const isLoginOverlayVisible = setupSecurity.loginRequired && accessLevel === null;
+  const shouldForceOpeningMenu =
+    !isLoginOverlayVisible &&
+    !currentChannel &&
+    !isSeriesPickerVisible &&
+    !isVodPlaybackFullscreen &&
+    !isPlaylistInputPanelOpen &&
+    !isEpgSearchPanelOpen &&
+    activePanel === null &&
+    contentPage === "live" &&
+    !hasSelectedLiveChannel;
+  const shouldShowOpeningMenu = showOpeningScreen || shouldForceOpeningMenu;
 
   useEffect(() => {
     const refreshPlaylistsPresence = () => {
@@ -636,7 +649,17 @@ export function App() {
       const masterCode = (localStorage.getItem("iptvmate_setup_master_code") || "").trim().toUpperCase();
       const adultCode = (localStorage.getItem("iptvmate_setup_adult_code") || "").trim().toUpperCase();
       const childCode = (localStorage.getItem("iptvmate_setup_child_code") || "").trim().toUpperCase();
-      return { loginRequired, masterCode, adultCode, childCode };
+
+      const hasValidCode = [masterCode, adultCode, childCode].some((value) => /^[A-Z0-9]{4}$/.test(value));
+      // Guard against setup deadlock: do not enforce login if no valid code exists.
+      const effectiveLoginRequired = loginRequired && hasValidCode;
+
+      return {
+        loginRequired: effectiveLoginRequired,
+        masterCode,
+        adultCode,
+        childCode
+      };
     } catch {
       return { loginRequired: false, masterCode: "", adultCode: "", childCode: "" };
     }
@@ -900,6 +923,19 @@ export function App() {
     setPlayerWarning(null);
     setShowNowNext(false);
   }, [showOpeningScreen, currentChannel]);
+
+  useEffect(() => {
+    if (showOpeningScreen) return;
+    if (!shouldForceOpeningMenu) return;
+
+    const timer = window.setTimeout(() => {
+      setShowOpeningScreen(true);
+    }, 700);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [showOpeningScreen, shouldForceOpeningMenu]);
 
   useEffect(() => {
     if (contentPage !== "live") return;
@@ -2575,7 +2611,7 @@ export function App() {
       {shouldRenderMainVideo && !useLivePreviewShell && (
         <video
           id="player-main"
-          className={`player-main ${showOpeningScreen && !currentChannel ? "player-main-idle" : showContentPreviewWindow ? "player-main-preview" : contentPage === "live" ? (isEffectiveLiveFullscreen ? "player-main-live" : "player-main-compact") : currentChannel ? "player-main-live" : "player-main-compact"}${forceLivePreviewLayout ? " player-main-force-preview" : ""}`}
+          className={`player-main ${shouldShowOpeningMenu && !currentChannel ? "player-main-idle" : showContentPreviewWindow ? "player-main-preview" : contentPage === "live" ? (isEffectiveLiveFullscreen ? "player-main-live" : "player-main-compact") : currentChannel ? "player-main-live" : "player-main-compact"}${forceLivePreviewLayout ? " player-main-force-preview" : ""}`}
           autoPlay
           playsInline
           controls={!!currentChannel && !forceLivePreviewLayout}
@@ -2612,7 +2648,7 @@ export function App() {
         </button>
       )}
 
-      {readSetupSecurity().loginRequired && accessLevel === null && (
+      {isLoginOverlayVisible && (
         <div className="app-login-overlay" role="dialog" aria-modal="true" aria-label="Login required">
           <div className="app-login-card">
             <h2 className="app-login-title">Login Required</h2>
@@ -2639,7 +2675,7 @@ export function App() {
       )}
 
       <MainMenuScreen
-        visible={showOpeningScreen}
+        visible={shouldShowOpeningMenu}
         hasPlaylists={hasPlaylists || hasPlayableChannels}
         playlistsHydrationPending={isPlaylistsHydrationPending()}
         totalCount={allChannels.length}
@@ -2652,7 +2688,7 @@ export function App() {
         onOpenPanel={openPanelFromMenu}
       />
 
-      {!isVodPlaybackFullscreen && (!isLiveChannelPlaying || showLiveMenu) && (
+      {!shouldShowOpeningMenu && !isVodPlaybackFullscreen && (!isLiveChannelPlaying || showLiveMenu) && (
         <>
           {isMainSeriesScreen && (
             <div className="series-main-search-bar">
@@ -2828,7 +2864,7 @@ export function App() {
         </>
       )}
 
-      {!isEpgSearchPanelOpen && currentChannel && (String(currentChannel.contentType || "").toLowerCase() === "live" || (!currentChannel.contentType && contentPage === "live")) && (
+      {!shouldShowOpeningMenu && !isEpgSearchPanelOpen && currentChannel && (String(currentChannel.contentType || "").toLowerCase() === "live" || (!currentChannel.contentType && contentPage === "live")) && (
         <>
           <EPGGrid
             currentChannel={currentChannel}
@@ -2850,52 +2886,58 @@ export function App() {
           </button>
         </>
       )}
-      <PlayerOSD channel={currentChannel} />
-      <SeriesEpisodePicker
-        visible={isSeriesPickerVisible}
-        seriesTitle={seriesPickerTitle}
-        episodes={seriesPickerEpisodes}
-        loading={seriesPickerLoading}
-        error={seriesPickerError}
-        onClose={() => setIsSeriesPickerVisible(false)}
-        favoriteLabel={
-          isFavoriteChannelRecord(seriesPickerSourceChannel)
-            ? "Remove Favorite"
-            : "Add Favorite"
-        }
-        onToggleFavorite={() => {
-          if (!seriesPickerSourceChannel) return;
-          setChannelFavoriteRecord(seriesPickerSourceChannel, !isFavoriteChannelRecord(seriesPickerSourceChannel));
-        }}
-        onSelectEpisode={(episode) => {
-          rememberSeriesEpisode(seriesPickerSourceChannel, episode);
-          setIsSeriesPickerVisible(false);
-          playChannel(episode);
-        }}
-      />
-      <PanelsHost
-        activePanel={activePanel}
-        setActivePanel={setActivePanel}
-        showPlaylistManager={isPlaylistManagerPage}
-        visibleTvChannels={visibleTvChannels}
-        visibleTvGuideChannels={visibleTvGuideChannels}
-        visibilityVersion={categoryRefreshTick}
-        onSelectContent={selectContent}
-        onPlaylistLoadedWithId={handlePlaylistLoadedWithId}
-        onPlaylistAdded={() => {
-          setHasPlaylists(loadPlaylists().length > 0);
-        }}
-        activePlaylistId={activePlaylistId}
-        onPlaylistsChanged={() => {
-          setCategoryRefreshTick(tick => tick + 1);
-        }}
-      />
+      {!shouldShowOpeningMenu && <PlayerOSD channel={currentChannel} />}
+      {!shouldShowOpeningMenu && (
+        <SeriesEpisodePicker
+          visible={isSeriesPickerVisible}
+          seriesTitle={seriesPickerTitle}
+          episodes={seriesPickerEpisodes}
+          loading={seriesPickerLoading}
+          error={seriesPickerError}
+          onClose={() => setIsSeriesPickerVisible(false)}
+          favoriteLabel={
+            isFavoriteChannelRecord(seriesPickerSourceChannel)
+              ? "Remove Favorite"
+              : "Add Favorite"
+          }
+          onToggleFavorite={() => {
+            if (!seriesPickerSourceChannel) return;
+            setChannelFavoriteRecord(seriesPickerSourceChannel, !isFavoriteChannelRecord(seriesPickerSourceChannel));
+          }}
+          onSelectEpisode={(episode) => {
+            rememberSeriesEpisode(seriesPickerSourceChannel, episode);
+            setIsSeriesPickerVisible(false);
+            playChannel(episode);
+          }}
+        />
+      )}
+      {!shouldShowOpeningMenu && (
+        <PanelsHost
+          activePanel={activePanel}
+          setActivePanel={setActivePanel}
+          showPlaylistManager={isPlaylistManagerPage}
+          visibleTvChannels={visibleTvChannels}
+          visibleTvGuideChannels={visibleTvGuideChannels}
+          visibilityVersion={categoryRefreshTick}
+          onSelectContent={selectContent}
+          onPlaylistLoadedWithId={handlePlaylistLoadedWithId}
+          onPlaylistAdded={() => {
+            setHasPlaylists(loadPlaylists().length > 0);
+          }}
+          activePlaylistId={activePlaylistId}
+          onPlaylistsChanged={() => {
+            setCategoryRefreshTick(tick => tick + 1);
+          }}
+        />
+      )}
 
-      <NowNextOverlay
-        channel={currentChannel}
-        visible={showNowNext}
-        onHide={() => setShowNowNext(false)}
-      />
+      {!shouldShowOpeningMenu && (
+        <NowNextOverlay
+          channel={currentChannel}
+          visible={showNowNext}
+          onHide={() => setShowNowNext(false)}
+        />
+      )}
     </div>
   );
 }

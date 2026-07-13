@@ -8,7 +8,9 @@
     "preview": "vite preview",
     "cap:sync": "npx cap sync",
     "cap:android": "npx cap open android",
-    "webos:package": "npx ares-package webos/",
+    "webos:version-sync": "node scripts/sync-webos-version.cjs",
+    "webos:sync": "node scripts/sync-webos-build.cjs",
+    "webos:package": "npm run webos:version-sync && npm run build && npm run webos:sync && npx ares-package webos/",
     "postinstall": "node scripts/fix-webos-cli-rimraf.cjs"
   },
   "dependencies": {
