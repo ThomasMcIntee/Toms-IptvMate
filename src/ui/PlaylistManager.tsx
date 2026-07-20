@@ -9,6 +9,7 @@ import {
   PlaylistEntry
 } from "../core/playlistStore";
 import {
+  saveChannelsCacheMeta,
   setChannels,
   Channel,
   getAllChannels,
@@ -200,6 +201,14 @@ function parseRoleCache(raw: string | null, playlistId: string): RoleCachePayloa
   } catch {
     return null;
   }
+}
+
+function inferLoadedScopes(channels: Channel[]): Array<"live" | "movies" | "series"> {
+  const scopes: Array<"live" | "movies" | "series"> = [];
+  if (channels.some((channel) => String(channel?.contentType || "").toLowerCase() === "live")) scopes.push("live");
+  if (channels.some((channel) => String(channel?.contentType || "").toLowerCase() === "movie")) scopes.push("movies");
+  if (channels.some((channel) => String(channel?.contentType || "").toLowerCase() === "series")) scopes.push("series");
+  return scopes;
 }
 
 async function openRoleCacheDb(): Promise<IDBDatabase | null> {
@@ -632,22 +641,31 @@ export default function PlaylistManager({
     setLoadingId(p.id);
     setStatusMessage(`Loading "${p.name}"… this can take up to a minute for large playlists.`);
     try {
+      const mergeChannelsById = (existingChannels: Channel[], incomingChannels: Channel[]) => {
+        const byId = new Map<string, Channel>();
+        existingChannels.forEach((channel) => byId.set(String(channel.id || ""), channel));
+        incomingChannels.forEach((channel) => byId.set(String(channel.id || ""), channel));
+        return Array.from(byId.values());
+      };
+
       let channels = await loadChannelsForPlaylist(p);
       const initialMovieCount = channels.filter(
         (channel) => String(channel?.contentType || "").toLowerCase() === "movie"
       ).length;
+      const initialSeriesCount = channels.filter(
+        (channel) => String(channel?.contentType || "").toLowerCase() === "series"
+      ).length;
       let finalMovieStatus = `all=${initialMovieCount.toLocaleString()}`;
       let finalMovieError = "";
+      let finalSeriesStatus = `all=${initialSeriesCount.toLocaleString()}`;
+      let finalSeriesError = "";
 
       const hasMovies = channels.some((channel) => String(channel?.contentType || "").toLowerCase() === "movie");
       if (!hasMovies && p.type === "xtream") {
         try {
           const movieChannels = await loadChannelsForPlaylist(p, "movies");
           if (Array.isArray(movieChannels) && movieChannels.length > 0) {
-            const byId = new Map<string, Channel>();
-            channels.forEach((channel) => byId.set(String(channel.id || ""), channel));
-            movieChannels.forEach((channel) => byId.set(String(channel.id || ""), channel));
-            channels = Array.from(byId.values());
+            channels = mergeChannelsById(channels, movieChannels);
           }
           const mergedMovieCount = channels.filter(
             (channel) => String(channel?.contentType || "").toLowerCase() === "movie"
@@ -668,7 +686,32 @@ export default function PlaylistManager({
         }
       } else {
         finalMovieStatus = `all=${initialMovieCount.toLocaleString()}`;
-        setStatusMessage(`Initial load: total=${channels.length.toLocaleString()} movies=${initialMovieCount.toLocaleString()}`);
+        setStatusMessage(`Initial load: total=${channels.length.toLocaleString()} movies=${initialMovieCount.toLocaleString()} series=${initialSeriesCount.toLocaleString()}`);
+      }
+
+      const hasSeries = channels.some((channel) => String(channel?.contentType || "").toLowerCase() === "series");
+      if (!hasSeries && p.type === "xtream") {
+        try {
+          const seriesChannels = await loadChannelsForPlaylist(p, "series");
+          if (Array.isArray(seriesChannels) && seriesChannels.length > 0) {
+            channels = mergeChannelsById(channels, seriesChannels);
+          }
+          const mergedSeriesCount = channels.filter(
+            (channel) => String(channel?.contentType || "").toLowerCase() === "series"
+          ).length;
+          finalSeriesStatus = `all=${initialSeriesCount.toLocaleString()} backfill=${seriesChannels.length.toLocaleString()} merged=${mergedSeriesCount.toLocaleString()}`;
+          if (seriesChannels.length === 0) {
+            finalSeriesError = "series scope returned 0 entries";
+          }
+          setStatusMessage(
+            `Series backfill: all=${initialSeriesCount.toLocaleString()} series=${seriesChannels.length.toLocaleString()} merged=${mergedSeriesCount.toLocaleString()}${seriesChannels.length === 0 ? " error=series scope returned 0 entries" : ""}`
+          );
+        } catch (seriesErr) {
+          const seriesMessage = seriesErr instanceof Error ? seriesErr.message : "Unknown series load error";
+          finalSeriesStatus = `all=${initialSeriesCount.toLocaleString()} backfill=failed`;
+          finalSeriesError = seriesMessage;
+          setStatusMessage(`Series backfill failed after all-load=${initialSeriesCount.toLocaleString()}: ${seriesMessage}`);
+        }
       }
 
       if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
@@ -682,6 +725,11 @@ export default function PlaylistManager({
       setSelectedPlaylistId(p.id);
       writeStorageItem(SHARED_PLAYLIST_ID_KEY, p.id);
       setChannels(channels, roleToPersist ? "playlist-manager-role-load" : "playlist-manager-generic-load");
+      saveChannelsCacheMeta({
+        playlistId: p.id,
+        scopes: inferLoadedScopes(channels),
+        updatedAt: Date.now()
+      });
       onPlaylistLoadedWithId(channels, p.id);
       setStatusMessage(`Loaded ${channels.length.toLocaleString()} entries from "${p.name}". Fetching EPG…`);
 
@@ -721,8 +769,11 @@ export default function PlaylistManager({
       const finalMovieCount = channels.filter(
         (channel) => String(channel?.contentType || "").toLowerCase() === "movie"
       ).length;
+      const finalSeriesCount = channels.filter(
+        (channel) => String(channel?.contentType || "").toLowerCase() === "series"
+      ).length;
       setStatusMessage(
-        `${finalMovieError ? `Movie error=${finalMovieError} | ` : ""}✓ Loaded ${channels.length.toLocaleString()} entries from "${p.name}". Movies: ${finalMovieStatus} final=${finalMovieCount.toLocaleString()}`
+        `${finalMovieError ? `Movie error=${finalMovieError} | ` : ""}${finalSeriesError ? `Series error=${finalSeriesError} | ` : ""}✓ Loaded ${channels.length.toLocaleString()} entries from "${p.name}". Movies: ${finalMovieStatus} final=${finalMovieCount.toLocaleString()} | Series: ${finalSeriesStatus} final=${finalSeriesCount.toLocaleString()}`
       );
     } catch (err) {
       if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;

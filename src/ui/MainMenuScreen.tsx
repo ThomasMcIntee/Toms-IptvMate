@@ -5,6 +5,8 @@ const MAIN_MENU_KEYCODE_MAP: Record<number, string> = {
   38: "ArrowUp",
   39: "ArrowRight",
   40: "ArrowDown",
+  13: "Enter",
+  29443: "Enter",
   29460: "ArrowLeft",
   29461: "ArrowRight",
   29462: "ArrowUp",
@@ -16,7 +18,9 @@ const MAIN_MENU_KEYCODE_MAP: Record<number, string> = {
 function normalizedMenuKey(event: KeyboardEvent): { key: string; fromFallback: boolean } {
   const raw = String(event.key || "");
   if (raw && raw !== "Unidentified") {
-    return { key: raw, fromFallback: false };
+    const normalizedRaw =
+      raw === "OK" || raw === "Select" || raw === "NumpadEnter" ? "Enter" : raw;
+    return { key: normalizedRaw, fromFallback: false };
   }
 
   const fallback = MAIN_MENU_KEYCODE_MAP[Number(event.keyCode || 0)] || raw;
@@ -145,12 +149,6 @@ export default function MainMenuScreen({
       }
 
       if (key === "Enter") {
-        // Ignore unreliable fallback Enter to avoid accidental Start Live activation.
-        if (fromFallback) {
-          event.preventDefault();
-          event.stopPropagation();
-          return;
-        }
         buttons[index]?.click();
         event.preventDefault();
         event.stopPropagation();
@@ -187,7 +185,7 @@ export default function MainMenuScreen({
             {waitingForPlaylists
               ? "Loading Saved Playlists..."
               : hasPlaylists
-                ? `Start Live TV${liveCount > 0 ? ` (${formatCount(liveCount)} live${totalCount > liveCount ? ` / ${formatCount(totalCount)} total` : ""})` : ""}`
+                ? `Live TV${liveCount > 0 ? ` (${formatCount(liveCount)} live${totalCount > liveCount ? ` / ${formatCount(totalCount)} total` : ""})` : ""}`
                 : "Add Your First Playlist"}
           </button>
         </div>
