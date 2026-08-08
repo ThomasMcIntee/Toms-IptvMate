@@ -800,6 +800,30 @@ export function playUrl(
 
     if (shouldTryShakaForVodTranscode) {
       const launchShaka = async () => {
+        let shakaFallbackStarted = false;
+        const fallbackToDefaultPlayer = async (message?: string) => {
+          if (shakaFallbackStarted || isStaleRequest()) return;
+          shakaFallbackStarted = true;
+
+          await teardownShakaPlayer();
+          if (isStaleRequest()) return;
+
+          skipShakaOnce = true;
+          if (message) {
+            emitPlayerTranscoding(message);
+          }
+          playUrl(
+            normalizedUrl,
+            hasRetriedHttpFallback,
+            forceNativePlayback,
+            proxyFallbackStage,
+            hasTriedNativeFallback,
+            hasTriedTranscodeFallback,
+            hasRetriedTranscodeBootstrap,
+            contentType
+          );
+        };
+
         try {
           const shakaModule = await import("shaka-player");
           const shakaLib = (shakaModule as any).default || (shakaModule as any);
@@ -832,21 +856,7 @@ export function playUrl(
           });
 
           shakaPlayer.addEventListener("error", () => {
-            if (isStaleRequest()) return;
-
-            void teardownShakaPlayer();
-            skipShakaOnce = true;
-            emitPlayerTranscoding("Alternate player failed, retrying with default player...");
-            playUrl(
-              normalizedUrl,
-              hasRetriedHttpFallback,
-              forceNativePlayback,
-              proxyFallbackStage,
-              hasTriedNativeFallback,
-              hasTriedTranscodeFallback,
-              hasRetriedTranscodeBootstrap,
-              contentType
-            );
+            void fallbackToDefaultPlayer("Alternate player failed, retrying with default player...");
           });
 
           await shakaPlayer.load(playbackUrl);
@@ -867,19 +877,7 @@ export function playUrl(
               videoEl.removeEventListener("playing", onShakaPlaying);
             }
 
-            void teardownShakaPlayer();
-            skipShakaOnce = true;
-            emitPlayerTranscoding("Alternate player startup stalled, retrying with default player...");
-            playUrl(
-              normalizedUrl,
-              hasRetriedHttpFallback,
-              forceNativePlayback,
-              proxyFallbackStage,
-              hasTriedNativeFallback,
-              hasTriedTranscodeFallback,
-              hasRetriedTranscodeBootstrap,
-              contentType
-            );
+            void fallbackToDefaultPlayer("Alternate player startup stalled, retrying with default player...");
           }, 7000);
 
           skipShakaOnce = false;
@@ -889,20 +887,7 @@ export function playUrl(
             videoEl.removeEventListener("playing", onShakaPlaying);
           }
         } catch {
-          if (isStaleRequest()) return;
-
-          void teardownShakaPlayer();
-          skipShakaOnce = true;
-          playUrl(
-            normalizedUrl,
-            hasRetriedHttpFallback,
-            forceNativePlayback,
-            proxyFallbackStage,
-            hasTriedNativeFallback,
-            hasTriedTranscodeFallback,
-            hasRetriedTranscodeBootstrap,
-            contentType
-          );
+          await fallbackToDefaultPlayer();
         }
       };
 
@@ -1140,25 +1125,25 @@ export function playUrl(
           return;
         }
 
-        if (contentType === "live") {
-          if (nextAudioMode) {
-            const nextModeUrl = toTranscodeFallbackUrl(rootSourceUrl, false, nextAudioMode);
-            if (nextModeUrl) {
-              emitPlayerTranscoding(`Transcode startup stalled, trying ${nextAudioMode}-audio transcoder...`);
-              playUrl(
-                nextModeUrl,
-                hasRetriedHttpFallback,
-                false,
-                proxyFallbackStage,
-                hasTriedNativeFallback,
-                true,
-                hasRetriedTranscodeBootstrap,
-                contentType
-              );
-              return;
-            }
+        if (nextAudioMode) {
+          const nextModeUrl = toTranscodeFallbackUrl(rootSourceUrl, false, nextAudioMode);
+          if (nextModeUrl) {
+            emitPlayerTranscoding(`Transcode startup stalled, trying ${nextAudioMode}-audio transcoder...`);
+            playUrl(
+              nextModeUrl,
+              hasRetriedHttpFallback,
+              false,
+              proxyFallbackStage,
+              hasTriedNativeFallback,
+              true,
+              hasRetriedTranscodeBootstrap,
+              contentType
+            );
+            return;
           }
+        }
 
+        if (contentType === "live") {
           const videoOnlyTranscodeUrl = toTranscodeFallbackUrl(rootSourceUrl, true);
           if (videoOnlyTranscodeUrl && allowLiveVideoOnlyFallback) {
             emitPlayerTranscoding("Transcode startup stalled, trying video-only transcoder...");
@@ -1244,6 +1229,7 @@ export function playUrl(
     // Detect silent audio failures (video plays but no sound)
     // Use a conservative detector to avoid false positives while decoders warm up.
     const setupAudioSilentMonitor = () => {
+      if (contentType !== "live") return;
       if (audioSilentCheckTimer !== null) return; // Already monitoring
       
       audioSilentCheckTimer = window.setTimeout(() => {
@@ -1495,7 +1481,7 @@ export function playUrl(
         console.log(`[video-error-attempt-videoonly] attempting video-only from normalizedUrl=${normalizedUrl.slice(0, 80)}`);
         const videoOnlyBootstrapUrl = toTranscodeFallbackUrl(normalizedUrl, true);
         console.log(`[video-error-attempt-videoonly] result=${videoOnlyBootstrapUrl ? videoOnlyBootstrapUrl.slice(0, 100) : "null"}`);
-        if (videoOnlyBootstrapUrl && allowLiveVideoOnlyFallback) {
+        if (videoOnlyBootstrapUrl && contentType === "live" && allowLiveVideoOnlyFallback) {
           lastEscalationTime = now;
           console.log(`[video-error-fallback] trying video-only transcode: ${videoOnlyBootstrapUrl.slice(0, 100)}...`);
           emitPlayerTranscoding("Audio decoder unsupported, restoring picture with video-only playback...");

@@ -272,7 +272,7 @@ function normalizeProblematicLiveSourceUrl(sourceUrl: string): string {
 function shouldPreferRelayInput(sourceUrl: string): boolean {
   // Some VOD movie endpoints return upstream 5xx when FFmpeg connects directly,
   // while the same URL works through the local relay path.
-  if (/\/movie\/[^/]+\/[^/]+\/\d+\.[a-z0-9]+(?:\?|$)/i.test(sourceUrl)) {
+  if (/\/movie\/[^/]+\/[^/]+\/\d+\.mkv(?:\?|$)/i.test(sourceUrl)) {
     return true;
   }
 
@@ -361,11 +361,11 @@ function startTranscoder(session: TranscodeSession) {
   })();
   const isLiveLikeSource = /\/live\//i.test(sourceForModeCheck) || /%2Flive%2F/i.test(session.sourceUrl);
   const isVodLikeSource = /\/(movie|series)\//i.test(sourceForModeCheck) || /%2F(movie|series)%2F/i.test(session.sourceUrl);
-  const useFmp4Segments = session.audioEnabled && !isLiveLikeSource;
+  const useFmp4Segments = session.audioEnabled && session.audioMode !== "safe" && !isLiveLikeSource;
   const segmentPattern = path.join(session.dir, useFmp4Segments ? "seg_%06d.m4s" : "seg_%06d.ts");
 
   const shouldCopyAacAudio = false;
-  const shouldUseMp3Audio = session.audioEnabled && session.audioMode === "safe" && isLiveLikeSource;
+  const shouldUseMp3Audio = session.audioEnabled && session.audioMode === "safe";
   session.audioPipeline = session.audioEnabled
     ? shouldUseMp3Audio
       ? "mp3-transcode"

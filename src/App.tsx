@@ -215,17 +215,7 @@ export function App() {
   const startupAutoLoadInFlightRef = useRef(false);
   const setupSecurity = readSetupSecurity();
   const isLoginOverlayVisible = setupSecurity.loginRequired && accessLevel === null;
-  const shouldForceOpeningMenu =
-    !isLoginOverlayVisible &&
-    !currentChannel &&
-    !isSeriesPickerVisible &&
-    !isVodPlaybackFullscreen &&
-    !isPlaylistInputPanelOpen &&
-    !isEpgSearchPanelOpen &&
-    activePanel === null &&
-    contentPage === "live" &&
-    !hasSelectedLiveChannel;
-  const shouldShowOpeningMenu = showOpeningScreen || shouldForceOpeningMenu;
+  const shouldShowOpeningMenu = showOpeningScreen;
 
   useEffect(() => {
     const refreshPlaylistsPresence = () => {
@@ -250,6 +240,20 @@ export function App() {
     window.addEventListener("favoritesChanged", handleFavoritesChanged);
     return () => {
       window.removeEventListener("favoritesChanged", handleFavoritesChanged);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleChannelsWrite = (event: Event) => {
+      const trace = (event as CustomEvent<{ applied?: boolean }>).detail;
+      if (trace?.applied) {
+        setChannelUpdateTick((tick) => tick + 1);
+      }
+    };
+
+    window.addEventListener("channelsWriteTrace", handleChannelsWrite);
+    return () => {
+      window.removeEventListener("channelsWriteTrace", handleChannelsWrite);
     };
   }, []);
 
@@ -613,7 +617,7 @@ export function App() {
         setContentMode("movies");
         setShowOpeningScreen(false);
         setActivePanel(null);
-        setActiveGroup(ROOT_GROUP);
+        setActiveGroup(pickDefaultContentGroup(getAllChannels(), "movies"));
         return;
       }
 
@@ -623,7 +627,7 @@ export function App() {
         setContentMode("series");
         setShowOpeningScreen(false);
         setActivePanel(null);
-        setActiveGroup(ROOT_GROUP);
+        setActiveGroup(pickDefaultContentGroup(getAllChannels(), "series"));
         return;
       }
 
@@ -665,18 +669,31 @@ export function App() {
     }
   }
 
-  function pickDefaultLiveGroup(channels: any[]): string {
-    const firstGroup = channels
-      .filter((channel) => {
-        if (!isChannelRecord(channel) || !matchesContentMode(channel, "tv")) return false;
-        const channelId = String(channel.id || "");
-        const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
-        return isGroupVisible(groupName) && isChannelVisible(channelId);
-      })
-      .map((channel) => (channel.group && String(channel.group).trim()) || "Uncategorized")
-      .find((group) => group && group !== ROOT_GROUP);
+  function pickDefaultContentGroup(
+    channels: any[],
+    content: "tv" | "movies" | "series"
+  ): string {
+    for (const channel of channels) {
+      if (!isChannelRecord(channel) || !matchesContentMode(channel, content)) continue;
+      if (isFavoriteChannelRecord(channel)) {
+        return ROOT_GROUP;
+      }
+    }
 
-    return firstGroup || ROOT_GROUP;
+    for (const channel of channels) {
+      if (!isChannelRecord(channel) || !matchesContentMode(channel, content)) continue;
+
+      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+      if (groupName !== ROOT_GROUP) {
+        return groupName;
+      }
+    }
+
+    return ROOT_GROUP;
+  }
+
+  function pickDefaultLiveGroup(channels: any[]): string {
+    return pickDefaultContentGroup(channels, "tv");
   }
 
   function readRoleCache(kind: "adult" | "child", assignedPlaylistId: string) {
@@ -923,19 +940,6 @@ export function App() {
     setPlayerWarning(null);
     setShowNowNext(false);
   }, [showOpeningScreen, currentChannel]);
-
-  useEffect(() => {
-    if (showOpeningScreen) return;
-    if (!shouldForceOpeningMenu) return;
-
-    const timer = window.setTimeout(() => {
-      setShowOpeningScreen(true);
-    }, 700);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [showOpeningScreen, shouldForceOpeningMenu]);
 
   useEffect(() => {
     if (contentPage !== "live") return;
@@ -1625,20 +1629,6 @@ export function App() {
     }
   }
 
-  function getLastWatchedEpisodeForSeries(seriesChannel: any): any | null {
-    const seriesId = getSeriesRootId(seriesChannel);
-    if (!seriesId) return null;
-
-    const storedEpisode = seriesLastWatchRef.current[seriesId];
-    if (!storedEpisode || typeof storedEpisode !== "object") return null;
-    if (!storedEpisode.url || typeof storedEpisode.url !== "string") return null;
-
-    return {
-      ...storedEpisode,
-      contentType: "series"
-    };
-  }
-
   function rememberSeriesEpisode(seriesChannel: any, episodeChannel: any) {
     const seriesId = getSeriesRootId(seriesChannel);
     if (!seriesId) return;
@@ -1694,13 +1684,6 @@ export function App() {
     }
 
     if (isTopLevelSeriesSelection(ch)) {
-      if (isFavoriteChannelRecord(ch)) {
-        const lastEpisode = getLastWatchedEpisodeForSeries(ch);
-        if (lastEpisode) {
-          playChannel(lastEpisode);
-          return;
-        }
-      }
       void openSeriesEpisodePicker(ch);
       return;
     }
@@ -1961,14 +1944,6 @@ export function App() {
           stopCurrentVodPlaybackIfNeeded();
         }
 
-        const nextGroups = Array.from(
-          new Set(
-            roleModeChannels
-              .map((channel) => (channel.group && String(channel.group).trim()) || "Uncategorized")
-              .filter((group) => group !== ROOT_GROUP)
-          )
-        );
-
         setShowOpeningScreen(false);
         setActivePanel(null);
         setContentMode(content);
@@ -1982,7 +1957,7 @@ export function App() {
         if (content === "tv") {
           setActiveGroup(pickDefaultLiveGroup(roleChannels));
         } else {
-          setActiveGroup(nextGroups[0] || ROOT_GROUP);
+          setActiveGroup(pickDefaultContentGroup(roleChannels, content));
         }
 
         await ensureGuideEPGLoaded();
@@ -2032,18 +2007,10 @@ export function App() {
               if (content === "series") setContentPage("series");
             }
 
-            const nextGroups = Array.from(
-              new Set(
-                refreshedModeChannels
-                  .map((channel: any) => (channel.group && String(channel.group).trim()) || "Uncategorized")
-                  .filter((group: string) => group !== ROOT_GROUP)
-              )
-            );
-
             if (content === "tv") {
               setActiveGroup(ROOT_GROUP);
             } else {
-              setActiveGroup((nextGroups[0] as string) || ROOT_GROUP);
+              setActiveGroup(pickDefaultContentGroup(refreshedChannels, content));
             }
 
             await ensureGuideEPGLoaded();
@@ -2091,18 +2058,10 @@ export function App() {
               if (content === "series") setContentPage("series");
             }
 
-            const nextGroups = Array.from(
-              new Set(
-                refreshed
-                  .map((channel: any) => (channel.group && String(channel.group).trim()) || "Uncategorized")
-                  .filter((group: string) => group !== ROOT_GROUP)
-              )
-            );
-
             if (content === "tv") {
               setActiveGroup(ROOT_GROUP);
             } else {
-              setActiveGroup((nextGroups[0] as string) || ROOT_GROUP);
+              setActiveGroup(pickDefaultContentGroup(refreshed, content));
             }
 
             await loadEPGForPlaylist(playlist).catch(() => {
@@ -2159,14 +2118,6 @@ export function App() {
             const refreshedModeChannels = mergedChannels.filter((channel) => matchesContentMode(channel, content));
             if (refreshedModeChannels.length === 0) continue;
 
-            const nextGroups = Array.from(
-              new Set(
-                refreshedModeChannels
-                  .map((channel) => (channel.group && String(channel.group).trim()) || "Uncategorized")
-                  .filter((group) => group !== ROOT_GROUP)
-              )
-            );
-
             setShowOpeningScreen(false);
             setActivePanel(null);
             setContentMode(content);
@@ -2181,7 +2132,7 @@ export function App() {
               setActiveGroup(pickDefaultLiveGroup(mergedChannels));
               await loadEPGForPlaylist(playlist).catch(() => {});
             } else {
-              setActiveGroup(nextGroups[0] || ROOT_GROUP);
+              setActiveGroup(pickDefaultContentGroup(mergedChannels, content));
             }
 
             return;
@@ -2199,14 +2150,6 @@ export function App() {
       stopCurrentVodPlaybackIfNeeded();
     }
 
-    const nextGroups = Array.from(
-      new Set(
-        modeChannels
-          .map((channel) => (channel.group && String(channel.group).trim()) || "Uncategorized")
-          .filter((group) => group !== ROOT_GROUP)
-      )
-    );
-
     setShowOpeningScreen(false);
     setActivePanel(null);
     setContentMode(content);
@@ -2220,7 +2163,7 @@ export function App() {
     if (content === "tv") {
       setActiveGroup(pickDefaultLiveGroup(latestChannels));
     } else {
-      setActiveGroup(nextGroups[0] || ROOT_GROUP);
+      setActiveGroup(pickDefaultContentGroup(latestChannels, content));
     }
   }
 
@@ -2236,7 +2179,7 @@ export function App() {
     if (!keepPlaylistManagerPage) {
       setContentPage(preferredMode === "tv" ? "live" : preferredMode);
     }
-    setActiveGroup(preferredMode === "tv" ? pickDefaultLiveGroup(channels) : ROOT_GROUP);
+    setActiveGroup(pickDefaultContentGroup(channels, preferredMode));
     setShowOpeningScreen(false);
     setActivePanel(null);
     setCategoryRefreshTick((tick) => tick + 1);
@@ -2504,9 +2447,30 @@ export function App() {
     setPlayerWarning(null);
     setShowNowNext(false);
 
+    const openLiveView = (channels: any[]) => {
+      setContentPage("live");
+      setContentMode("tv");
+      setActivePanel(null);
+      setShowLiveMenu(true);
+      setHasSelectedLiveChannel(false);
+      setIsLiveFullscreenRequested(false);
+      setShowOpeningScreen(false);
+      setActiveGroup(pickDefaultLiveGroup(channels));
+      setLoginError(null);
+      setPlayerStatus(null);
+    };
+
     if (accessLevel === "adult" || accessLevel === "child") {
       const restoredForRole = await restoreRoleContentForLogin(accessLevel);
       if (restoredForRole) {
+        const roleLiveChannels = getAllChannels().filter((channel) => matchesContentMode(channel, "tv"));
+        if (roleLiveChannels.length === 0) {
+          setLoginError(`Assigned ${accessLevel} playlist has no live channels.`);
+          setShowOpeningScreen(false);
+          return;
+        }
+
+        openLiveView(roleLiveChannels);
         void ensureGuideEPGLoaded();  // Load EPG in background, don't block UI
         void prefetchGuideListingsAheadOfTime();  // Prefetch guide data
         return;
@@ -2522,22 +2486,9 @@ export function App() {
       return;
     }
 
-    const openLiveView = (channels: any[]) => {
-      setContentPage("live");
-      setContentMode("tv");
-      setActivePanel(null);
-      setShowLiveMenu(true);
-      setHasSelectedLiveChannel(false);
-      setIsLiveFullscreenRequested(false);
-      setShowOpeningScreen(false);
-      setActiveGroup(pickDefaultLiveGroup(channels));
-      setLoginError(null);
-      setPlayerStatus(null);
-    };
-
-    const currentChannels = getAllChannels();
-    if (currentChannels.length > 0) {
-      openLiveView(currentChannels);
+    const currentLiveChannels = getAllChannels().filter((channel) => matchesContentMode(channel, "tv"));
+    if (currentLiveChannels.length > 0) {
+      openLiveView(currentLiveChannels);
       return;
     }
 
@@ -2554,7 +2505,8 @@ export function App() {
 
       try {
         const { playlist: resolvedPlaylist, channels: loadedChannels } = await loadFromAnyPlaylist(orderedPlaylists, "live");
-        if (!Array.isArray(loadedChannels) || loadedChannels.length === 0) {
+        const loadedLiveChannels = loadedChannels.filter((channel) => matchesContentMode(channel, "tv"));
+        if (loadedLiveChannels.length === 0) {
           setLoginError("Saved playlists returned no live channels.");
           setActivePanel(null);
           setShowOpeningScreen(false);
@@ -2565,7 +2517,7 @@ export function App() {
         setChannelUpdateTick((tick) => tick + 1);
         writeStoredItem(SHARED_PLAYLIST_ID_KEY, resolvedPlaylist.id);
         setActivePlaylistId(resolvedPlaylist.id);
-        openLiveView(loadedChannels);
+        openLiveView(loadedLiveChannels);
         resetVisibilityForCurrentChannels();
         setCategoryRefreshTick((tick) => tick + 1);
         void loadEPGForPlaylist(resolvedPlaylist).catch(() => {});
@@ -2580,10 +2532,11 @@ export function App() {
     }
 
     const restored = await restoreChannelsCache();
-    if (restored.length > 0) {
+    const restoredLiveChannels = restored.filter((channel) => matchesContentMode(channel, "tv"));
+    if (restoredLiveChannels.length > 0) {
       setChannels(restored, "start-live-cache-restore");
       setChannelUpdateTick((tick) => tick + 1);
-      openLiveView(restored);
+      openLiveView(restoredLiveChannels);
       return;
     }
 

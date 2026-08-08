@@ -1,10 +1,6 @@
 {
   "id": "tv.toms.iptvmate",
-<<<<<<< HEAD
   "version": "1.1.6",
-=======
-  "version": "1.1.5",
->>>>>>> 1968018a8f88f6e0f3f4686225cc7f83cb0f53e8
   "vendor": "Thomas",
   "type": "web",
   "main": "index.html",
