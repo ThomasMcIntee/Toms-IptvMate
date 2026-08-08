@@ -582,6 +582,20 @@ export function playUrl(
   };
 
   videoEl.addEventListener("playing", markPlaybackStarted, { once: true });
+  
+  // Add detailed error logging for VOD playback debugging
+  videoEl.addEventListener("error", () => {
+    const err = videoEl?.error;
+    console.error(`[video-element-error] code=${err?.code} message="${err?.message}" src=${videoEl?.src?.slice(0, 100)}...`);
+  });
+  
+  videoEl.addEventListener("stalled", () => {
+    console.warn(`[video-stalled] readyState=${videoEl?.readyState} src=${videoEl?.src?.slice(0, 100)}...`);
+  });
+  
+  videoEl.addEventListener("waiting", () => {
+    console.warn(`[video-waiting] readyState=${videoEl?.readyState} src=${videoEl?.src?.slice(0, 100)}...`);
+  });
   const ensureAudibleOnPlaying = () => {
     if (!videoEl || isStaleRequest()) return;
 
@@ -615,6 +629,11 @@ export function playUrl(
   videoEl.onerror = null;
   const normalizedUrl = normalizeProblematicXtreamSourceUrl(normalizeStreamUrl(url));
   contentType = inferContentTypeFromUrl(normalizedUrl, contentType);
+  
+  // Check if the URL is already an external proxy URL - if so, use it directly
+  const isExternalProxyUrl = normalizedUrl.includes("corsproxy.io/?");
+  // Check if the URL is a local relay URL - if so, use it directly
+  const isLocalRelayUrl = normalizedUrl.includes("/__stream?") && (normalizedUrl.includes("localhost") || normalizedUrl.includes("127.0.0.1"));
   const isLiveContent = contentType === "live";
   const allowLiveVideoOnlyFallback = true;
   const isRequestedTranscode =
@@ -727,7 +746,8 @@ export function playUrl(
   const initialVodTranscodeUrl =
     !forceNativePlayback &&
     !isRequestedTranscode &&
-    !isLiveContent
+    !isLiveContent &&
+    !hasTriedTranscodeFallback
       ? toTranscodeFallbackUrl(rootSourceUrl, false, "compat")
       : null;
   const initialLiveTranscodeUrl =
@@ -745,15 +765,24 @@ export function playUrl(
     forceNativePlayback && isLiveContent && isTransportStreamSource
       ? toProxyFallbackUrl(rootSourceUrl)
       : null;
+  // IPTV MP4 files nearly always use AC3 audio, which Chrome cannot decode natively.
+  // Sending MP4 directly to the browser produces silent video. Always use transcode
+  // so FFmpeg converts AC3 (or any source codec) to AAC.
+  const directVodUrl = null;
+  
   const playbackUrl =
+    (isExternalProxyUrl ? normalizedUrl : null) ||
+    (isLocalRelayUrl ? normalizedUrl : null) ||
     directNativeRelayUrl ||
     (forceNativePlayback ? rootSourceUrl : null) ||
+    directVodUrl ||
     rebootstrapVodSessionUrl ||
     (isRequestedTranscode ? normalizedUrl : null) ||
     initialVodTranscodeUrl ||
     (isLiveContent && isTransportStreamSource ? initialLiveTranscodeUrl : null) ||
     liveRelayUrl ||
-    toPrimaryPlaybackUrl(rootSourceUrl, shouldPreferTranscode);
+    toPrimaryPlaybackUrl(rootSourceUrl, shouldPreferTranscode) ||
+    rootSourceUrl;
   const shouldUseHlsJs =
     playbackUrl.includes("/__transcode") ||
     isManifestLikeSource ||
@@ -764,6 +793,7 @@ export function playUrl(
   const isVideoOnlyPlaybackUrl = /[?&]audio=0(?:&|$)/.test(playbackUrl);
 
   console.log(`[playUrl-startup] isLocalTranscodePlayback=${playbackUrl.includes("/__transcode")}, shouldPreferTranscode=${shouldPreferTranscode}, hasTriedTranscodeFallback=${hasTriedTranscodeFallback}`);
+  console.log(`[playUrl-startup] playbackUrl=${playbackUrl.slice(0, 150)}...`);
 
   // Relay-first startup: only escalate to transcode after decoder/append failures.
 
@@ -792,11 +822,10 @@ export function playUrl(
   videoEl.load();
 
   if (Hls.isSupported() && !forceNativePlayback && shouldUseHlsJsPath) {
-    const shouldTryShakaForVodTranscode =
-      isLocalTranscodePlayback &&
-      contentType !== "live" &&
-      !isVideoOnlyPlaybackUrl &&
-      !skipShakaOnce;
+    // Shaka adds no benefit over hls.js for TS-segment VOD and its config/teardown
+    // lifecycle has caused media-element conflicts (invalid config error, MSE race on
+    // the shared videoEl). Use hls.js directly for all VOD transcode paths.
+    const shouldTryShakaForVodTranscode = false;
 
     if (shouldTryShakaForVodTranscode) {
       const launchShaka = async () => {
@@ -831,9 +860,10 @@ export function playUrl(
             }
           });
 
-          shakaPlayer.addEventListener("error", () => {
+          shakaPlayer.addEventListener("error", (event: any) => {
             if (isStaleRequest()) return;
 
+            console.error("[shaka-error]", event?.detail || event);
             void teardownShakaPlayer();
             skipShakaOnce = true;
             emitPlayerTranscoding("Alternate player failed, retrying with default player...");
@@ -1131,13 +1161,15 @@ export function playUrl(
       console.log(`[transcode-startup-watchdog] setting ${Math.round(transcodeStartupTimeoutMs / 1000)}s timeout for transcode startup. rootSourceUrl=${rootSourceUrl.slice(0, 80)}...`);
       startupFallbackTimer = window.setTimeout(() => {
         console.log(`[transcode-startup-timeout] fired! token=${token}, playRequestToken=${playRequestToken}, videoReadyState=${videoEl?.readyState}`);
-        if (isStaleRequest()) {
-          console.log(`[transcode-startup-timeout] skipped: token mismatch`);
-          return;
-        }
+        // Check video state first - if video has data, no need to fallback
         if (videoEl?.readyState && videoEl.readyState >= 2) {
           console.log(`[transcode-startup-timeout] skipped: video has loaded data (readyState=${videoEl.readyState})`);
           return;
+        }
+        // If video has no data after timeout, fallback regardless of token mismatch
+        // This prevents the video from hanging forever when transcode fails to start
+        if (isStaleRequest()) {
+          console.warn(`[transcode-startup-timeout] stale request but video stuck (readyState=${videoEl?.readyState}), attempting fallback anyway`);
         }
 
         if (contentType === "live") {
@@ -2313,8 +2345,67 @@ export function playUrl(
       { once: true }
     );
   } else {
+    console.log(`[playUrl-native] setting videoEl.src to: ${playbackUrl.slice(0, 100)}...`);
+    // Set crossorigin for relay and proxy URLs to help browser detect audio tracks
+    // This is required for proper audio track detection in MSE/native MP4 parsing
+    if (playbackUrl.includes("/__stream?") || playbackUrl.includes("corsproxy.io/?")) {
+      videoEl.setAttribute("crossorigin", "anonymous");
+    } else {
+      videoEl.removeAttribute("crossorigin");
+    }
+    // Set preload to auto to ensure browser loads enough data to detect audio tracks
+    videoEl.preload = "auto";
     videoEl.src = playbackUrl;
+    
+    // Wait for metadata to load before playing to ensure audio tracks are detected
+    const onLoadedMetadata = () => {
+      if (videoEl && !isStaleRequest()) {
+        const audioTracks = (videoEl as any).audioTracks;
+        const trackCount = audioTracks ? audioTracks.length : 0;
+        console.log(`[playUrl-native] metadata loaded, audio tracks: ${trackCount}`);
+        
+        // Small additional delay to ensure audio pipeline is ready
+        setTimeout(() => {
+          if (videoEl && !isStaleRequest()) {
+            videoEl.muted = false;
+            videoEl.volume = 1;
+            void safePlay(videoEl);
+          }
+        }, 200);
+      }
+      videoEl?.removeEventListener("loadedmetadata", onLoadedMetadata);
+    };
+    
+    videoEl.addEventListener("loadedmetadata", onLoadedMetadata);
+    
+    // For VOD content via relay, add a timeout to detect stuck playback
+    // and fall back to external proxy
+    let vodRelayTimeout: number | null = null;
+    if (!isLiveContent && playbackUrl.includes("/__stream?") && proxyFallbackStage < 2) {
+      vodRelayTimeout = window.setTimeout(() => {
+        if (isStaleRequest() || hasPlaybackStarted) return;
+        if (videoEl?.readyState && videoEl.readyState >= 2) return;
+        
+        console.warn(`[playUrl-native] VOD relay stuck (readyState=${videoEl?.readyState}), trying external proxy...`);
+        const externalProxyUrl = toExternalProxyFallbackUrl(rootSourceUrl);
+        if (externalProxyUrl) {
+          emitPlayerTranscoding("Local relay not working, trying external proxy...");
+          playUrl(
+            externalProxyUrl,
+            hasRetriedHttpFallback,
+            true,
+            2,
+            true,
+            true,
+            hasRetriedTranscodeBootstrap,
+            contentType
+          );
+        }
+      }, 10000); // 10 second timeout for VOD relay
+    }
+    
     videoEl.onerror = () => {
+      if (vodRelayTimeout) window.clearTimeout(vodRelayTimeout);
       if (isStaleRequest() || hasPlaybackStarted) return;
 
       if (!hasRetriedHttpFallback) {
@@ -2465,7 +2556,5 @@ export function playUrl(
 
       emitPlayerError("Stream failed: unsupported codecs/format or network/protocol issue.");
     };
-    videoEl.load();
-    void safePlay(videoEl);
   }
 }

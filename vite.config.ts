@@ -11,7 +11,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 const RELAY_PATH = "/__stream";
 const TRANSCODE_PATH = "/__transcode";
 const REDIRECT_LIMIT = 5;
-const CURRENT_TRANSCODE_PROFILE = "mpegts-v18";
+const CURRENT_TRANSCODE_PROFILE = "mpegts-v20";
 const TRANSCODE_MANIFEST_WAIT_MS = 60000;
 const TRANSCODE_INIT_WAIT_MS = 60000;
 const TRANSCODE_SEGMENT_WAIT_MS = 30000;
@@ -361,11 +361,18 @@ function startTranscoder(session: TranscodeSession) {
   })();
   const isLiveLikeSource = /\/live\//i.test(sourceForModeCheck) || /%2Flive%2F/i.test(session.sourceUrl);
   const isVodLikeSource = /\/(movie|series)\//i.test(sourceForModeCheck) || /%2F(movie|series)%2F/i.test(session.sourceUrl);
-  const useFmp4Segments = session.audioEnabled && !isLiveLikeSource;
+  // Always use MPEG-TS segments. fmp4 (.m4s) with FFmpeg's HLS muxer produces an
+  // incorrect ESDS box in init.mp4, causing Chrome's MSE to silently drop the audio
+  // SourceBuffer — resulting in video-only playback for movies.
+  const useFmp4Segments = false;
   const segmentPattern = path.join(session.dir, useFmp4Segments ? "seg_%06d.m4s" : "seg_%06d.ts");
 
   const shouldCopyAacAudio = false;
-  const shouldUseMp3Audio = session.audioEnabled && session.audioMode === "safe" && isLiveLikeSource;
+  // AAC-in-TS fails in Chrome MSE with kUnsupportedConfig for IPTV VOD sources.
+  // MP3 via libmp3lame is universally supported and avoids the ADTS→fMP4 codec
+  // detection issues in hls.js.
+  const shouldUseMp3Audio =
+    session.audioEnabled && (isVodLikeSource || (session.audioMode === "safe" && isLiveLikeSource));
   session.audioPipeline = session.audioEnabled
     ? shouldUseMp3Audio
       ? "mp3-transcode"
@@ -871,6 +878,7 @@ function parseMovieVariant(targetUrl: string): { basePath: string; ext: string; 
 async function fetchAndRelay(
   targetUrl: string,
   res: http.ServerResponse,
+  req: http.IncomingMessage,
   redirectDepth = 0,
   attemptedUrls = new Set<string>()
 ): Promise<void> {
@@ -918,6 +926,24 @@ async function fetchAndRelay(
   }
 
   const client = parsed.protocol === "https:" ? https : http;
+  console.log(`[relay] Fetching from upstream: ${parsed.protocol}//${parsed.hostname}${parsed.pathname}${parsed.search}`);
+  
+  // Build headers to forward to upstream
+  const upstreamHeaders: Record<string, string> = {
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    accept: "*/*",
+    "accept-language": "en-US,en;q=0.9",
+    "accept-encoding": "identity",
+    origin: "http://localhost:5173",
+    referer: "http://localhost:5173/"
+  };
+  
+  // Forward Range header if present (critical for video streaming)
+  if (req.headers.range) {
+    upstreamHeaders.range = req.headers.range;
+    console.log(`[relay] Forwarding Range header: ${req.headers.range}`);
+  }
+  
   const upstream = client.request(
     {
       protocol: parsed.protocol,
@@ -931,18 +957,16 @@ async function fetchAndRelay(
       ciphers: "DEFAULT:@SECLEVEL=0",
       secureOptions: crypto.constants.SSL_OP_LEGACY_SERVER_CONNECT,
       servername: parsed.hostname,
-      headers: {
-        "user-agent": "Mozilla/5.0 IPTVmate Relay",
-        accept: "*/*"
-      }
+      headers: upstreamHeaders
     },
     (upstreamRes) => {
       const status = upstreamRes.statusCode || 502;
       const location = upstreamRes.headers.location;
+      console.log(`[relay] Upstream response: status=${status}, content-type=${upstreamRes.headers["content-type"]}, content-length=${upstreamRes.headers["content-length"]}`);
 
       if (status >= 300 && status < 400 && location) {
         const nextUrl = new URL(location, parsed.toString()).toString();
-        void fetchAndRelay(nextUrl, res, redirectDepth + 1, attemptedUrls);
+        void fetchAndRelay(nextUrl, res, req, redirectDepth + 1, attemptedUrls);
         upstreamRes.resume();
         return;
       }
@@ -953,7 +977,7 @@ async function fetchAndRelay(
         if (nextFallback) {
           console.warn(`[relay] upstream ${status} for ${parsed.toString()} -> retrying ${nextFallback}`);
           upstreamRes.resume();
-          void fetchAndRelay(nextFallback, res, redirectDepth, attemptedUrls);
+          void fetchAndRelay(nextFallback, res, req, redirectDepth, attemptedUrls);
           return;
         }
       }
@@ -972,9 +996,20 @@ async function fetchAndRelay(
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Headers", "*");
       res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+      res.setHeader("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length");
 
       if (contentType) {
         res.setHeader("Content-Type", contentType);
+      }
+
+      // Forward Accept-Ranges header if present (critical for video streaming)
+      if (upstreamRes.headers["accept-ranges"]) {
+        res.setHeader("Accept-Ranges", upstreamRes.headers["accept-ranges"]);
+      }
+
+      // Forward Content-Range header if present (for partial content responses)
+      if (upstreamRes.headers["content-range"]) {
+        res.setHeader("Content-Range", upstreamRes.headers["content-range"]);
       }
 
       if (!shouldRewriteManifest) {
@@ -1043,7 +1078,7 @@ function streamRelayMiddleware(req: http.IncomingMessage, res: http.ServerRespon
     return;
   }
 
-  void fetchAndRelay(targetUrl, res);
+  void fetchAndRelay(targetUrl, res, req);
 }
 
 function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse, next: () => void) {
@@ -1074,6 +1109,38 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
   }
 
   const pathSuffix = requestUrl.pathname.slice(TRANSCODE_PATH.length);
+
+  // Health check endpoint to verify FFmpeg availability
+  if (pathSuffix === "/health") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+    res.setHeader("Content-Type", "application/json");
+    
+    const ffmpegExecutable = resolveFfmpegExecutable();
+    const ffmpegAvailable = (() => {
+      try {
+        const result = spawnSync(ffmpegExecutable, ["-version"], {
+          encoding: "utf8",
+          timeout: 5000,
+          windowsHide: true
+        });
+        return result.status === 0;
+      } catch {
+        return false;
+      }
+    })();
+    
+    res.statusCode = ffmpegAvailable ? 200 : 503;
+    res.end(JSON.stringify({
+      ffmpegAvailable,
+      ffmpegExecutable,
+      message: ffmpegAvailable 
+        ? "FFmpeg is available" 
+        : "FFmpeg not found. Movie playback requires FFmpeg to be installed."
+    }));
+    return;
+  }
 
   if (!pathSuffix || pathSuffix === "/") {
     const requestedSourceUrl = requestUrl.searchParams.get("url");
