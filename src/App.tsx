@@ -2504,9 +2504,23 @@ export function App() {
     setPlayerWarning(null);
     setShowNowNext(false);
 
+    const openLiveView = (channels: any[]) => {
+      setContentPage("live");
+      setContentMode("tv");
+      setActivePanel(null);
+      setShowLiveMenu(true);
+      setHasSelectedLiveChannel(false);
+      setIsLiveFullscreenRequested(false);
+      setShowOpeningScreen(false);
+      setActiveGroup(pickDefaultLiveGroup(channels));
+      setLoginError(null);
+      setPlayerStatus(null);
+    };
+
     if (accessLevel === "adult" || accessLevel === "child") {
       const restoredForRole = await restoreRoleContentForLogin(accessLevel);
       if (restoredForRole) {
+        openLiveView(getAllChannels());
         void ensureGuideEPGLoaded();  // Load EPG in background, don't block UI
         void prefetchGuideListingsAheadOfTime();  // Prefetch guide data
         return;
@@ -2521,19 +2535,6 @@ export function App() {
       setShowOpeningScreen(false);
       return;
     }
-
-    const openLiveView = (channels: any[]) => {
-      setContentPage("live");
-      setContentMode("tv");
-      setActivePanel(null);
-      setShowLiveMenu(true);
-      setHasSelectedLiveChannel(false);
-      setIsLiveFullscreenRequested(false);
-      setShowOpeningScreen(false);
-      setActiveGroup(pickDefaultLiveGroup(channels));
-      setLoginError(null);
-      setPlayerStatus(null);
-    };
 
     const currentChannels = getAllChannels();
     if (currentChannels.length > 0) {
