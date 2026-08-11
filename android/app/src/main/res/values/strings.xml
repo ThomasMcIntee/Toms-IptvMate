@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Toms IPTVmate</string>
+    <string name="title_activity_main">Toms IPTVmate</string>
+    <string name="package_name">tv.toms.iptvmate</string>
+    <string name="custom_url_scheme">tv.toms.iptvmate</string>
+</resources>
