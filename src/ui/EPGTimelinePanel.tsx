@@ -79,6 +79,9 @@ export default function EPGTimelinePanel({ visible, channels }: { visible: boole
 
   return (
     <div className="epg-row">
+        {events.length === 0 && (
+          <div className="epg-event epg-event-empty">No current EPG</div>
+        )}
       {events.map((e, i) => (
         <div key={i} className="epg-event">
           <div className="epg-event-title">{e.title}</div>

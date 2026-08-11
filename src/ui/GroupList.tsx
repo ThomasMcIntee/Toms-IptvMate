@@ -5,6 +5,7 @@ const SORT_DIRECTION_KEY = "iptvmate_group_sort_direction";
 
 type Props = {
   groups: string[];
+  groupCounts?: Record<string, number>;
   activeGroup: string;
   onSelect: (group: string) => void;
   isGroupVisible: (group: string) => boolean;
@@ -16,6 +17,7 @@ type Props = {
 
 export function GroupList({
   groups,
+  groupCounts = {},
   activeGroup,
   onSelect,
   isGroupVisible = () => true,
@@ -108,7 +110,10 @@ export function GroupList({
                 className="group-select-btn"
                 onClick={() => onSelect(g)}
               >
-                {g}
+                <span>{g}</span>
+                <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
+                  {groupCounts[g] ?? 0}
+                </span>
               </button>
             </div>
           ) : (
@@ -117,7 +122,10 @@ export function GroupList({
               className="group-select-btn"
               onClick={() => onSelect(g)}
             >
-              {g}
+              <span>{g}</span>
+              <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
+                {groupCounts[g] ?? 0}
+              </span>
             </button>
           )}
         </div>

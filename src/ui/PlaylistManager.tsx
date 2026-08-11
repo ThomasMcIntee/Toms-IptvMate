@@ -873,7 +873,7 @@ export default function PlaylistManager({
               disabled={loadingId !== null}
               onClick={() => { void loadPlaylistIntoApp(p, null); }}
             >
-              {loadingId === p.id ? "Loading…" : "Load"}
+              {loadingId === p.id ? "Reloading…" : "Reload"}
             </button>
 
             <button

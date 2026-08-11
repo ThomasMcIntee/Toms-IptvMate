@@ -163,7 +163,8 @@ async function loadLiveStreams(baseUrl: string, user: string, pass: string, useP
         logo: item.stream_icon,
         url: `${baseUrl}/live/${user}/${pass}/${item.stream_id}.${liveExtension}`,
         group: `TV: ${group}`,
-        contentType: "live" as ContentType
+        contentType: "live" as ContentType,
+        epgChannelId: String(item.epg_channel_id || "").trim() || undefined
       };
     });
 }

@@ -1,7 +1,12 @@
-import { setEPG, saveEPGCache, loadEPGCache, getEPGForChannel } from "../epgStore";
+import { setEPG, saveEPGCache, loadEPGCache, getIndexedEPGForChannel, hasStoredEPG } from "../epgStore";
 import { getAllChannels } from "../channelStore";
 import { parseXMLTV } from "./xmltvParser";
-import { loadXtreamEPG, loadXtreamEPGForStream } from "./xtreamEPG";
+import {
+  loadXtreamEPG,
+  loadXtreamEPGForStream,
+  loadXtreamEpgChannelIds,
+  loadXtreamXmltv
+} from "./xtreamEPG";
 import { loadStalkerEPG } from "./stalkerEPG";
 
 const inFlightEPGLoads = new Map<string, Promise<void>>();
@@ -16,8 +21,15 @@ function normalizeEpgKey(value: string): string {
 function findXmltvEvents(xmltv: Record<string, any[]>, channel: any): any[] {
   const id = String(channel?.id || "").trim();
   const name = String(channel?.name || "").trim();
+  const epgChannelId = String(channel?.epgChannelId || "").trim();
 
   const candidates = new Set<string>();
+  if (epgChannelId) {
+    candidates.add(epgChannelId);
+    candidates.add(epgChannelId.toLowerCase());
+    candidates.add(epgChannelId.replace(/\s+/g, "").toLowerCase());
+    candidates.add(normalizeEpgKey(epgChannelId));
+  }
   if (id) {
     candidates.add(id);
     candidates.add(id.toLowerCase());
@@ -62,9 +74,10 @@ function hasSufficientGuideForLiveChannels(): boolean {
   const liveChannels = getAllChannels().filter((channel) => isLikelyLiveChannel(channel));
   if (liveChannels.length === 0) return false;
 
+  const now = Date.now();
   const channelsWithGuide = liveChannels.filter((channel) => {
-    const events = getEPGForChannel(channel);
-    return Array.isArray(events) && events.length > 0;
+    const events = getIndexedEPGForChannel(channel);
+    return Array.isArray(events) && events.some((event) => Number(event?.end || 0) > now);
   }).length;
 
   const minimumCoverage = Math.max(3, Math.ceil(liveChannels.length * 0.1));
@@ -119,7 +132,7 @@ async function resolveM3uEpgUrl(playlist: any): Promise<string | null> {
 
   for (const candidate of candidates) {
     try {
-      const res = await fetch(candidate);
+      const res = await fetch(candidate, { cache: "no-store" });
       if (res.ok) {
         const text = await res.text();
         const extracted = extractM3uHeaderEpgUrl(text, candidate);
@@ -130,7 +143,7 @@ async function resolveM3uEpgUrl(playlist: any): Promise<string | null> {
     }
 
     try {
-      const proxyRes = await fetch(toCorsProxyUrl(candidate));
+      const proxyRes = await fetch(toCorsProxyUrl(candidate), { cache: "no-store" });
       if (proxyRes.ok) {
         const text = await proxyRes.text();
         const extracted = extractM3uHeaderEpgUrl(text, candidate);
@@ -144,7 +157,7 @@ async function resolveM3uEpgUrl(playlist: any): Promise<string | null> {
   return null;
 }
 
-export async function loadEPGForPlaylist(playlist: any) {
+export async function loadEPGForPlaylist(playlist: any, options: { forceRefresh?: boolean } = {}) {
   const existingLoad = inFlightEPGLoads.get(playlist.id);
   if (existingLoad) {
     await existingLoad;
@@ -153,8 +166,8 @@ export async function loadEPGForPlaylist(playlist: any) {
 
   const run = async () => {
     // Try loading cache first.
-    const cacheLoaded = loadEPGCache(playlist.id);
-    if (cacheLoaded && hasSufficientGuideForLiveChannels()) {
+    const cacheLoaded = await loadEPGCache(playlist.id);
+    if (cacheLoaded && !options.forceRefresh && hasSufficientGuideForLiveChannels()) {
       return;
     }
 
@@ -163,6 +176,7 @@ export async function loadEPGForPlaylist(playlist: any) {
       const key = String(id || "").trim();
       if (!key) return;
       if (!Array.isArray(events) || events.length === 0) return;
+      if (!events.some((event) => Number(event?.end || 0) > Date.now())) return;
       nextEpg[key] = events;
     };
 
@@ -220,9 +234,17 @@ export async function loadEPGForPlaylist(playlist: any) {
 
         // Some Xtream providers expose little/no global EPG and require per-stream calls.
         // Prefill missing live channels ahead of time with bounded parallelism.
-        const liveChannels = getAllChannels()
-          .filter((channel) => String(channel?.contentType || "").toLowerCase() === "live")
-          .slice(0, 320);
+        const allLiveChannels = getAllChannels()
+          .filter((channel) => String(channel?.contentType || "").toLowerCase() === "live");
+        const cachedChannelIds = new Set(
+          allLiveChannels
+            .filter((channel) => hasStoredEPG(String(channel?.id || "")))
+            .map((channel) => String(channel?.id || ""))
+        );
+        const liveChannels = [
+          ...allLiveChannels.filter((channel) => cachedChannelIds.has(String(channel?.id || ""))),
+          ...allLiveChannels.filter((channel) => !cachedChannelIds.has(String(channel?.id || "")))
+        ].slice(0, 320);
 
         const missingLive = liveChannels.filter((channel) => {
           const channelId = String(channel?.id || "");
@@ -273,6 +295,40 @@ export async function loadEPGForPlaylist(playlist: any) {
 
           await Promise.all(Array.from({ length: workerCount }, () => worker()));
         }
+
+        const channelsWithCurrentGuide = allLiveChannels.filter((channel) => {
+          const events = nextEpg[String(channel?.id || "")];
+          return Array.isArray(events) && events.length > 0;
+        }).length;
+        const minimumCurrentCoverage = Math.max(3, Math.ceil(allLiveChannels.length * 0.1));
+
+        if (channelsWithCurrentGuide < minimumCurrentCoverage) {
+          try {
+            const [xmltv, epgChannelIds] = await Promise.all([
+              loadXtreamXmltv(playlist.data.url, playlist.data.user, playlist.data.pass),
+              loadXtreamEpgChannelIds(playlist.data.url, playlist.data.user, playlist.data.pass)
+            ]);
+
+            allLiveChannels.forEach((channel) => {
+              const streamId =
+                extractXtreamStreamId(String(channel?.id || "")) ||
+                extractXtreamStreamIdFromUrl(String(channel?.url || ""));
+              const authoritativeEpgId = streamId ? epgChannelIds.get(streamId) || "" : "";
+              const events = findXmltvEvents(
+                xmltv,
+                authoritativeEpgId
+                  ? { ...channel, epgChannelId: authoritativeEpgId }
+                  : channel
+              );
+              putEvents(String(channel?.id || ""), events);
+              if (authoritativeEpgId) putEvents(authoritativeEpgId, events);
+              const channelName = String(channel?.name || "").trim();
+              if (channelName) putEvents(channelName, events);
+            });
+          } catch {
+            // Some Xtream providers do not expose an XMLTV endpoint.
+          }
+        }
     }
 
     if (playlist.type === "stalker") {
@@ -294,7 +350,7 @@ export async function loadEPGForPlaylist(playlist: any) {
     Object.keys(nextEpg).forEach((id) => {
       setEPG(id, nextEpg[id]);
     });
-    saveEPGCache(playlist.id);
+    await saveEPGCache(playlist.id);
   };
 
   const promise = run().finally(() => {

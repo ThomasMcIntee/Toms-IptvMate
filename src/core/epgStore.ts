@@ -12,7 +12,40 @@ export type CachedEPG = {
 };
 
 let epgData: Record<string, EPGEvent[]> = {};
+let epgVersion = 0;
+let epgNotificationPending = false;
+const epgListeners = new Set<() => void>();
+const epgChannelLookupCache = new Map<string, EPGEvent[]>();
+let epgAliasLookupIndex: Map<string, EPGEvent[]> | null = null;
 const KEY = "iptvmate_epg_cache";
+const EPG_CACHE_DB = "iptvmate_epg_v1";
+const EPG_CACHE_STORE = "epg";
+const EPG_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const EPG_EVENT_MAX_PAST_AGE_MS = 24 * 60 * 60 * 1000;
+let activeCachePlaylistId = "";
+let epgSaveTimer: number | null = null;
+
+function notifyEPGChanged() {
+  epgChannelLookupCache.clear();
+  epgAliasLookupIndex = null;
+  if (epgNotificationPending) return;
+  epgNotificationPending = true;
+
+  queueMicrotask(() => {
+    epgNotificationPending = false;
+    epgVersion += 1;
+    epgListeners.forEach((listener) => listener());
+  });
+}
+
+export function subscribeEPG(listener: () => void): () => void {
+  epgListeners.add(listener);
+  return () => epgListeners.delete(listener);
+}
+
+export function getEPGVersion(): number {
+  return epgVersion;
+}
 
 function normalizeLookupKey(value: string): string {
   return String(value || "")
@@ -61,6 +94,25 @@ function normalizeChannelNameForFuzzyMatch(value: string): string {
     .trim();
 }
 
+function buildAliasLookupKeys(value: string): string[] {
+  const normalizedName = normalizeChannelNameForFuzzyMatch(value);
+  const candidates = new Set<string>();
+
+  const addCandidate = (candidate: string) => {
+    const normalized = normalizeLookupKey(candidate);
+    if (normalized.length >= 4) candidates.add(normalized);
+  };
+
+  addCandidate(normalizedName);
+
+  const separatorIndex = normalizedName.indexOf(":");
+  if (separatorIndex >= 0) {
+    addCandidate(normalizedName.slice(separatorIndex + 1));
+  }
+
+  return Array.from(candidates);
+}
+
 function findFuzzyEventsByName(name: string): EPGEvent[] {
   const normalizedName = normalizeLookupKey(normalizeChannelNameForFuzzyMatch(name));
   if (!normalizedName || normalizedName.length < 4) return [];
@@ -84,20 +136,120 @@ function findFuzzyEventsByName(name: string): EPGEvent[] {
     }
 
     if (score > bestScore) {
+      const relevantEvents = getRelevantEvents(events);
+      if (relevantEvents.length === 0) continue;
       bestScore = score;
-      bestEvents = events;
+      bestEvents = relevantEvents;
     }
   }
 
   return bestEvents;
 }
 
+function getAliasLookupIndex(): Map<string, EPGEvent[]> {
+  if (epgAliasLookupIndex) return epgAliasLookupIndex;
+
+  const index = new Map<string, EPGEvent[]>();
+  for (const [key, events] of Object.entries(epgData)) {
+    if (!Array.isArray(events) || events.length === 0) continue;
+    const relevantEvents = getRelevantEvents(events);
+    if (relevantEvents.length === 0) continue;
+
+    for (const normalizedKey of buildAliasLookupKeys(key)) {
+      if (!index.has(normalizedKey)) index.set(normalizedKey, relevantEvents);
+    }
+  }
+
+  epgAliasLookupIndex = index;
+  return index;
+}
+
+function getRelevantEvents(events: EPGEvent[]): EPGEvent[] {
+  const oldestUsefulEnd = Date.now() - EPG_EVENT_MAX_PAST_AGE_MS;
+  return events.filter((event) => Number(event?.end || 0) >= oldestUsefulEnd);
+}
+
 function hasAnyEvents(epg: Record<string, EPGEvent[]>): boolean {
   return Object.values(epg).some((events) => Array.isArray(events) && events.length > 0);
 }
 
+function isUsableCache(cache: CachedEPG | null | undefined, playlistId: string): cache is CachedEPG {
+  if (!cache || cache.playlistId !== playlistId) return false;
+  if (Date.now() - Number(cache.timestamp || 0) > EPG_CACHE_MAX_AGE_MS) return false;
+  return !!cache.epg && typeof cache.epg === "object" && hasAnyEvents(cache.epg);
+}
+
+async function openEPGCacheDb(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === "undefined") return null;
+
+  return new Promise((resolve) => {
+    try {
+      const request = indexedDB.open(EPG_CACHE_DB, 2);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(EPG_CACHE_STORE)) {
+          db.createObjectStore(EPG_CACHE_STORE);
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function writeEPGCacheIndexedDb(cache: CachedEPG): Promise<void> {
+  const db = await openEPGCacheDb();
+  if (!db) return;
+
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(EPG_CACHE_STORE, "readwrite");
+      tx.objectStore(EPG_CACHE_STORE).put(cache, cache.playlistId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+  db.close();
+}
+
+async function readEPGCacheIndexedDb(playlistId: string): Promise<CachedEPG | null> {
+  const db = await openEPGCacheDb();
+  if (!db) return null;
+
+  const cache = await new Promise<CachedEPG | null>((resolve) => {
+    try {
+      const tx = db.transaction(EPG_CACHE_STORE, "readonly");
+      const request = tx.objectStore(EPG_CACHE_STORE).get(playlistId);
+      request.onsuccess = () => resolve((request.result as CachedEPG | undefined) || null);
+      request.onerror = () => resolve(null);
+      tx.onerror = () => resolve(null);
+      tx.onabort = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+  db.close();
+  return cache;
+}
+
+function scheduleEPGCacheSave() {
+  if (!activeCachePlaylistId || typeof window === "undefined") return;
+  if (epgSaveTimer !== null) window.clearTimeout(epgSaveTimer);
+  epgSaveTimer = window.setTimeout(() => {
+    epgSaveTimer = null;
+    void saveEPGCache(activeCachePlaylistId);
+  }, 2000);
+}
+
 export function setEPG(channelId: string, events: EPGEvent[]) {
   epgData[channelId] = events;
+  notifyEPGChanged();
+  scheduleEPGCacheSave();
 }
 
 export function getEPG(channelId: string): EPGEvent[] {
@@ -108,39 +260,121 @@ export function getEPG(channelId: string): EPGEvent[] {
   for (const key of tryKeys) {
     const events = epgData[key];
     if (Array.isArray(events) && events.length > 0) {
-      return events;
+      const relevantEvents = getRelevantEvents(events);
+      if (relevantEvents.length > 0) return relevantEvents;
     }
   }
 
   return [];
 }
 
-export function getEPGForChannel(channel: { id?: string; name?: string } | null | undefined): EPGEvent[] {
+export function hasStoredEPG(channelId: string): boolean {
+  if (!channelId) return false;
+
+  for (const key of buildLookupKeys(channelId)) {
+    const events = epgData[key];
+    if (Array.isArray(events) && events.length > 0) return true;
+  }
+
+  return false;
+}
+
+export function hasStoredEPGForChannel(channel: { id?: string; name?: string; epgChannelId?: string } | null | undefined): boolean {
+  if (!channel) return false;
+  return (
+    hasStoredEPG(String(channel.id || "")) ||
+    hasStoredEPG(String(channel.epgChannelId || "")) ||
+    hasStoredEPG(String(channel.name || ""))
+  );
+}
+
+export function getStoredEPGForChannel(channel: { id?: string; name?: string; epgChannelId?: string } | null | undefined): EPGEvent[] {
   if (!channel) return [];
 
-  const candidateValues = [String(channel.id || ""), String(channel.name || "")];
+  const candidateValues = [
+    String(channel.id || ""),
+    String(channel.epgChannelId || ""),
+    String(channel.name || "")
+  ];
   for (const value of candidateValues) {
     for (const key of buildLookupKeys(value)) {
       const events = epgData[key];
-      if (Array.isArray(events) && events.length > 0) {
-        return events;
-      }
+      if (Array.isArray(events) && events.length > 0) return events;
     }
   }
 
-  const fuzzyEvents = findFuzzyEventsByName(String(channel.name || ""));
+  return [];
+}
+
+export function getExactEPGForChannel(channel: { id?: string; name?: string; epgChannelId?: string } | null | undefined): EPGEvent[] {
+  if (!channel) return [];
+
+  const candidateValues = [
+    String(channel.id || ""),
+    String(channel.epgChannelId || ""),
+    String(channel.name || "")
+  ];
+  for (const value of candidateValues) {
+    for (const key of buildLookupKeys(value)) {
+      const events = epgData[key];
+      if (!Array.isArray(events) || events.length === 0) continue;
+
+      const relevantEvents = getRelevantEvents(events);
+      if (relevantEvents.length > 0) return relevantEvents;
+    }
+  }
+
+  return [];
+}
+
+export function getIndexedEPGForChannel(channel: { id?: string; name?: string; epgChannelId?: string } | null | undefined): EPGEvent[] {
+  if (!channel) return [];
+
+  const exactEvents = getExactEPGForChannel(channel);
+  if (exactEvents.length > 0) return exactEvents;
+
+  const aliasIndex = getAliasLookupIndex();
+  for (const normalizedName of buildAliasLookupKeys(String(channel.name || ""))) {
+    const events = aliasIndex.get(normalizedName);
+    if (events && events.length > 0) return events;
+  }
+
+  return [];
+}
+
+export function getEPGForChannel(channel: { id?: string; name?: string; epgChannelId?: string } | null | undefined): EPGEvent[] {
+  if (!channel) return [];
+
+  const channelId = String(channel.id || "");
+  const channelName = String(channel.name || "");
+  const epgChannelId = String(channel.epgChannelId || "");
+  const cacheKey = `${channelId}\u0000${epgChannelId}\u0000${channelName}`;
+  const cachedEvents = epgChannelLookupCache.get(cacheKey);
+  if (cachedEvents) return cachedEvents;
+
+  const indexedEvents = getIndexedEPGForChannel(channel);
+  if (indexedEvents.length > 0) {
+    epgChannelLookupCache.set(cacheKey, indexedEvents);
+    return indexedEvents;
+  }
+
+  const fuzzyEvents = findFuzzyEventsByName(channelName);
   if (fuzzyEvents.length > 0) {
+    epgChannelLookupCache.set(cacheKey, fuzzyEvents);
     return fuzzyEvents;
   }
 
+  epgChannelLookupCache.set(cacheKey, []);
   return [];
 }
 
 export function clearEPG() {
   epgData = {};
+  notifyEPGChanged();
 }
 
-export function saveEPGCache(playlistId: string) {
+export async function saveEPGCache(playlistId: string): Promise<void> {
+  activeCachePlaylistId = playlistId;
   if (!hasAnyEvents(epgData)) {
     try {
       localStorage.removeItem(KEY);
@@ -156,14 +390,25 @@ export function saveEPGCache(playlistId: string) {
     epg: epgData
   };
 
+  await writeEPGCacheIndexedDb(cache);
+
   try {
-    localStorage.setItem(KEY, JSON.stringify(cache));
+    localStorage.removeItem(KEY);
   } catch {
     // Ignore persistence errors.
   }
 }
 
-export function loadEPGCache(playlistId: string): boolean {
+export async function loadEPGCache(playlistId: string): Promise<boolean> {
+  activeCachePlaylistId = playlistId;
+
+  const indexedDbCache = await readEPGCacheIndexedDb(playlistId);
+  if (isUsableCache(indexedDbCache, playlistId)) {
+    epgData = indexedDbCache.epg;
+    notifyEPGChanged();
+    return true;
+  }
+
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return false;
@@ -173,11 +418,7 @@ export function loadEPGCache(playlistId: string): boolean {
     // Wrong playlist → ignore cache
     if (cache.playlistId !== playlistId) return false;
 
-    // Cache older than 6 hours → ignore
-    const age = Date.now() - cache.timestamp;
-    if (age > 6 * 60 * 60 * 1000) return false;
-
-    if (!cache.epg || typeof cache.epg !== "object" || !hasAnyEvents(cache.epg)) {
+    if (!isUsableCache(cache, playlistId)) {
       try {
         localStorage.removeItem(KEY);
       } catch {
@@ -187,6 +428,8 @@ export function loadEPGCache(playlistId: string): boolean {
     }
 
     epgData = cache.epg;
+    notifyEPGChanged();
+    void writeEPGCacheIndexedDb(cache);
     return true;
   } catch {
     return false;

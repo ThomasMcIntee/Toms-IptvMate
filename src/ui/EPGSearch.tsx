@@ -1,10 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { isChannelVisible, isGroupVisible } from "../core/channelStore";
-import { getEPGForChannel } from "../core/epgStore";
-import { setEPG } from "../core/epgStore";
+import { getIndexedEPGForChannel, getEPGVersion, hasStoredEPGForChannel, subscribeEPG } from "../core/epgStore";
 import { getEpgTimeOffsetMinutes } from "../core/epgTime";
-import { loadPlaylists } from "../core/playlistStore";
-import { loadXtreamEPGForStream } from "../core/loaders/xtreamEPG";
 import { sortGroupNames, type GroupSortDirection } from "./groupSorting";
 
 const GUIDE_OFFSET_KEY = "iptvmate_guide_only_offset_minutes";
@@ -12,6 +9,7 @@ const GUIDE_SORT_DIRECTION_KEY = "iptvmate_guide_sort_direction";
 const GUIDE_OFFSET_STEP_MINUTES = 30;
 const GUIDE_OFFSET_MINUTES_MIN = -720;
 const GUIDE_OFFSET_MINUTES_MAX = 720;
+const GUIDE_EMPTY_ROW_LIMIT = 120;
 
 export default function EPGSearch({
   visible,
@@ -27,7 +25,6 @@ export default function EPGSearch({
   const [selectedChannelId, setSelectedChannelId] = useState("");
   const [epgRefreshTick, setEpgRefreshTick] = useState(0);
   const [nowTick, setNowTick] = useState(() => Date.now());
-  const [bootstrapRefreshRequested, setBootstrapRefreshRequested] = useState(false);
   const [sortDirection, setSortDirection] = useState<GroupSortDirection>(() => {
     try {
       const saved = localStorage.getItem(GUIDE_SORT_DIRECTION_KEY);
@@ -38,9 +35,7 @@ export default function EPGSearch({
     return null;
   });
   const [guideOffsetMinutes, setGuideOffsetMinutes] = useState(() => loadGuideOffsetMinutes());
-  const prefetchCursorRef = useRef(0);
-  const bulkPrefetchBusyRef = useRef(false);
-  const zeroCoverageRefreshCountRef = useRef(0);
+  const epgVersion = useSyncExternalStore(subscribeEPG, getEPGVersion, getEPGVersion);
 
   useEffect(() => {
     saveGuideOffsetMinutes(guideOffsetMinutes);
@@ -64,10 +59,6 @@ export default function EPGSearch({
       setActiveGroup("All Channels");
       setSelectedChannelId("");
       setEpgRefreshTick(0);
-      setBootstrapRefreshRequested(false);
-      prefetchCursorRef.current = 0;
-      bulkPrefetchBusyRef.current = false;
-      zeroCoverageRefreshCountRef.current = 0;
     }
   }, [visible]);
 
@@ -83,11 +74,6 @@ export default function EPGSearch({
     };
   }, [visible]);
 
-  useEffect(() => {
-    if (!visible) return;
-    prefetchCursorRef.current = 0;
-  }, [visible, activeGroup]);
-
   const visibleChannels = useMemo(() => buildVisibleChannelsList(visible, channels), [visible, channels]);
   const groups = useMemo(() => buildGuideGroups(visibleChannels), [visibleChannels]);
   const sortedGroups = useMemo(() => sortGroupNames(groups, sortDirection), [groups, sortDirection]);
@@ -102,10 +88,18 @@ export default function EPGSearch({
     });
   }, [visible, groups]);
 
-  const filteredChannels = useMemo(
+  const guideScopeChannels = useMemo(
     () => filterGuideChannels(visibleChannels, activeGroup, query),
-    [visibleChannels, activeGroup, query]
+    [visibleChannels, activeGroup, query, epgVersion]
   );
+
+  const filteredChannels = useMemo(() => {
+    if (activeGroup !== "All Channels" || query.trim()) {
+      return guideScopeChannels;
+    }
+
+    return guideScopeChannels.slice(0, GUIDE_EMPTY_ROW_LIMIT);
+  }, [guideScopeChannels, activeGroup, query]);
 
   useEffect(() => {
     if (!visible) return;
@@ -126,158 +120,40 @@ export default function EPGSearch({
 
   const selectedChannel = filteredChannels.find((channel) => String(channel?.id || "") === selectedChannelId) || null;
 
-  useEffect(() => {
-    if (!visible) return;
-
-    const timer = window.setInterval(() => {
-      const hasAnyListings = visibleChannels.some((channel) => buildChannelEvents(channel).length > 0);
-
-      if (!hasAnyListings) {
-        if (zeroCoverageRefreshCountRef.current < 12) {
-          zeroCoverageRefreshCountRef.current += 1;
-          window.dispatchEvent(new CustomEvent("refreshEPG"));
-        }
-      } else {
-        zeroCoverageRefreshCountRef.current = 0;
-      }
-
-      setEpgRefreshTick((tick) => tick + 1);
-    }, 2500);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [visible, visibleChannels]);
-
-  useEffect(() => {
-    if (!visible) return;
-    if (bootstrapRefreshRequested) return;
-    if (visibleChannels.length === 0) return;
-
-    const hasAnyListings = visibleChannels.some((channel) => buildChannelEvents(channel).length > 0);
-    if (hasAnyListings) return;
-
-    setBootstrapRefreshRequested(true);
-    window.dispatchEvent(new CustomEvent("refreshEPG"));
-  }, [visible, visibleChannels, bootstrapRefreshRequested]);
-
-  useEffect(() => {
-    if (!visible) return;
-
-    const xtreamPlaylists = loadPlaylists().filter((playlist) => playlist.type === "xtream");
-    if (xtreamPlaylists.length === 0) return;
-    let cancelled = false;
-
-    const runBatch = async () => {
-      if (cancelled) return;
-      if (bulkPrefetchBusyRef.current) return;
-
-      const missingInActiveCategory = filteredChannels.filter((channel) => buildChannelEvents(channel).length === 0);
-      const activeCategoryIds = new Set(missingInActiveCategory.map((channel) => String(channel?.id || "")));
-      const missingAcrossGuide = visibleChannels.filter((channel) => {
-        const channelId = String(channel?.id || "");
-        if (!channelId) return false;
-        if (activeCategoryIds.has(channelId)) return false;
-        return buildChannelEvents(channel).length === 0;
-      });
-
-      const prioritizedMissing = [...missingInActiveCategory, ...missingAcrossGuide];
-      if (prioritizedMissing.length === 0) return;
-
-      const chunkSize = 48;
-      const prefetchCursor = prefetchCursorRef.current;
-      const wrappedStart = prefetchCursor % prioritizedMissing.length;
-      const chunk = prioritizedMissing.length <= chunkSize
-        ? prioritizedMissing
-        : [
-            ...prioritizedMissing.slice(wrappedStart, wrappedStart + chunkSize),
-            ...prioritizedMissing.slice(0, Math.max(0, wrappedStart + chunkSize - prioritizedMissing.length))
-          ];
-
-      prefetchCursorRef.current = wrappedStart + chunk.length;
-
-      const targets = chunk.filter((channel, index, list) => {
-        const id = String(channel?.id || "");
-        if (!id) return false;
-        return list.findIndex((entry) => String(entry?.id || "") === id) === index;
-      });
-
-      if (targets.length === 0) return;
-
-      bulkPrefetchBusyRef.current = true;
-      let updated = 0;
-      let targetCursor = 0;
-      const workerCount = Math.min(6, targets.length);
-
-      const worker = async () => {
-        while (targetCursor < targets.length) {
-          const index = targetCursor;
-          targetCursor += 1;
-          const channel = targets[index];
-          const channelId = String(channel?.id || "");
-          if (!channelId) continue;
-
-          const streamId = extractXtreamStreamId(channelId, String(channel?.url || ""));
-          if (!streamId) continue;
-
-          for (const playlist of xtreamPlaylists) {
-            if (cancelled) return;
-
-            try {
-              const data = playlist.data || {};
-              const events = await loadXtreamEPGForStream(
-                String(data.url || ""),
-                String(data.user || ""),
-                String(data.pass || ""),
-                streamId,
-                24
-              );
-
-              if (events.length > 0) {
-                setEPG(streamId, events);
-                setEPG(`live_${streamId}`, events);
-                setEPG(channelId, events);
-                updated += 1;
-                break;
-              }
-            } catch {
-              // Continue trying next playlist.
-            }
-          }
-        }
-      };
-
-      try {
-        await Promise.all(Array.from({ length: workerCount }, () => worker()));
-      } finally {
-        bulkPrefetchBusyRef.current = false;
-      }
-
-      if (!cancelled && updated > 0) {
-        setEpgRefreshTick((tick) => tick + 1);
-      }
-    };
-
-    void runBatch();
-    const intervalId = window.setInterval(() => {
-      void runBatch();
-    }, 600);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-      bulkPrefetchBusyRef.current = false;
-    };
-  }, [visible, visibleChannels, filteredChannels]);
-
   const channelsWithGuideCount = useMemo(
-    () => filteredChannels.filter((channel) => buildChannelEvents(channel).length > 0).length,
-    [filteredChannels, epgRefreshTick]
+    () => guideScopeChannels.filter((channel) => buildChannelEvents(channel).length > 0).length,
+    [guideScopeChannels, epgRefreshTick, epgVersion]
+  );
+  const channelsWithStoredGuideCount = useMemo(
+    () => guideScopeChannels.filter((channel) => hasStoredEPGForChannel(channel)).length,
+    [guideScopeChannels, epgVersion]
   );
 
   const columnSlots = useMemo(() => {
-    const base = alignToHalfHour(nowTick);
     const slotMs = 30 * 60 * 1000;
+    const currentBase = alignToHalfHour(nowTick);
+    const currentEnd = currentBase + 8 * slotMs;
+    const offsetMinutes = getEpgTimeOffsetMinutes() + guideOffsetMinutes;
+    const guideEvents = filteredChannels.flatMap((channel) => buildChannelEvents(channel, offsetMinutes));
+    const hasCurrentWindowEvents = guideEvents.some(
+      (event) => event.start < currentEnd && event.end > currentBase
+    );
+
+    let base = currentBase;
+    if (!hasCurrentWindowEvents && guideEvents.length > 0) {
+      const nextEventStart = guideEvents
+        .map((event) => Number(event.start || 0))
+        .filter((start) => start >= currentBase)
+        .sort((a, b) => a - b)[0];
+
+      const latestEventStart = guideEvents.reduce(
+        (latest, event) => Math.max(latest, Number(event.start || 0)),
+        0
+      );
+
+      base = alignToHalfHour(nextEventStart || latestEventStart || currentBase);
+    }
+
     return Array.from({ length: 8 }, (_, i) => {
       const start = base + i * slotMs;
       const end = start + slotMs;
@@ -287,7 +163,26 @@ export default function EPGSearch({
         label: `${formatLocalClockTime(start)} - ${formatLocalClockTime(end)}`
       };
     });
-  }, [nowTick]);
+  }, [nowTick, filteredChannels, guideOffsetMinutes, epgVersion]);
+
+  const guideRows = useMemo(() => {
+    const offsetMinutes = getEpgTimeOffsetMinutes() + guideOffsetMinutes;
+    const windowStart = columnSlots[0]?.start || 0;
+    const windowEnd = columnSlots[columnSlots.length - 1]?.end || 0;
+
+    return filteredChannels.flatMap((channel) => {
+      const events = buildChannelEvents(channel, offsetMinutes);
+      const programmes = buildProgramBlocks(events, windowStart, windowEnd, columnSlots.length);
+      const nearestProgramme = programmes.length === 0
+        ? findNearestProgramme(events, windowStart, windowEnd)
+        : null;
+      const nearestProgrammeLabel = nearestProgramme
+        ? formatNearestProgrammeLabel(nearestProgramme, windowEnd)
+        : "";
+
+      return [{ channel, programmes, nearestProgramme, nearestProgrammeLabel }];
+    });
+  }, [filteredChannels, columnSlots, guideOffsetMinutes, epgVersion]);
 
   if (!visible) return null;
 
@@ -308,7 +203,7 @@ export default function EPGSearch({
       />
 
       <div className="muted-text">
-        Guide coverage: {channelsWithGuideCount}/{filteredChannels.length} channels have listings
+        Guide coverage: {channelsWithStoredGuideCount}/{guideScopeChannels.length} channels have EPG; {channelsWithGuideCount} current
       </div>
 
       <div className="panel-section-gap epg-search-layout">
@@ -344,7 +239,7 @@ export default function EPGSearch({
         </div>
 
         <div className="epg-search-guide-panel">
-          {filteredChannels.length > 0 ? (
+          {guideRows.length > 0 ? (
             <>
               <div className="epg-search-guide-header">
                 <div>
@@ -391,12 +286,8 @@ export default function EPGSearch({
                     <div key={`header-${slot.start}`} className="epg-search-guide-cell">{slot.label}</div>
                   ))}
                 </div>
-                {filteredChannels.map((channel) => {
+                {guideRows.map(({ channel, programmes, nearestProgramme, nearestProgrammeLabel }) => {
                   const channelId = String(channel?.id || "");
-                  const events = buildChannelEvents(channel, getEpgTimeOffsetMinutes() + guideOffsetMinutes);
-                  const cells = columnSlots.map((slot) => {
-                    return getProgramTitleForSlot(events, slot.start, slot.end);
-                  });
 
                   return (
                     <div
@@ -413,16 +304,39 @@ export default function EPGSearch({
                       }}
                     >
                       <div className="epg-search-guide-cell epg-search-guide-cell-channel">{String(channel?.name || "Unnamed")}</div>
-                      {cells.map((cell, index) => (
-                        <div key={`cell-${channelId}-${columnSlots[index].start}`} className="epg-search-guide-cell">{cell}</div>
-                      ))}
+                      {programmes.length > 0 ? (
+                        programmes.map((programme) => (
+                          <div
+                            key={`${channelId}-${programme.start}-${programme.end}-${programme.title}`}
+                            className="epg-search-guide-cell epg-search-guide-programme"
+                            style={{ gridColumn: `${programme.gridStart} / ${programme.gridEnd}` }}
+                            title={`${programme.title} (${formatLocalClockTime(programme.start)} - ${formatLocalClockTime(programme.end)})`}
+                          >
+                            <span className="epg-search-guide-programme-title">{programme.title}</span>
+                            <span className="epg-search-guide-programme-time">
+                              {formatLocalClockTime(programme.start)} - {formatLocalClockTime(programme.end)}
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="epg-search-guide-cell epg-search-guide-window-empty">
+                          <span className="epg-search-guide-programme-title">
+                            {String(nearestProgramme?.title || "No current EPG")}
+                          </span>
+                          {nearestProgramme && (
+                            <span className="epg-search-guide-programme-time">
+                              {nearestProgrammeLabel}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
             </>
           ) : (
-            <div className="muted-text">No guide channels available.</div>
+            <div className="muted-text">No programmes are available in this time window yet.</div>
           )}
         </div>
       </div>
@@ -471,7 +385,7 @@ function filterGuideChannels(channels: any[], activeGroup: string, query: string
     const channelId = String(ch?.id || "");
     if (!channelId) return false;
 
-    const epg = getEPGForChannel(ch);
+    const epg = getIndexedEPGForChannel(ch);
     const channelName = String(ch?.name || "").toLowerCase();
     if (channelName.includes(lower)) return true;
     if (!Array.isArray(epg) || epg.length === 0) return false;
@@ -491,7 +405,7 @@ function buildChannelEvents(channel: any, offsetMinutes = 0) {
   const channelId = String(channel?.id || "");
   if (!channelId) return [] as any[];
 
-  const epg = getEPGForChannel(channel);
+  const epg = getIndexedEPGForChannel(channel);
   if (!Array.isArray(epg) || epg.length === 0) return [] as any[];
 
   const offsetMs = Number(offsetMinutes || 0) * 60 * 1000;
@@ -517,19 +431,66 @@ function alignToHalfHour(epochMs: number): number {
   return Math.floor(epochMs / bucket) * bucket;
 }
 
-function getProgramTitleForSlot(events: any[], slotStart: number, slotEnd: number): string {
-  if (!Array.isArray(events) || events.length === 0) return "No listing";
+function buildProgramBlocks(events: any[], windowStart: number, windowEnd: number, slotCount: number) {
+  if (!windowStart || !windowEnd || windowEnd <= windowStart || slotCount <= 0) return [];
 
-  const overlap = events.find((event) => {
+  const slotMs = (windowEnd - windowStart) / slotCount;
+
+  return events.flatMap((event) => {
     const start = Number(event?.start || 0);
     const end = Number(event?.end || 0);
-    if (!start || !end) return false;
-    return start < slotEnd && end > slotStart;
+    if (!start || !end || start >= windowEnd || end <= windowStart) return [];
+
+    const clippedStart = Math.max(start, windowStart);
+    const clippedEnd = Math.min(end, windowEnd);
+    const startSlot = Math.max(0, Math.floor((clippedStart - windowStart) / slotMs));
+    const endSlot = Math.min(slotCount, Math.ceil((clippedEnd - windowStart) / slotMs));
+    if (endSlot <= startSlot) return [];
+
+    return [{
+      title: String(event?.title || "No program information"),
+      start,
+      end,
+      gridStart: startSlot + 2,
+      gridEnd: endSlot + 2
+    }];
   });
+}
 
-  if (overlap) return String(overlap?.title || "No listing");
+function findNearestProgramme(events: any[], windowStart: number, windowEnd: number) {
+  if (events.length === 0) return null;
 
-  return "No listing";
+  const nextProgramme = events.find((event) => Number(event?.start || 0) >= windowEnd);
+  if (nextProgramme) return nextProgramme;
+
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (Number(events[index]?.end || 0) <= windowStart) return events[index];
+  }
+
+  return events[0];
+}
+
+function formatNearestProgrammeLabel(programme: any, windowEnd: number): string {
+  const start = Number(programme?.start || 0);
+  const end = Number(programme?.end || 0);
+  const prefix = start >= windowEnd ? "Next listing" : "Last listing";
+
+  return `${prefix}: ${formatLocalDateTime(start)} - ${formatLocalClockTime(end)}`;
+}
+
+function formatLocalDateTime(ts: number): string {
+  const safeTs = Number(ts);
+  if (!Number.isFinite(safeTs)) return "Unknown date";
+
+  const date = new Date(safeTs);
+  if (Number.isNaN(date.getTime())) return "Unknown date";
+
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function normalizeEpochMs(value: unknown): number {
@@ -582,31 +543,4 @@ function saveGuideOffsetMinutes(value: number) {
 function formatGuideOffsetLabel(offsetMinutes: number): string {
   if (!offsetMinutes) return "0m";
   return `${offsetMinutes > 0 ? "+" : ""}${offsetMinutes}m`;
-}
-
-function extractXtreamStreamId(channelId: string, channelUrl?: string): string {
-  const raw = String(channelId || "").trim();
-  if (raw) {
-    const prefixed = raw.match(/^live_(\d+)$/i);
-    if (prefixed) return prefixed[1];
-
-    const numericTail = raw.match(/(\d+)$/);
-    if (numericTail) return numericTail[1];
-  }
-
-  const fromUrl = String(channelUrl || "").trim();
-  if (!fromUrl) return "";
-
-  try {
-    const parsed = new URL(fromUrl);
-    const segments = parsed.pathname.split("/").filter(Boolean);
-    const lastSegment = segments[segments.length - 1] || "";
-    const filenameMatch = lastSegment.match(/^(\d+)(?:\.[a-z0-9]+)?$/i);
-    if (filenameMatch) return filenameMatch[1];
-  } catch {
-    // Ignore invalid URLs and try regex fallback.
-  }
-
-  const fallbackMatch = fromUrl.match(/(?:^|\/)(\d+)(?:\.[a-z0-9]+)?(?:$|[?#])/i);
-  return fallbackMatch ? fallbackMatch[1] : "";
 }

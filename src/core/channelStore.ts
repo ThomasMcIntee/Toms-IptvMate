@@ -7,6 +7,7 @@ export type Channel = {
   url: string;
   group?: string;
   contentType?: ContentType;
+  epgChannelId?: string;
   parentGroup?: string; // For series: group that contains this series
   episodeInfo?: {
     season?: number;
@@ -272,6 +273,7 @@ function toCacheChannel(item: Channel): Channel {
   if (item.contentType === "live" || item.contentType === "movie" || item.contentType === "series") {
     result.contentType = item.contentType;
   }
+  if (typeof item.epgChannelId === "string") result.epgChannelId = item.epgChannelId;
   if (typeof item.parentGroup === "string") result.parentGroup = item.parentGroup;
 
   if (item.episodeInfo && typeof item.episodeInfo === "object") {
@@ -307,6 +309,7 @@ function toValidChannel(item: unknown): Channel | null {
       candidate.contentType === "series"
         ? candidate.contentType
         : undefined,
+      epgChannelId: typeof candidate.epgChannelId === "string" ? candidate.epgChannelId : undefined,
     parentGroup: typeof candidate.parentGroup === "string" ? candidate.parentGroup : undefined,
     episodeInfo:
       candidate.episodeInfo && typeof candidate.episodeInfo === "object"

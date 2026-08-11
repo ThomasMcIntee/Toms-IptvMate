@@ -24,6 +24,8 @@ const MAX_ATTEMPTS_PER_WINDOW = 30;
 const DEFAULT_ELECTRON_RELAY_ORIGIN = "http://127.0.0.1:4173";
 
 function getRelayBaseOrigin(): string | null {
+  if (isWebOsRuntime()) return null;
+
   const protocol = window.location.protocol;
 
   if (protocol === "http:" || protocol === "https:") {
@@ -32,6 +34,8 @@ function getRelayBaseOrigin(): string | null {
   }
 
   if (protocol === "file:") {
+    if (!isElectronRuntime()) return null;
+
     const scopedWindow = window as Window & { __IPTV_RELAY_ORIGIN__?: string };
     const explicitRelayOrigin = scopedWindow.__IPTV_RELAY_ORIGIN__?.trim();
     return explicitRelayOrigin || DEFAULT_ELECTRON_RELAY_ORIGIN;
@@ -181,6 +185,10 @@ function isLikelyLocalRuntime(): boolean {
 
 function isElectronRuntime(): boolean {
   return /\belectron\b/i.test(navigator.userAgent || "");
+}
+
+function isWebOsRuntime(): boolean {
+  return /\bweb0?s\b|netcast|smarttv/i.test(navigator.userAgent || "");
 }
 
 function hasQueryParam(url: string, key: string): boolean {
@@ -1439,7 +1447,7 @@ export function playUrl(
           if (nextModeUrl) {
             lastEscalationTime = now;
             console.log(`[video-error-fallback] trying ${nextAudioMode}-audio transcode: ${nextModeUrl.slice(0, 100)}...`);
-            emitPlayerTranscoding(`Audio decoder rejected ${currentAudioMode} mode, trying ${nextAudioMode}-audio transcoder...`);
+            emitPlayerTranscoding(`Optimizing live audio (${nextAudioMode} mode)...`);
             playUrl(
               nextModeUrl,
               hasRetriedHttpFallback,
@@ -1517,7 +1525,7 @@ export function playUrl(
             const nextModeUrl = toTranscodeFallbackUrl(rootSourceUrl, false, nextAudioMode);
             if (nextModeUrl) {
               lastEscalationTime = Date.now();
-              emitPlayerTranscoding(`Audio decoder rejected ${currentAudioMode} mode, trying ${nextAudioMode}-audio transcoder...`);
+              emitPlayerTranscoding(`Optimizing live audio (${nextAudioMode} mode)...`);
               playUrl(
                 nextModeUrl,
                 hasRetriedHttpFallback,
@@ -1693,7 +1701,7 @@ export function playUrl(
         const nextModeUrl = toTranscodeFallbackUrl(rootSourceUrl, false, nextAudioMode);
         if (nextModeUrl) {
           lastEscalationTime = now;
-          emitPlayerTranscoding(`Audio decoder rejected ${currentAudioMode} mode, trying ${nextAudioMode}-audio transcoder...`);
+          emitPlayerTranscoding(`Optimizing live audio (${nextAudioMode} mode)...`);
           playUrl(
             nextModeUrl,
             hasRetriedHttpFallback,
@@ -2270,7 +2278,7 @@ export function playUrl(
         if (transcodeUrl) {
           emitPlayerTranscoding(
             contentType === "live"
-              ? "Stream format not supported, trying compatibility transcoder..."
+              ? "Preparing compatible live playback..."
               : "Network/protocol error, trying local transcoder..."
           );
           playUrl(
@@ -2359,7 +2367,7 @@ export function playUrl(
         if (transcodeUrl) {
           emitPlayerTranscoding(
             contentType === "live"
-              ? "Stream format not supported, trying compatibility transcoder..."
+              ? "Preparing compatible live playback..."
               : "Network/protocol error, trying local transcoder..."
           );
           playUrl(

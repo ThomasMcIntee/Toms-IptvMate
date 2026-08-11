@@ -1,4 +1,8 @@
 import { EPGEvent } from "../epgStore";
+import { parseXMLTV } from "./xmltvParser";
+
+const inFlightEpgChannelIds = new Map<string, Promise<Map<string, string>>>();
+const inFlightXmltvLoads = new Map<string, Promise<Record<string, EPGEvent[]>>>();
 
 function toCorsProxyUrl(url: string): string {
   return `https://corsproxy.io/?${encodeURIComponent(url)}`;
@@ -20,14 +24,14 @@ function buildApiCandidates(baseUrl: string, pathAndQuery: string): string[] {
 
 async function fetchXtreamJson(url: string): Promise<any> {
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { cache: "no-store" });
     if (res.ok) return res.json();
   } catch {
     // Ignore and try proxy fallback.
   }
 
   const proxied = toCorsProxyUrl(url);
-  const proxyRes = await fetch(proxied);
+  const proxyRes = await fetch(proxied, { cache: "no-store" });
   if (!proxyRes.ok) {
     throw new Error(`Xtream EPG request failed (${proxyRes.status})`);
   }
@@ -93,6 +97,14 @@ function extractFromListings(result: Record<string, EPGEvent[]>, listings: any[]
   });
 }
 
+function extractListingsForStream(
+  result: Record<string, EPGEvent[]>,
+  streamId: string,
+  listings: any[]
+) {
+  listings.forEach((item: any) => addEvent(result, streamId, item));
+}
+
 function extractFromObjectCollections(result: Record<string, EPGEvent[]>, data: Record<string, any>) {
   Object.entries(data).forEach(([key, value]) => {
     if (!Array.isArray(value)) return;
@@ -115,6 +127,106 @@ function sortAndDedupe(result: Record<string, EPGEvent[]>) {
       })
       .sort((a, b) => a.start - b.start);
   });
+}
+
+function hasCurrentOrFutureEvents(events: EPGEvent[]): boolean {
+  const now = Date.now();
+  return events.some((event) => Number(event?.end || 0) > now);
+}
+
+function getPlaylistCacheKey(url: string, user: string, pass: string): string {
+  return `${String(url || "").trim()}\u0000${user}\u0000${pass}`;
+}
+
+function normalizeXmltvLookupKey(value: string): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+export async function loadXtreamEpgChannelIds(
+  url: string,
+  user: string,
+  pass: string
+): Promise<Map<string, string>> {
+  const cacheKey = getPlaylistCacheKey(url, user, pass);
+  const existing = inFlightEpgChannelIds.get(cacheKey);
+  if (existing) return existing;
+
+  const load = (async () => {
+    const candidates = buildApiCandidates(
+      url,
+      `/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_live_streams`
+    );
+
+    for (const candidate of candidates) {
+      const data = await fetchXtreamJson(candidate).catch(() => null);
+      if (!Array.isArray(data)) continue;
+
+      const result = new Map<string, string>();
+      for (const item of data) {
+        const streamId = String(item?.stream_id ?? "").trim();
+        const epgChannelId = String(item?.epg_channel_id ?? "").trim();
+        if (streamId && epgChannelId) result.set(streamId, epgChannelId);
+      }
+      return result;
+    }
+
+    return new Map<string, string>();
+  })();
+
+  inFlightEpgChannelIds.set(cacheKey, load);
+  return load;
+}
+
+export async function loadXtreamXmltv(
+  url: string,
+  user: string,
+  pass: string
+): Promise<Record<string, EPGEvent[]>> {
+  const cacheKey = getPlaylistCacheKey(url, user, pass);
+  const existing = inFlightXmltvLoads.get(cacheKey);
+  if (existing) return existing;
+
+  const load = (async () => {
+    const baseUrl = getBaseCandidates(url)[0];
+    if (!baseUrl) return {};
+    return parseXMLTV(
+      `${baseUrl}/xmltv.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`
+    );
+  })();
+
+  inFlightXmltvLoads.set(cacheKey, load);
+  try {
+    return await load;
+  } catch (error) {
+    if (inFlightXmltvLoads.get(cacheKey) === load) {
+      inFlightXmltvLoads.delete(cacheKey);
+    }
+    throw error;
+  }
+}
+
+function findXmltvEventsById(
+  xmltv: Record<string, EPGEvent[]>,
+  epgChannelId: string
+): EPGEvent[] {
+  const candidates = [
+    epgChannelId,
+    epgChannelId.toLowerCase(),
+    epgChannelId.replace(/\s+/g, "").toLowerCase(),
+    normalizeXmltvLookupKey(epgChannelId)
+  ];
+
+  for (const candidate of candidates) {
+    const events = xmltv[candidate];
+    if (!Array.isArray(events) || events.length === 0) continue;
+    const currentEvents = events.filter((event) => Number(event?.end || 0) > Date.now());
+    if (currentEvents.length > 0) return currentEvents.sort((a, b) => a.start - b.start);
+  }
+
+  return [];
 }
 
 export async function loadXtreamEPG(
@@ -188,13 +300,13 @@ export async function loadXtreamEPGForStream(
   const fromShort: Record<string, EPGEvent[]> = {};
   if (shortData && typeof shortData === "object") {
     if (Array.isArray(shortData?.epg_listings)) {
-      extractFromListings(fromShort, shortData.epg_listings);
+      extractListingsForStream(fromShort, sid, shortData.epg_listings);
     } else if (Array.isArray(shortData)) {
-      extractFromListings(fromShort, shortData);
+      extractListingsForStream(fromShort, sid, shortData);
     }
   }
 
-  if (Array.isArray(fromShort[sid]) && fromShort[sid].length > 0) {
+  if (Array.isArray(fromShort[sid]) && hasCurrentOrFutureEvents(fromShort[sid])) {
     return fromShort[sid].sort((a, b) => a.start - b.start);
   }
 
@@ -212,14 +324,24 @@ export async function loadXtreamEPGForStream(
   const fromTable: Record<string, EPGEvent[]> = {};
   if (tableData && typeof tableData === "object") {
     if (Array.isArray(tableData?.epg_listings)) {
-      extractFromListings(fromTable, tableData.epg_listings);
+      extractListingsForStream(fromTable, sid, tableData.epg_listings);
     } else if (Array.isArray(tableData)) {
-      extractFromListings(fromTable, tableData);
+      extractListingsForStream(fromTable, sid, tableData);
     }
   }
 
-  if (Array.isArray(fromTable[sid]) && fromTable[sid].length > 0) {
+  if (Array.isArray(fromTable[sid]) && hasCurrentOrFutureEvents(fromTable[sid])) {
     return fromTable[sid].sort((a, b) => a.start - b.start);
+  }
+
+  const epgChannelIds = await loadXtreamEpgChannelIds(url, user, pass).catch(
+    () => new Map<string, string>()
+  );
+  const epgChannelId = epgChannelIds.get(sid) || "";
+  if (epgChannelId) {
+    const xmltv = await loadXtreamXmltv(url, user, pass).catch(() => ({}));
+    const xmltvEvents = findXmltvEventsById(xmltv, epgChannelId);
+    if (xmltvEvents.length > 0) return xmltvEvents;
   }
 
   return [];

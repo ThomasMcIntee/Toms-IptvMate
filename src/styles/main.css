@@ -314,6 +314,10 @@ body.theme-light .app-login-input {
   pointer-events: none;
 }
 
+.live-preview-shell .player-main-shell-video.player-main-native-controls {
+  pointer-events: auto;
+}
+
 .app-root video.player-main.player-main-force-preview {
   position: fixed !important;
   top: var(--live-preview-top) !important;
@@ -321,12 +325,12 @@ body.theme-light .app-login-input {
   left: auto !important;
   bottom: auto !important;
   inset: auto !important;
-  width: 420px !important;
-  height: 236px !important;
-  max-width: 420px !important;
-  max-height: 236px !important;
-  min-width: 280px !important;
-  min-height: 158px !important;
+  width: var(--live-preview-width) !important;
+  height: var(--live-preview-height) !important;
+  max-width: var(--live-preview-width) !important;
+  max-height: var(--live-preview-height) !important;
+  min-width: 420px !important;
+  min-height: 236px !important;
   border-radius: 18px !important;
   box-shadow: 0 26px 80px rgba(0, 0, 0, 0.5) !important;
   z-index: 40 !important;
@@ -555,6 +559,22 @@ body.theme-light .app-login-input {
   background: rgba(255, 255, 255, 0.2);
 }
 
+.channel-row-btn {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.channel-row-btn:focus-visible {
+  outline: 2px solid #7ec5ff;
+  outline-offset: -2px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
 .channel-header-item {
   cursor: default;
   padding-top: 14px;
@@ -652,15 +672,6 @@ body.theme-light .app-login-input {
     --epg-preview-height: min(40vh, 280px);
     height: var(--epg-preview-height);
   }
-}
-
-.player-osd {
-  position: absolute;
-  left: 20px;
-  top: 20px;
-  background: rgba(0, 0, 0, 0.6);
-  padding: 8px 12px;
-  border-radius: 6px;
 }
 
 .opening-quick-actions {
@@ -1036,6 +1047,13 @@ body.theme-light .playlist-edit-form label {
 }
 
 .group-select-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  width: 100%;
   border: 0;
   background: transparent;
   color: inherit;
@@ -1043,6 +1061,17 @@ body.theme-light .playlist-edit-form label {
   text-align: left;
   padding: 0;
   cursor: pointer;
+}
+
+.group-item-count {
+  min-width: 42px;
+  color: rgba(255, 255, 255, 0.7);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.group-item.active .group-item-count {
+  color: #fff;
 }
 
 .channel-select-btn {
@@ -1543,6 +1572,40 @@ body.theme-light .playlist-edit-form label {
 .epg-search-guide-cell-channel {
   font-size: 14px;
   font-weight: 700;
+}
+
+.epg-search-guide-programme {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  background: rgba(78, 158, 255, 0.2);
+  border: 1px solid rgba(113, 181, 255, 0.32);
+}
+
+.epg-search-guide-programme-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.epg-search-guide-programme-time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.78;
+}
+
+.epg-search-guide-window-empty {
+  grid-column: 2 / 10;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .epg-search-item {

@@ -1262,6 +1262,7 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
 }
 
 export default defineConfig({
+  base: "./",
   plugins: [
     react({ fastRefresh: false }),
     {
