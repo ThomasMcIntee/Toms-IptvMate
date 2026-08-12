@@ -1,11 +1,17 @@
 {
   "name": "toms-iptvmate",
   "version": "1.1.7",
-  "private": true,
+  "private": false,
   "main": "electron/main.cjs",
+  "files": [
+    "dist",
+    "electron"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "publish:check": "npm pack --dry-run --json",
+    "prepack": "npm run build",
     "preview": "vite preview",
     "cap:sync": "npx cap sync",
     "cap:android": "npx cap open android",
@@ -42,6 +48,9 @@
     "@webos-tools/cli": {
       "rimraf": "3.0.2"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "build": {
     "appId": "tv.toms.iptvmate.desktop",
