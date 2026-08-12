@@ -187,6 +187,14 @@ Code
 
 npm install
 
+📦 npm Publish Check
+
+Code
+
+npm run publish:check
+
+This runs a dry-run package build so the published tarball includes the Vite `dist/` output and Electron entrypoint without shipping the rest of the repository.
+
 3\. Run the Web Version
 
 Code
@@ -348,4 +356,3 @@ For major changes, open an issue first to discuss what you’d like to change.
 MIT License.
 
 [https://copilot.microsoft.com/shares/artifacts/q1Dx69x9YPCQ7jvns6bte](https://copilot.microsoft.com/shares/artifacts/q1Dx69x9YPCQ7jvns6bte)
-
