@@ -4,6 +4,10 @@ export async function loadStalkerEPG(
   portal: string,
   mac: string
 ): Promise<Record<string, EPGEvent[]>> {
+  const requestUrl = new URL(`${portal}server/load.php`);
+  requestUrl.searchParams.set("type", "itv");
+  requestUrl.searchParams.set("action", "get_epg_info");
+
   const headers = {
     "User-Agent": "Mozilla/5.0",
     "X-User-Agent": "Model: MAG254; Link: Ethernet",
@@ -12,8 +16,8 @@ export async function loadStalkerEPG(
   };
 
   const res = await fetch(
-    `${portal}server/load.php?type=itv&action=get_epg_info`,
-    { headers }
+    requestUrl.toString(),
+    { headers, cache: "no-store" }
   );
   if (!res.ok) {
     throw new Error(`Stalker EPG request failed (${res.status})`);

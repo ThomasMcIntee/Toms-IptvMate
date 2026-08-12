@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { loadPlaylists } from "../core/playlistStore";
 import { loadXtreamEPGForStream } from "../core/loaders/xtreamEPG";
-import { getEPG } from "../core/epgStore";
+import { getEPGForChannel, getEPGVersion, subscribeEPG } from "../core/epgStore";
 import { setEPG } from "../core/epgStore";
 import { formatEpgTime } from "../core/epgTime";
 
@@ -12,16 +12,20 @@ type Props = {
 };
 
 export function EPGGrid({ currentChannel, className = "", onOpenGuide }: Props) {
-  if (!currentChannel) return null;
-
-  const [events, setEvents] = useState(() => getEPG(currentChannel.id));
   const [isLoadingFallback, setIsLoadingFallback] = useState(false);
+  useSyncExternalStore(subscribeEPG, getEPGVersion, getEPGVersion);
+  const events = getLiveDisplayEvents(getEPGForChannel(currentChannel));
 
   useEffect(() => {
-    const storeEvents = getEPG(currentChannel.id);
-    setEvents(storeEvents);
+    if (!currentChannel) {
+      setIsLoadingFallback(false);
+      return;
+    }
 
-    if (storeEvents.length > 0) {
+    const storeEvents = getEPGForChannel(currentChannel);
+    const displayEvents = getLiveDisplayEvents(storeEvents);
+
+    if (displayEvents.length > 0) {
       setIsLoadingFallback(false);
       return;
     }
@@ -60,7 +64,6 @@ export function EPGGrid({ currentChannel, className = "", onOpenGuide }: Props) 
             setEPG(streamId, fetched);
             setEPG(channelId, fetched);
             setEPG(`live_${streamId}`, fetched);
-            setEvents(fetched);
             setIsLoadingFallback(false);
             return;
           }
@@ -77,7 +80,9 @@ export function EPGGrid({ currentChannel, className = "", onOpenGuide }: Props) 
     return () => {
       cancelled = true;
     };
-  }, [currentChannel?.id, currentChannel?.contentType]);
+  }, [currentChannel?.id, currentChannel?.name, currentChannel?.contentType]);
+
+  if (!currentChannel) return null;
 
   return (
     <div className={`epg-grid ${className}`.trim()}>
@@ -106,4 +111,13 @@ export function EPGGrid({ currentChannel, className = "", onOpenGuide }: Props) 
       ))}
     </div>
   );
+}
+
+function getLiveDisplayEvents(events: any[]) {
+  const now = Date.now();
+
+  return events
+    .filter((event) => Number(event?.end || 0) > now)
+    .sort((a, b) => Number(a?.start || 0) - Number(b?.start || 0))
+    .slice(0, 18);
 }

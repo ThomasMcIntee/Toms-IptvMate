@@ -1,5 +1,5 @@
 export function getEpgTimeOffsetMinutes(): number {
-  return -120;
+  return 0;
 }
 
 export function formatEpgTime(ts: number): string {

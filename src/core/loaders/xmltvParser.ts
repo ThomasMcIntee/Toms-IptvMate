@@ -8,8 +8,8 @@ function normalizeXmltvKey(value: string): string {
 }
 
 export async function parseXMLTV(url: string): Promise<Record<string, EPGEvent[]>> {
-  const { requestUrl } = await resolveReachableUrl(url, "XMLTV");
-  const xml = await fetchXmltvText(requestUrl);
+  const { requestUrl, response } = await resolveReachableUrl(url, "XMLTV");
+  const xml = await fetchXmltvText(requestUrl, response);
 
   const parser = new DOMParser();
   const doc = parser.parseFromString(xml, "text/xml");
@@ -64,8 +64,8 @@ export async function parseXMLTV(url: string): Promise<Record<string, EPGEvent[]
   return result;
 }
 
-async function fetchXmltvText(requestUrl: string): Promise<string> {
-  const res = await fetch(requestUrl);
+async function fetchXmltvText(requestUrl: string, response?: Response): Promise<string> {
+  const res = response || await fetch(requestUrl, { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`XMLTV request failed (${res.status})`);
   }
@@ -124,15 +124,18 @@ function getUrlCandidates(url: string): string[] {
   return [`https://${trimmed}`, `http://${trimmed}`];
 }
 
-async function resolveReachableUrl(url: string, label: string): Promise<{ requestUrl: string }> {
+async function resolveReachableUrl(
+  url: string,
+  label: string
+): Promise<{ requestUrl: string; response: Response }> {
   const candidates = getUrlCandidates(url);
   const reasons: string[] = [];
 
   for (const candidate of candidates) {
     try {
-      const res = await fetch(candidate);
+      const res = await fetch(candidate, { cache: "no-store" });
       if (res.ok) {
-        return { requestUrl: candidate };
+        return { requestUrl: candidate, response: res };
       }
       reasons.push(`${candidate} -> ${res.status}`);
     } catch {
@@ -141,9 +144,9 @@ async function resolveReachableUrl(url: string, label: string): Promise<{ reques
 
     const proxied = toCorsProxyUrl(candidate);
     try {
-      const proxyRes = await fetch(proxied);
+      const proxyRes = await fetch(proxied, { cache: "no-store" });
       if (proxyRes.ok) {
-        return { requestUrl: proxied };
+        return { requestUrl: proxied, response: proxyRes };
       }
       reasons.push(`${proxied} -> ${proxyRes.status}`);
     } catch {

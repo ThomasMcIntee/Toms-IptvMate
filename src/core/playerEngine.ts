@@ -24,6 +24,8 @@ const MAX_ATTEMPTS_PER_WINDOW = 30;
 const DEFAULT_ELECTRON_RELAY_ORIGIN = "http://127.0.0.1:4173";
 
 function getRelayBaseOrigin(): string | null {
+  if (isWebOsRuntime()) return null;
+
   const protocol = window.location.protocol;
 
   if (protocol === "http:" || protocol === "https:") {
@@ -32,6 +34,8 @@ function getRelayBaseOrigin(): string | null {
   }
 
   if (protocol === "file:") {
+    if (!isElectronRuntime()) return null;
+
     const scopedWindow = window as Window & { __IPTV_RELAY_ORIGIN__?: string };
     const explicitRelayOrigin = scopedWindow.__IPTV_RELAY_ORIGIN__?.trim();
     return explicitRelayOrigin || DEFAULT_ELECTRON_RELAY_ORIGIN;
@@ -181,6 +185,10 @@ function isLikelyLocalRuntime(): boolean {
 
 function isElectronRuntime(): boolean {
   return /\belectron\b/i.test(navigator.userAgent || "");
+}
+
+function isWebOsRuntime(): boolean {
+  return /\bweb0?s\b|netcast|smarttv/i.test(navigator.userAgent || "");
 }
 
 function hasQueryParam(url: string, key: string): boolean {
@@ -800,6 +808,30 @@ export function playUrl(
 
     if (shouldTryShakaForVodTranscode) {
       const launchShaka = async () => {
+        let shakaFallbackStarted = false;
+        const fallbackToDefaultPlayer = async (message?: string) => {
+          if (shakaFallbackStarted || isStaleRequest()) return;
+          shakaFallbackStarted = true;
+
+          await teardownShakaPlayer();
+          if (isStaleRequest()) return;
+
+          skipShakaOnce = true;
+          if (message) {
+            emitPlayerTranscoding(message);
+          }
+          playUrl(
+            normalizedUrl,
+            hasRetriedHttpFallback,
+            forceNativePlayback,
+            proxyFallbackStage,
+            hasTriedNativeFallback,
+            hasTriedTranscodeFallback,
+            hasRetriedTranscodeBootstrap,
+            contentType
+          );
+        };
+
         try {
           const shakaModule = await import("shaka-player");
           const shakaLib = (shakaModule as any).default || (shakaModule as any);
@@ -832,21 +864,7 @@ export function playUrl(
           });
 
           shakaPlayer.addEventListener("error", () => {
-            if (isStaleRequest()) return;
-
-            void teardownShakaPlayer();
-            skipShakaOnce = true;
-            emitPlayerTranscoding("Alternate player failed, retrying with default player...");
-            playUrl(
-              normalizedUrl,
-              hasRetriedHttpFallback,
-              forceNativePlayback,
-              proxyFallbackStage,
-              hasTriedNativeFallback,
-              hasTriedTranscodeFallback,
-              hasRetriedTranscodeBootstrap,
-              contentType
-            );
+            void fallbackToDefaultPlayer("Alternate player failed, retrying with default player...");
           });
 
           await shakaPlayer.load(playbackUrl);
@@ -867,19 +885,7 @@ export function playUrl(
               videoEl.removeEventListener("playing", onShakaPlaying);
             }
 
-            void teardownShakaPlayer();
-            skipShakaOnce = true;
-            emitPlayerTranscoding("Alternate player startup stalled, retrying with default player...");
-            playUrl(
-              normalizedUrl,
-              hasRetriedHttpFallback,
-              forceNativePlayback,
-              proxyFallbackStage,
-              hasTriedNativeFallback,
-              hasTriedTranscodeFallback,
-              hasRetriedTranscodeBootstrap,
-              contentType
-            );
+            void fallbackToDefaultPlayer("Alternate player startup stalled, retrying with default player...");
           }, 7000);
 
           skipShakaOnce = false;
@@ -889,20 +895,7 @@ export function playUrl(
             videoEl.removeEventListener("playing", onShakaPlaying);
           }
         } catch {
-          if (isStaleRequest()) return;
-
-          void teardownShakaPlayer();
-          skipShakaOnce = true;
-          playUrl(
-            normalizedUrl,
-            hasRetriedHttpFallback,
-            forceNativePlayback,
-            proxyFallbackStage,
-            hasTriedNativeFallback,
-            hasTriedTranscodeFallback,
-            hasRetriedTranscodeBootstrap,
-            contentType
-          );
+          await fallbackToDefaultPlayer();
         }
       };
 
@@ -1140,25 +1133,25 @@ export function playUrl(
           return;
         }
 
-        if (contentType === "live") {
-          if (nextAudioMode) {
-            const nextModeUrl = toTranscodeFallbackUrl(rootSourceUrl, false, nextAudioMode);
-            if (nextModeUrl) {
-              emitPlayerTranscoding(`Transcode startup stalled, trying ${nextAudioMode}-audio transcoder...`);
-              playUrl(
-                nextModeUrl,
-                hasRetriedHttpFallback,
-                false,
-                proxyFallbackStage,
-                hasTriedNativeFallback,
-                true,
-                hasRetriedTranscodeBootstrap,
-                contentType
-              );
-              return;
-            }
+        if (nextAudioMode) {
+          const nextModeUrl = toTranscodeFallbackUrl(rootSourceUrl, false, nextAudioMode);
+          if (nextModeUrl) {
+            emitPlayerTranscoding(`Transcode startup stalled, trying ${nextAudioMode}-audio transcoder...`);
+            playUrl(
+              nextModeUrl,
+              hasRetriedHttpFallback,
+              false,
+              proxyFallbackStage,
+              hasTriedNativeFallback,
+              true,
+              hasRetriedTranscodeBootstrap,
+              contentType
+            );
+            return;
           }
+        }
 
+        if (contentType === "live") {
           const videoOnlyTranscodeUrl = toTranscodeFallbackUrl(rootSourceUrl, true);
           if (videoOnlyTranscodeUrl && allowLiveVideoOnlyFallback) {
             emitPlayerTranscoding("Transcode startup stalled, trying video-only transcoder...");
@@ -1244,6 +1237,7 @@ export function playUrl(
     // Detect silent audio failures (video plays but no sound)
     // Use a conservative detector to avoid false positives while decoders warm up.
     const setupAudioSilentMonitor = () => {
+      if (contentType !== "live") return;
       if (audioSilentCheckTimer !== null) return; // Already monitoring
       
       audioSilentCheckTimer = window.setTimeout(() => {
@@ -1453,7 +1447,7 @@ export function playUrl(
           if (nextModeUrl) {
             lastEscalationTime = now;
             console.log(`[video-error-fallback] trying ${nextAudioMode}-audio transcode: ${nextModeUrl.slice(0, 100)}...`);
-            emitPlayerTranscoding(`Audio decoder rejected ${currentAudioMode} mode, trying ${nextAudioMode}-audio transcoder...`);
+            emitPlayerTranscoding(`Optimizing live audio (${nextAudioMode} mode)...`);
             playUrl(
               nextModeUrl,
               hasRetriedHttpFallback,
@@ -1495,7 +1489,7 @@ export function playUrl(
         console.log(`[video-error-attempt-videoonly] attempting video-only from normalizedUrl=${normalizedUrl.slice(0, 80)}`);
         const videoOnlyBootstrapUrl = toTranscodeFallbackUrl(normalizedUrl, true);
         console.log(`[video-error-attempt-videoonly] result=${videoOnlyBootstrapUrl ? videoOnlyBootstrapUrl.slice(0, 100) : "null"}`);
-        if (videoOnlyBootstrapUrl && allowLiveVideoOnlyFallback) {
+        if (videoOnlyBootstrapUrl && contentType === "live" && allowLiveVideoOnlyFallback) {
           lastEscalationTime = now;
           console.log(`[video-error-fallback] trying video-only transcode: ${videoOnlyBootstrapUrl.slice(0, 100)}...`);
           emitPlayerTranscoding("Audio decoder unsupported, restoring picture with video-only playback...");
@@ -1531,7 +1525,7 @@ export function playUrl(
             const nextModeUrl = toTranscodeFallbackUrl(rootSourceUrl, false, nextAudioMode);
             if (nextModeUrl) {
               lastEscalationTime = Date.now();
-              emitPlayerTranscoding(`Audio decoder rejected ${currentAudioMode} mode, trying ${nextAudioMode}-audio transcoder...`);
+              emitPlayerTranscoding(`Optimizing live audio (${nextAudioMode} mode)...`);
               playUrl(
                 nextModeUrl,
                 hasRetriedHttpFallback,
@@ -1707,7 +1701,7 @@ export function playUrl(
         const nextModeUrl = toTranscodeFallbackUrl(rootSourceUrl, false, nextAudioMode);
         if (nextModeUrl) {
           lastEscalationTime = now;
-          emitPlayerTranscoding(`Audio decoder rejected ${currentAudioMode} mode, trying ${nextAudioMode}-audio transcoder...`);
+          emitPlayerTranscoding(`Optimizing live audio (${nextAudioMode} mode)...`);
           playUrl(
             nextModeUrl,
             hasRetriedHttpFallback,
@@ -2284,7 +2278,7 @@ export function playUrl(
         if (transcodeUrl) {
           emitPlayerTranscoding(
             contentType === "live"
-              ? "Stream format not supported, trying compatibility transcoder..."
+              ? "Preparing compatible live playback..."
               : "Network/protocol error, trying local transcoder..."
           );
           playUrl(
@@ -2373,7 +2367,7 @@ export function playUrl(
         if (transcodeUrl) {
           emitPlayerTranscoding(
             contentType === "live"
-              ? "Stream format not supported, trying compatibility transcoder..."
+              ? "Preparing compatible live playback..."
               : "Network/protocol error, trying local transcoder..."
           );
           playUrl(

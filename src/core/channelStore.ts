@@ -7,6 +7,7 @@ export type Channel = {
   url: string;
   group?: string;
   contentType?: ContentType;
+  epgChannelId?: string;
   parentGroup?: string; // For series: group that contains this series
   episodeInfo?: {
     season?: number;
@@ -195,6 +196,27 @@ function hasLegacyIdOnlyFavorite(id: string): boolean {
   return !!entry && !String(entry.url || "").trim();
 }
 
+function hasFavoriteEntryWithId(id: string): boolean {
+  for (const entry of favoriteEntries.values()) {
+    if (entry.id === id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isSeriesLikeFavoriteChannel(channel: Partial<Channel> | null | undefined): boolean {
+  if (!channel) return false;
+
+  const contentType = String(channel.contentType || "").trim().toLowerCase();
+  if (contentType === "series") {
+    return true;
+  }
+
+  const id = String(channel.id || "").trim();
+  return /^series_\d+(?:_episode_\d+)?$/i.test(id);
+}
+
 function hasUniqueCurrentChannelId(id: string): boolean {
   let count = 0;
   for (const channel of channels) {
@@ -251,6 +273,7 @@ function toCacheChannel(item: Channel): Channel {
   if (item.contentType === "live" || item.contentType === "movie" || item.contentType === "series") {
     result.contentType = item.contentType;
   }
+  if (typeof item.epgChannelId === "string") result.epgChannelId = item.epgChannelId;
   if (typeof item.parentGroup === "string") result.parentGroup = item.parentGroup;
 
   if (item.episodeInfo && typeof item.episodeInfo === "object") {
@@ -286,6 +309,7 @@ function toValidChannel(item: unknown): Channel | null {
       candidate.contentType === "series"
         ? candidate.contentType
         : undefined,
+      epgChannelId: typeof candidate.epgChannelId === "string" ? candidate.epgChannelId : undefined,
     parentGroup: typeof candidate.parentGroup === "string" ? candidate.parentGroup : undefined,
     episodeInfo:
       candidate.episodeInfo && typeof candidate.episodeInfo === "object"
@@ -464,14 +488,6 @@ async function loadCachedChannelsIndexedDb(): Promise<Channel[]> {
   return result;
 }
 
-{
-  const cached = loadCachedChannelsWithPresence();
-  if (cached.channels.length > 0) {
-    applyCachedChannels(cached.channels);
-    recordChannelWriteTrace("module-init-cache", true, cached.channels.length);
-  }
-}
-
 function loadVisibilityState(): VisibilityState {
   // On module init, activeVisibilityRole is always "adult" — read the adult key.
   const key = VISIBILITY_KEY;
@@ -559,8 +575,15 @@ export function setChannels(list: Channel[], source: string = "unknown") {
   applyCachedChannels(list);
   migrateLegacyFavoritesForCurrentChannels();
   recordChannelWriteTrace(source, true, channels.length);
-  saveCachedChannels(channels);
-  void saveCachedChannelsIndexedDb(channels);
+
+  // Preserve the last generic cache when role-clear intentionally empties runtime
+  // channels (e.g., missing assigned role playlist). This avoids startup falling
+  // back to an empty cached channel set.
+  const shouldPersistCache = !(source === "role-clear" && channels.length === 0);
+  if (shouldPersistCache) {
+    saveCachedChannels(channels);
+    void saveCachedChannelsIndexedDb(channels);
+  }
 
   const currentIds = new Set(channels.map((c) => c.id));
   const nextChannelVisibility: Record<string, boolean> = {};
@@ -593,14 +616,29 @@ export async function restoreChannelsCache(): Promise<Channel[]> {
   const fromLocalStorage = loadCachedChannelsWithPresence();
   if (fromLocalStorage.hasValue) {
     if (fromLocalStorage.channels.length > 0) {
+      const fromIndexedDb = await loadCachedChannelsIndexedDb();
+      if (roleChannelWriteLock) {
+        recordChannelWriteTrace("restore-cache-indexeddb-locked", false, channels.length);
+        return channels;
+      }
+
+      if (fromIndexedDb.length > fromLocalStorage.channels.length) {
+        applyCachedChannels(fromIndexedDb);
+        recordChannelWriteTrace("restore-cache-indexeddb-preferred", true, fromIndexedDb.length);
+        saveCachedChannels(fromIndexedDb);
+        return channels;
+      }
+
       applyCachedChannels(fromLocalStorage.channels);
       recordChannelWriteTrace("restore-cache-local", true, fromLocalStorage.channels.length);
+      return channels;
     } else {
       recordChannelWriteTrace("restore-cache-local-empty", false, channels.length);
     }
-    // Explicit local cache (including an empty array) is authoritative.
-    // Do not resurrect stale IndexedDB channels over it.
-    return channels;
+
+    // If localStorage cache is empty, allow IndexedDB fallback. This recovers
+    // from older sessions that accidentally persisted an empty local cache
+    // while IndexedDB still has the last valid loaded channels.
   }
 
   const fromIndexedDb = await loadCachedChannelsIndexedDb();
@@ -728,6 +766,12 @@ export function isFavoriteChannelRecord(channel: Partial<Channel> | null | undef
   const id = String(channel.id || "").trim();
   if (!id) return false;
 
+  // Series stream URLs can legitimately change per provider/refresh while
+  // remaining the same logical series item. Fall back to id matching.
+  if (isSeriesLikeFavoriteChannel(channel) && hasFavoriteEntryWithId(id)) {
+    return true;
+  }
+
   // Legacy compatibility: only trust id-only favorites when that id maps to
   // exactly one current channel, otherwise it is ambiguous across providers.
   return hasLegacyIdOnlyFavorite(id) && hasUniqueCurrentChannelId(id);
@@ -760,8 +804,17 @@ export function setChannelFavoriteRecord(channel: Partial<Channel> | null | unde
       changed = true;
     }
   } else {
-    if (favoriteEntries.delete(key)) {
+    const removedExact = favoriteEntries.delete(key);
+    if (removedExact) {
       changed = true;
+    }
+
+    if (isSeriesLikeFavoriteChannel(channel)) {
+      for (const [entryKey, entry] of favoriteEntries.entries()) {
+        if (entry.id !== id) continue;
+        favoriteEntries.delete(entryKey);
+        changed = true;
+      }
     }
 
     // Remove legacy id-only favorite so toggling off behaves consistently.

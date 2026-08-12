@@ -137,9 +137,9 @@ function ChannelItem({
   }
 
   return (
-    <div className={itemClass} onClick={handleClick}>
+    <button type="button" className={`${itemClass} channel-row-btn`} onClick={handleClick}>
       <span>{ch.number} • {ch.name}</span>
-    </div>
+    </button>
   );
 }
 

@@ -5,7 +5,106 @@ import { getAllChannels } from "./core/channelStore";
 import { ProfileProvider } from "./profiles/ProfileContext";
 import "./styles/main.css";
 
+const REMOTE_KEYCODE_MAP: Record<number, string> = {
+  8: "Backspace",
+  13: "Enter",
+  27: "Escape",
+  37: "ArrowLeft",
+  38: "ArrowUp",
+  39: "ArrowRight",
+  40: "ArrowDown",
+  461: "Backspace",
+  10009: "Backspace",
+  29443: "Enter",
+  29460: "ArrowLeft",
+  29461: "ArrowRight",
+  29462: "ArrowUp",
+  29463: "ArrowDown"
+};
+
+const REMOTE_KEY_ALIASES: Record<string, string> = {
+  Back: "Backspace",
+  BrowserBack: "Backspace",
+  Down: "ArrowDown",
+  GoBack: "Backspace",
+  Left: "ArrowLeft",
+  NumpadEnter: "Enter",
+  OK: "Enter",
+  Return: "Backspace",
+  Right: "ArrowRight",
+  Select: "Enter",
+  Up: "ArrowUp",
+  XF86Back: "Backspace"
+};
+
+type NormalizedRemoteKeyboardEvent = KeyboardEvent & {
+  webOsRemoteNormalized?: boolean;
+};
+
+function isRemoteBackEvent(event: KeyboardEvent): boolean {
+  const rawKey = String(event.key || "");
+  const normalizedKey = REMOTE_KEY_ALIASES[rawKey] ||
+    REMOTE_KEYCODE_MAP[Number(event.keyCode || 0)] ||
+    rawKey;
+  return normalizedKey === "Backspace" || normalizedKey === "Escape";
+}
+
+function getVisibleFocusableElements(): HTMLElement[] {
+  const selector = [
+    "button:not([disabled])",
+    "a[href]",
+    "input:not([disabled])",
+    "select:not([disabled])",
+    "textarea:not([disabled])",
+    '[tabindex]:not([tabindex="-1"])'
+  ].join(",");
+
+  return Array.from(document.querySelectorAll<HTMLElement>(selector)).filter((element) => {
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  });
+}
+
+function moveRemoteFocus(key: string) {
+  const focusable = getVisibleFocusableElements();
+  if (focusable.length === 0) return;
+
+  const active = document.activeElement as HTMLElement | null;
+  if (!active || !focusable.includes(active)) {
+    focusable[0]?.focus();
+    return;
+  }
+
+  const currentRect = active.getBoundingClientRect();
+  const currentX = currentRect.left + currentRect.width / 2;
+  const currentY = currentRect.top + currentRect.height / 2;
+  let best: { element: HTMLElement; score: number } | null = null;
+
+  for (const element of focusable) {
+    if (element === active) continue;
+    const rect = element.getBoundingClientRect();
+    const deltaX = rect.left + rect.width / 2 - currentX;
+    const deltaY = rect.top + rect.height / 2 - currentY;
+    const isInDirection =
+      (key === "ArrowLeft" && deltaX < -1) ||
+      (key === "ArrowRight" && deltaX > 1) ||
+      (key === "ArrowUp" && deltaY < -1) ||
+      (key === "ArrowDown" && deltaY > 1);
+    if (!isInDirection) continue;
+
+    const primaryDistance = key === "ArrowLeft" || key === "ArrowRight" ? Math.abs(deltaX) : Math.abs(deltaY);
+    const crossDistance = key === "ArrowLeft" || key === "ArrowRight" ? Math.abs(deltaY) : Math.abs(deltaX);
+    const score = primaryDistance + crossDistance * 2;
+    if (!best || score < best.score) best = { element, score };
+  }
+
+  best?.element.focus();
+}
+
 function normalizeRemoteKeyEvents() {
+  let suppressCurrentBackKeyUp = false;
+
   const keepKeyboardFocus = () => {
     if (!document.body) return;
     if (!document.body.hasAttribute("tabindex")) {
@@ -24,6 +123,93 @@ function normalizeRemoteKeyEvents() {
     if (document.visibilityState === "visible") {
       keepKeyboardFocus();
     }
+  });
+
+  const suppressNativeBackExit = (event: KeyboardEvent) => {
+    if (!isRemoteBackEvent(event)) return;
+
+    if (event.type === "keyup") {
+      if (!suppressCurrentBackKeyUp) return;
+      suppressCurrentBackKeyUp = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    if (document.body?.dataset.nativeBackExit === "allowed") return;
+    suppressCurrentBackKeyUp = true;
+    event.preventDefault();
+  };
+
+  window.addEventListener("keydown", suppressNativeBackExit, true);
+  window.addEventListener("keyup", suppressNativeBackExit, true);
+
+  window.addEventListener("keydown", (event) => {
+    const rawKey = String(event.key || "");
+    const normalizedKey = REMOTE_KEY_ALIASES[rawKey] ||
+      REMOTE_KEYCODE_MAP[Number(event.keyCode || 0)];
+    if (!normalizedKey || normalizedKey === rawKey) return;
+
+    event.stopImmediatePropagation();
+
+    const normalizedEvent = new KeyboardEvent("keydown", {
+      key: normalizedKey,
+      code: normalizedKey === "Enter" ? "Enter" : normalizedKey,
+      bubbles: true,
+      cancelable: true,
+      repeat: event.repeat,
+      altKey: event.altKey,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey
+    }) as NormalizedRemoteKeyboardEvent;
+    Object.defineProperty(normalizedEvent, "webOsRemoteNormalized", { value: true });
+
+    const activeElement = document.activeElement;
+    const target = activeElement instanceof HTMLElement && activeElement.isConnected
+      ? activeElement
+      : window;
+    target.dispatchEvent(normalizedEvent);
+    if (normalizedEvent.defaultPrevented) {
+      event.preventDefault();
+    }
+  }, true);
+
+  window.addEventListener("keydown", (event: NormalizedRemoteKeyboardEvent) => {
+    const isArrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key);
+    const isNormalizedEnter = event.key === "Enter" && event.webOsRemoteNormalized;
+    if (!isArrow && !isNormalizedEnter) return;
+
+    window.setTimeout(() => {
+      if (event.defaultPrevented) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (active instanceof HTMLMediaElement) {
+        if (isNormalizedEnter) {
+          if (active.paused) void active.play();
+          else active.pause();
+        } else if (event.key === "ArrowLeft" && Number.isFinite(active.duration)) {
+          active.currentTime = Math.max(0, active.currentTime - 10);
+        } else if (event.key === "ArrowRight" && Number.isFinite(active.duration)) {
+          active.currentTime = Math.min(active.duration, active.currentTime + 10);
+        } else if (event.key === "ArrowUp") {
+          active.muted = false;
+          active.volume = Math.min(1, active.volume + 0.1);
+        } else if (event.key === "ArrowDown") {
+          active.volume = Math.max(0, active.volume - 0.1);
+        }
+        event.preventDefault();
+        return;
+      }
+
+      if (isArrow) {
+        moveRemoteFocus(event.key);
+        event.preventDefault();
+        return;
+      }
+
+      active?.click();
+      event.preventDefault();
+    }, 0);
   });
 
   keepKeyboardFocus();

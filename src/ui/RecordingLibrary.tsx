@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import packageJson from "../../package.json";
 
 type Props = {
   visible: boolean;
@@ -7,6 +8,7 @@ type Props = {
 };
 
 export default function RecordingLibrary({ visible, onOpenPlayback, onOpenStorage }: Props) {
+  const appVersion = String((packageJson as { version?: string }).version || "dev");
   const [masterCode, setMasterCode] = useState(() => {
     try {
       return localStorage.getItem("iptvmate_setup_master_code") || "";
@@ -131,6 +133,10 @@ export default function RecordingLibrary({ visible, onOpenPlayback, onOpenStorag
               {button.label}
             </button>
           ))}
+        </div>
+
+        <div className="recording-setup-version" aria-label="Program version">
+          Program Version: v{appVersion}
         </div>
       </div>
     </div>
