@@ -201,81 +201,25 @@ Code
 
 npm run dev
 
-🖥️ Building for Desktop (Tauri)
+🚀 Build \& Publish Targets
 
-Install Tauri prerequisites
-
-(Depends on OS — Rust, Cargo, system libs)
-
-Then:
+Recommended command to build/package all targets:
 
 Code
 
-cd desktop
+npm run build:all
 
-npm install
-
-npm run tauri dev
-
-Build release:
+Available target scripts:
 
 Code
 
-npm run tauri build
-
-Output binaries appear in:
-
-Code
-
-/desktop/src-tauri/target/release/
-
-📱 Building for Android (Capacitor)
-
-1\. Build Web Assets
-
-Code
-
-npm run build
-
-2\. Sync to Android
-
-Code
-
-npx cap sync android
-
-3\. Open Android Studio
-
-Code
-
-npx cap open android
-
-Build APK/AAB from Android Studio.
-
-📺 Building for LG WebOS
-
-Requirements
-
-LG WebOS CLI
-
-Developer mode enabled on TV
-
-TV paired with CLI
-
-Build
-
-Code
-
-npm run build
-
-cd webos
-
-ares-package .
-
-Install to TV
-
-Code
-
-ares-install com.yourapp.ip.tv\_1.0.0\_all.ipk
+npm run build          # Web production build (dist/)
+npm run webos:package  # Build + sync + package LG WebOS (.ipk)
+npm run desktop:package # Package desktop app installer (release/)
+npm run cap:sync       # Sync Capacitor native projects
+npm run cap:android    # Open Android project in Android Studio
+npm run android:build  # Android build helper script
+npm run publish:check  # Dry-run npm publish package check
 
 📄 Playlist \& EPG Setup
 
@@ -324,10 +268,8 @@ Code
 npm run dev        # Web dev server
 
 npm run build      # Production build
-
-npm run lint       # Lint code
-
-npm run format     # Prettier formatting
+npm run build:all  # Build/package all supported targets
+npm run publish:check # npm package dry-run check
 
 🛠️ Roadmap
 
