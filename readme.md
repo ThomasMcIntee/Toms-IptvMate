@@ -221,6 +221,12 @@ npm run cap:android    # Open Android project in Android Studio
 npm run android:build  # Android build helper script
 npm run publish:check  # Dry-run npm publish package check
 
+Platform prerequisites:
+
+- Android: Android Studio (for APK/AAB build/signing)
+- WebOS: LG WebOS CLI and a paired Developer Mode TV/device
+- Desktop packaging: Electron Builder OS prerequisites for your platform
+
 📄 Playlist \& EPG Setup
 
 Supported Formats
