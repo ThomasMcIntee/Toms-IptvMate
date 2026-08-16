@@ -29,7 +29,8 @@ export function PanelsHost({
   onPlaylistLoadedWithId,
   onPlaylistAdded,
   activePlaylistId,
-  onPlaylistsChanged
+  onPlaylistsChanged,
+  onExitToMainMenu
 }: {
   // This host wires side panels without owning their playback state.
   activePanel: string | null;
@@ -43,6 +44,7 @@ export function PanelsHost({
   onPlaylistAdded: (playlist: PlaylistEntry) => void;
   activePlaylistId: string;
   onPlaylistsChanged?: () => void;
+  onExitToMainMenu: () => void;
 }) {
   return (
     <>
@@ -64,7 +66,7 @@ export function PanelsHost({
         }}
       />
       <PlaylistManager
-        visible={showPlaylistManager}
+        visible={showPlaylistManager && activePanel !== "playlist"}
         onSelectContent={onSelectContent}
         onPlaylistLoadedWithId={onPlaylistLoadedWithId}
         activePlaylistId={activePlaylistId}
@@ -77,14 +79,13 @@ export function PanelsHost({
         visible={activePanel === "recordings"}
         onOpenPlayback={() => setActivePanel("recordingPlayback")}
         onOpenStorage={() => setActivePanel("recordingStorage")}
+        onExit={onExitToMainMenu}
       />
       <EPGSearch
         key={`epg-search-${visibilityVersion}`}
         visible={activePanel === "epgSearch"}
         channels={visibleTvChannels}
-        onClose={() => {
-          setActivePanel(null);
-        }}
+        onClose={onExitToMainMenu}
       />
       <TimeshiftBar />
     </>

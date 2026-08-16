@@ -16,6 +16,59 @@ let blockedRootPlaybackUntil: Record<string, number> = {};
 let rootAttemptWindowState: Record<string, { count: number; firstAt: number }> = {};
 let suppressPlayerEventsUntil = 0;
 
+export type PlaybackBufferLevel = "off" | "low" | "medium" | "high";
+
+const PLAYBACK_BUFFER_LEVEL_KEY = "iptvmate_playback_buffer_level";
+const PLAYBACK_BUFFER_PRESETS: Record<
+  PlaybackBufferLevel,
+  { bufferingGoal: number; rebufferingGoal: number }
+> = {
+  off: { bufferingGoal: 1, rebufferingGoal: 0.1 },
+  low: { bufferingGoal: 10, rebufferingGoal: 2 },
+  medium: { bufferingGoal: 30, rebufferingGoal: 5 },
+  high: { bufferingGoal: 60, rebufferingGoal: 10 }
+};
+
+function readPlaybackBufferLevel(): PlaybackBufferLevel {
+  try {
+    const stored = localStorage.getItem(PLAYBACK_BUFFER_LEVEL_KEY);
+    if (stored === "off" || stored === "low" || stored === "medium" || stored === "high") return stored;
+  } catch {
+    // Use the balanced default when storage is unavailable.
+  }
+  return "medium";
+}
+
+let playbackBufferLevel = readPlaybackBufferLevel();
+
+export function getPlaybackBufferLevel(): PlaybackBufferLevel {
+  return playbackBufferLevel;
+}
+
+export function setPlaybackBufferLevel(level: PlaybackBufferLevel): void {
+  playbackBufferLevel = level;
+
+  try {
+    localStorage.setItem(PLAYBACK_BUFFER_LEVEL_KEY, level);
+  } catch {
+    // Keep the in-memory setting when storage is unavailable.
+  }
+
+  const preset = PLAYBACK_BUFFER_PRESETS[level];
+  if (hls) {
+    hls.config.maxBufferLength = preset.bufferingGoal;
+    hls.config.maxMaxBufferLength = preset.bufferingGoal;
+  }
+  if (shakaPlayer) {
+    shakaPlayer.configure({
+      streaming: {
+        rebufferingGoal: preset.rebufferingGoal,
+        bufferingGoal: preset.bufferingGoal
+      }
+    });
+  }
+}
+
 const RAPID_RETRY_GAP_MS = 1200;
 const MAX_RAPID_RETRIES = 30;
 const RETRY_COOLDOWN_MS = 1500;
@@ -854,12 +907,13 @@ export function playUrl(
 
           shakaPlayer = new shakaLib.Player();
           await shakaPlayer.attach(videoEl);
+          const bufferPreset = PLAYBACK_BUFFER_PRESETS[playbackBufferLevel];
           shakaPlayer.configure({
             preferredAudioLanguage: "eng",
             preferredAudioChannelCount: 2,
             streaming: {
-              rebufferingGoal: 2,
-              bufferingGoal: 10
+              rebufferingGoal: bufferPreset.rebufferingGoal,
+              bufferingGoal: bufferPreset.bufferingGoal
             }
           });
 
@@ -926,6 +980,7 @@ export function playUrl(
         : null;
     const nextAudioMode =
       currentAudioMode === "standard" ? "compat" : currentAudioMode === "compat" ? "safe" : null;
+    const bufferPreset = PLAYBACK_BUFFER_PRESETS[playbackBufferLevel];
     hls = new Hls({
       enableWorker: !isLocalTranscodePlayback, // Disable worker for local transcode (avoid async append race)
       defaultAudioCodec:
@@ -943,7 +998,9 @@ export function playUrl(
       fragLoadingMaxRetry: isLocalTranscodePlayback ? 3 : 2,
       manifestLoadingRetryDelay: 1000,
       levelLoadingRetryDelay: 1000,
-      fragLoadingRetryDelay: 1000
+      fragLoadingRetryDelay: 1000,
+      maxBufferLength: bufferPreset.bufferingGoal,
+      maxMaxBufferLength: bufferPreset.bufferingGoal
     });
     let fatalHandled = false;
     let mediaRecoveryTried = false;

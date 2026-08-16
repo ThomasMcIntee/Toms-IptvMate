@@ -1,13 +1,25 @@
 import { useEffect, useState } from "react";
 import packageJson from "../../package.json";
+import {
+  getPlaybackBufferLevel,
+  setPlaybackBufferLevel,
+  type PlaybackBufferLevel
+} from "../core/playerEngine";
+import {
+  APP_LANGUAGES,
+  setAppLanguage,
+  translate,
+  useAppLanguage
+} from "../core/appLanguage";
 
 type Props = {
   visible: boolean;
   onOpenPlayback: () => void;
   onOpenStorage: () => void;
+  onExit: () => void;
 };
 
-export default function RecordingLibrary({ visible, onOpenPlayback, onOpenStorage }: Props) {
+export default function RecordingLibrary({ visible, onOpenPlayback, onOpenStorage, onExit }: Props) {
   const appVersion = String((packageJson as { version?: string }).version || "dev");
   const [masterCode, setMasterCode] = useState(() => {
     try {
@@ -44,6 +56,9 @@ export default function RecordingLibrary({ visible, onOpenPlayback, onOpenStorag
       return false;
     }
   });
+  const [bufferLevel, setBufferLevel] = useState<PlaybackBufferLevel>(() => getPlaybackBufferLevel());
+  const language = useAppLanguage();
+  const t = (key: Parameters<typeof translate>[0]) => translate(key, language);
 
   useEffect(() => {
     document.body.classList.toggle("theme-light", lightMode);
@@ -92,36 +107,63 @@ export default function RecordingLibrary({ visible, onOpenPlayback, onOpenStorag
     apply(value);
   }
 
+  function cycleBufferLevel() {
+    const nextLevel: PlaybackBufferLevel =
+      bufferLevel === "off"
+        ? "low"
+        : bufferLevel === "low"
+        ? "medium"
+        : bufferLevel === "medium"
+        ? "high"
+        : "off";
+    setPlaybackBufferLevel(nextLevel);
+    setBufferLevel(nextLevel);
+  }
+
+  function cycleLanguage() {
+    const currentIndex = APP_LANGUAGES.findIndex((option) => option.code === language);
+    const nextLanguage = APP_LANGUAGES[(currentIndex + 1) % APP_LANGUAGES.length];
+    setAppLanguage(nextLanguage.code);
+  }
+
   if (!visible) return null;
 
   const setupButtons = [
     {
-      label: loginRequired ? "Login Required" : "Enable Login",
+      label: loginRequired ? t("loginRequired") : t("enableLogin"),
       onClick: () => setLoginRequired((current) => !current)
     },
     {
-      label: `Master Code${masterCode ? " (Set)" : ""}`,
+      label: `${t("masterCode")}${masterCode ? ` (${t("set")})` : ""}`,
       onClick: () => setFourCharCode("Master Code", masterCode, setMasterCode)
     },
     {
-      label: `Adult Code${adultCode ? " (Set)" : ""}`,
+      label: `${t("adultCode")}${adultCode ? ` (${t("set")})` : ""}`,
       onClick: () => setFourCharCode("Adult Code", adultCode, setAdultCode)
     },
     {
-      label: `Child Code${childCode ? " (Set)" : ""}`,
+      label: `${t("childCode")}${childCode ? ` (${t("set")})` : ""}`,
       onClick: () => setFourCharCode("Child Code", childCode, setChildCode)
     },
     {
-      label: lightMode ? "Dark Mode" : "Light Mode",
+      label: lightMode ? t("darkMode") : t("lightMode"),
       onClick: () => setLightMode((current) => !current)
     },
-    { label: "Buffer", onClick: () => {} }
+    {
+      label: `${t("buffer")}: ${bufferLevel === "off" ? t("off") : bufferLevel === "low" ? `${t("low")} (10s)` : bufferLevel === "medium" ? `${t("medium")} (30s)` : `${t("high")} (60s)`}`,
+      onClick: cycleBufferLevel
+    },
+    {
+      label: `${t("language")}: ${APP_LANGUAGES.find((option) => option.code === language)?.label || "English"}`,
+      onClick: cycleLanguage
+    },
+    { label: t("exitSetup"), onClick: onExit }
   ];
 
   return (
     <div className="recording-setup-overlay">
       <div className="side-panel recording-setup-panel">
-        <h2>Recording Setup</h2>
+        <h2>{t("setupTitle")}</h2>
 
         <div className="recording-setup-grid">
           {setupButtons.map((button) => (
@@ -135,8 +177,8 @@ export default function RecordingLibrary({ visible, onOpenPlayback, onOpenStorag
           ))}
         </div>
 
-        <div className="recording-setup-version" aria-label="Program version">
-          Program Version: v{appVersion}
+        <div className="recording-setup-version" aria-label={t("programVersion")}>
+          {t("programVersion")}: v{appVersion}
         </div>
       </div>
     </div>

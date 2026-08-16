@@ -1347,9 +1347,16 @@ export function App() {
         e.preventDefault();
         e.stopPropagation();
 
-        // If a panel is open, close it. Otherwise show the main menu.
+        // Return nested screens to their parent; top-level panels return to the main menu.
         if (activePanel) {
-          setActivePanel(null);
+          if (activePanel === "recordingPlayback" || activePanel === "recordingStorage") {
+            setActivePanel("recordings");
+          } else if (activePanel === "playlist" && contentPage === "playlistManager") {
+            setActivePanel(null);
+          } else {
+            setActivePanel(null);
+            setShowOpeningScreen(true);
+          }
         } else {
           if (currentChannel && contentPage === "live") {
             exitLivePlaybackToBrowser();
@@ -2805,6 +2812,10 @@ export function App() {
           activePlaylistId={activePlaylistId}
           onPlaylistsChanged={() => {
             setCategoryRefreshTick(tick => tick + 1);
+          }}
+          onExitToMainMenu={() => {
+            setActivePanel(null);
+            setShowOpeningScreen(true);
           }}
         />
       )}

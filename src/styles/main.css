@@ -852,9 +852,29 @@ input {
   margin-bottom: 14px;
 }
 
+.playlist-card-loaded {
+  border: 2px solid #2ecc71;
+}
+
+.playlist-loaded-summary {
+  margin: 0 0 8px;
+}
+
+.playlist-loaded-badge {
+  align-self: center;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #2ecc71;
+  color: #07150d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .playlist-header {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 6px;
 }
 

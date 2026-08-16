@@ -786,9 +786,15 @@ export default function PlaylistManager({
     }
   }
 
+  const loadedPlaylist = playlists.find((playlist) => playlist.id === activePlaylistId);
+
   return (
     <div className="side-panel">
       <h2>Playlist Manager</h2>
+
+      <p className="playlist-loaded-summary" aria-live="polite">
+        Loaded playlist: <strong>{loadedPlaylist?.name || "None"}</strong>
+      </p>
 
       <p className="playlist-diagnostics-text" aria-live="polite">
         Parsed: {storageDiagnostics.parsed} | raw main: {storageDiagnostics.primaryRawCount} | raw session: {storageDiagnostics.sessionRawCount} | raw legacy: {storageDiagnostics.legacyRawCount} | playlist keys: {storageDiagnostics.storageKeysWithPlaylist}
@@ -844,8 +850,14 @@ export default function PlaylistManager({
       )}
 
       {playlists.map((p) => (
-        <div key={p.id} className={`playlist-card${selectedPlaylistId === p.id ? " playlist-role-active" : ""}`}>
-          <strong>{p.name}</strong>
+        <div
+          key={p.id}
+          className={`playlist-card${selectedPlaylistId === p.id ? " playlist-role-active" : ""}${activePlaylistId === p.id ? " playlist-card-loaded" : ""}`}
+        >
+          <div className="playlist-header">
+            <strong>{p.name}</strong>
+            {activePlaylistId === p.id && <span className="playlist-loaded-badge">Loaded</span>}
+          </div>
           <div className="playlist-item-type">
             Type: {p.type.toUpperCase()}
           </div>

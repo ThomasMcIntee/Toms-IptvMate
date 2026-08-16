@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { translate, useAppLanguage, type AppTranslationKey } from "../core/appLanguage";
 
 const MAIN_MENU_KEYCODE_MAP: Record<number, string> = {
   37: "ArrowLeft",
@@ -39,12 +40,12 @@ type Props = {
   onOpenPanel: (panel: string) => void;
 };
 
-const menuItems = [
-  { label: "Add Playlist", panel: "playlist" },
-  { label: "Playlist Manager", panel: "playlistManager" },
-  { label: "TV Guide Search", panel: "epgSearch" },
-  { label: "Setup", panel: "recordings" },
-  { label: "Logout", panel: "logout" }
+const menuItems: Array<{ labelKey: AppTranslationKey; panel: string }> = [
+  { labelKey: "addPlaylist", panel: "playlist" },
+  { labelKey: "playlistManager", panel: "playlistManager" },
+  { labelKey: "tvGuideSearch", panel: "epgSearch" },
+  { labelKey: "setup", panel: "recordings" },
+  { labelKey: "logout", panel: "logout" }
 ];
 
 function formatCount(count: number) {
@@ -65,6 +66,8 @@ export default function MainMenuScreen({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const lastBackHandledAtRef = useRef(0);
   const [hydrationWaitExpired, setHydrationWaitExpired] = useState(false);
+  const language = useAppLanguage();
+  const t = (key: AppTranslationKey) => translate(key, language);
   const hasLoadedContent = liveCount > 0 || movieCount > 0 || seriesCount > 0;
   const waitingForPlaylists =
     playlistsHydrationPending &&
@@ -176,44 +179,44 @@ export default function MainMenuScreen({
     <div ref={containerRef} className="opening-screen" role="dialog" aria-modal="true" aria-label="Main menu">
       <div className="opening-glow" />
       <div className="opening-card">
-        <div className="opening-badge">Welcome</div>
+        <div className="opening-badge">{t("welcome")}</div>
         <h1 className="opening-title">Toms IPTVmate</h1>
-        <p className="opening-subtitle">Choose an action to start your session</p>
+        <p className="opening-subtitle">{t("chooseAction")}</p>
 
         <div className="opening-actions">
           <button className="opening-btn opening-btn-primary" onClick={onStartLive} disabled={waitingForPlaylists}>
             {waitingForPlaylists
-              ? "Loading Saved Playlists..."
+              ? t("loadingPlaylists")
               : hasPlaylists
-                ? `Live TV${liveCount > 0 ? ` (${formatCount(liveCount)} live${totalCount > liveCount ? ` / ${formatCount(totalCount)} total` : ""})` : ""}`
-                : "Add Your First Playlist"}
+                ? `${t("liveTv")}${liveCount > 0 ? ` (${formatCount(liveCount)} ${t("live")}${totalCount > liveCount ? ` / ${formatCount(totalCount)} ${t("total")}` : ""})` : ""}`
+                : t("addFirstPlaylist")}
           </button>
         </div>
 
         <div className="opening-quick-actions" aria-label="Content shortcuts">
           <button className="opening-btn opening-btn-secondary opening-btn-quick" onClick={() => onOpenPanel("vod")}>
-            Movies{movieCount > 0 ? ` (${formatCount(movieCount)})` : ""}
+            {t("movies")}{movieCount > 0 ? ` (${formatCount(movieCount)})` : ""}
           </button>
           <button className="opening-btn opening-btn-secondary opening-btn-quick" onClick={() => onOpenPanel("series")}>
-            Series{seriesCount > 0 ? ` (${formatCount(seriesCount)})` : ""}
+            {t("series")}{seriesCount > 0 ? ` (${formatCount(seriesCount)})` : ""}
           </button>
         </div>
 
         {hasLoadedContent && (
           <div className="opening-hint">
-            Loaded: {formatCount(totalCount)} total ({formatCount(liveCount)} live, {formatCount(movieCount)} movies, {formatCount(seriesCount)} series).
+            {t("loaded")}: {formatCount(totalCount)} {t("total")} ({formatCount(liveCount)} {t("live")}, {formatCount(movieCount)} {t("movies").toLowerCase()}, {formatCount(seriesCount)} {t("series").toLowerCase()}).
           </div>
         )}
 
         {waitingForPlaylists && (
           <div className="opening-hint">
-            Checking browser storage for saved playlists.
+            {t("checkingStorage")}
           </div>
         )}
 
         {!hasPlaylists && !waitingForPlaylists && (
           <div className="opening-warning">
-            No playlists found. Add one first to load channels.
+            {t("noPlaylists")}
           </div>
         )}
 
@@ -224,7 +227,7 @@ export default function MainMenuScreen({
               className="opening-btn opening-btn-secondary"
               onClick={() => onOpenPanel(item.panel)}
             >
-              {item.label}
+              {t(item.labelKey)}
             </button>
           ))}
         </div>

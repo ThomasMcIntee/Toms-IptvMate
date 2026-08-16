@@ -8,7 +8,6 @@ export function initNavigation(setPanel: (p: string | null) => void) {
     if (e.key === "n" || e.key === "N") setPanel("notifications");
     if (e.key === "h" || e.key === "H") setPanel("smarthome");
     if (e.key === "o" || e.key === "O") setPanel("offline");
-    if (e.key === "Backspace") setPanel(null);   
     if (e.key === "p" || e.key === "P") setPanel("playlist");
     if (e.key === "f" || e.key === "F") setPanel("epgSearch");
     if (e.key === "m" || e.key === "M") setPanel("playlistManager");

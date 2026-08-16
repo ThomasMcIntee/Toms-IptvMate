@@ -1,0 +1,4 @@
+<resources>
+
+    <style name="Theme.TomsIPTVMate" parent="@style/Theme.Leanback" />
+</resources>
