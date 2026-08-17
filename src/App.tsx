@@ -6,6 +6,7 @@ import { EPGGrid } from "./ui/EPGGrid";
 import { PanelsHost } from "./ui/PanelsHost";
 import { useProfile } from "./profiles/ProfileContext";
 import { initNavigation } from "./core/navigation";
+import { normalizeRemoteNavKey } from "./core/remoteKeys";
 import { initPlayerEngine, playUrl, stopPlayback } from "./core/playerEngine";
 import { GroupList } from "./ui/GroupList";
 import { sortChannelsByName, type ItemSortDirection } from "./ui/groupSorting";
@@ -1121,6 +1122,13 @@ export function App() {
       startupCacheHydrationCompletedRef.current = true;
       const storedPlaylistId = readStoredItem(SHARED_PLAYLIST_ID_KEY);
       if (storedPlaylistId) setActivePlaylistId(storedPlaylistId);
+      if (isWebOsRuntime()) {
+        // TV remotes navigate by arrow keys, which only the opening menu
+        // handles. Stay on the menu with content preloaded; the live page is
+        // pointer-driven and would strand the remote with nothing focused.
+        setActivePanel(null);
+        return;
+      }
       setContentPage("live");
       setContentMode("tv");
       setActiveGroup(pickDefaultLiveGroup(getAllChannels()));
@@ -1146,11 +1154,20 @@ export function App() {
       function applyPreparedContent(channelList: any[], playlistId: string, visibilityRole?: "adult" | "child") {
         debugLog(`startup: applying ${channelList.length} channels`);
         if (playlistId) setActivePlaylistId(playlistId);
-        setContentPage("live");
-        setContentMode("tv");
-        setActiveGroup(pickDefaultLiveGroup(channelList));
-        setActivePanel(null);
-        setShowOpeningScreen(false);
+        if (isWebOsRuntime()) {
+          // TV remotes navigate by arrow keys, which only the opening menu
+          // handles. Prepare content state but stay on the menu; jumping to
+          // the pointer-driven live page strands the remote with no focus.
+          setContentMode("tv");
+          setActiveGroup(pickDefaultLiveGroup(channelList));
+          setActivePanel(null);
+        } else {
+          setContentPage("live");
+          setContentMode("tv");
+          setActiveGroup(pickDefaultLiveGroup(channelList));
+          setActivePanel(null);
+          setShowOpeningScreen(false);
+        }
 
         // Defer visibility role application to after initial render (avoids blocking on large playlists)
         if (visibilityRole) {
@@ -1181,6 +1198,71 @@ export function App() {
       startupCacheHydrationCompletedRef.current = true;
       setActivePanel(null);
       setShowOpeningScreen(true);
+
+      // On webOS the TV may have purged every cache layer while the playlists
+      // survived (DB8). Fetch live channels in the background so content is
+      // ready by the time the user leaves the menu — "loads by itself".
+      if (isWebOsRuntime()) {
+        const savedPlaylists = loadPlaylists();
+        if (savedPlaylists.length > 0) {
+          debugLog('startup: auto-fetching live channels from saved playlist');
+          // Register on the shared auto-load token so any manual load (menu,
+          // playlist manager) supersedes this background fetch immediately.
+          const requestToken = autoLoadTokenRef.current + 1;
+          autoLoadTokenRef.current = requestToken;
+          const preferredId = (readStoredItem(SHARED_PLAYLIST_ID_KEY) || savedPlaylists[0]?.id || "").trim();
+          const orderedPlaylists = [
+            ...savedPlaylists.filter((playlist) => String(playlist.id) === preferredId),
+            ...savedPlaylists.filter((playlist) => String(playlist.id) !== preferredId)
+          ];
+
+          for (const playlist of orderedPlaylists) {
+            if (cancelled || autoLoadTokenRef.current !== requestToken) return;
+            try {
+              const liveChannels = await loadChannelsForPlaylist(playlist, "live");
+              if (cancelled || autoLoadTokenRef.current !== requestToken) return;
+              if (!Array.isArray(liveChannels) || liveChannels.length === 0) continue;
+
+              setActivePlaylistId(playlist.id);
+              writeStoredItem(SHARED_PLAYLIST_ID_KEY, playlist.id);
+              setChannels(liveChannels as any[], "startup-auto-fetch");
+              setChannelUpdateTick((tick) => tick + 1);
+              setCategoryRefreshTick((tick) => tick + 1);
+              debugLog(`startup: auto-fetched ${liveChannels.length} live channels`);
+
+              // Continue with the VOD catalogs in the background so Movies and
+              // Series open instantly instead of fetching on first entry.
+              // Delayed to let the UI settle; aborts if a manual load starts.
+              window.setTimeout(() => {
+                void (async () => {
+                  for (const scope of ["movies", "series"] as const) {
+                    if (cancelled || autoLoadTokenRef.current !== requestToken) return;
+                    try {
+                      const scopedChannels = await loadChannelsForPlaylist(playlist, scope);
+                      if (cancelled || autoLoadTokenRef.current !== requestToken) return;
+                      if (!Array.isArray(scopedChannels) || scopedChannels.length === 0) continue;
+
+                      const byId = new Map<string, any>();
+                      getAllChannels().forEach((channel) => byId.set(String(channel?.id || ""), channel));
+                      scopedChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
+                      setChannels(Array.from(byId.values()) as any[], "startup-auto-fetch");
+                      setChannelUpdateTick((tick) => tick + 1);
+                      setCategoryRefreshTick((tick) => tick + 1);
+                      debugLog(`startup: prefetched ${scopedChannels.length} ${scope}`);
+                    } catch {
+                      // Skip this scope; the lazy loader still covers it on entry.
+                    }
+                  }
+                })();
+              }, 4000);
+              return;
+            } catch {
+              // Try the next saved playlist.
+            }
+          }
+          debugLog('startup: auto-fetch got no live channels');
+        }
+      }
     })().finally(() => {
       if (!cancelled) {
         startupAutoLoadInFlightRef.current = false;
@@ -1509,28 +1591,54 @@ export function App() {
   useEffect(() => {
     if (!isContentIconsView) return;
 
+    // Overlay visibility checkbox on a poster tile (playlist manager grids).
+    const tileCheckboxFor = (btn: HTMLElement | null): HTMLInputElement | null => {
+      const cb = btn?.closest(".channel-icon-wrap")?.querySelector<HTMLInputElement>('.channel-icon-toggle input[type="checkbox"]');
+      return cb && !cb.disabled ? cb : null;
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTextEntryTarget(e.target)) return;
-      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
 
       const activeEl = document.activeElement as HTMLElement | null;
       if (!activeEl) return;
+
+      const key = normalizeRemoteNavKey(e);
+      const isOverlayCheckbox =
+        activeEl instanceof HTMLInputElement &&
+        activeEl.type === "checkbox" &&
+        !!activeEl.closest(".channel-icon-toggle");
+
+      // Remote OK sends Enter; native checkboxes only toggle on Space.
+      if (key === "Enter") {
+        if (isOverlayCheckbox) {
+          e.preventDefault();
+          activeEl.click();
+        }
+        return;
+      }
+
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return;
 
       const inIconGrid = !!activeEl.closest(".channel-list-icons");
       const inModeButtons = !!activeEl.closest(".playlist-manager-actions");
       if (!inIconGrid && !inModeButtons) return;
 
-      const movieButtons = inIconGrid || inModeButtons
-        ? Array.from(document.querySelectorAll<HTMLButtonElement>(".channel-list-icons .channel-icon-btn"))
-        : [];
-      const modeButtons = inModeButtons || (inIconGrid && e.key === "ArrowUp")
+      const movieButtons = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".channel-list-icons .channel-icon-btn")
+      );
+      const modeButtons = inModeButtons || (inIconGrid && key === "ArrowUp")
         ? Array.from(document.querySelectorAll<HTMLButtonElement>(".playlist-manager-actions button"))
         : [];
 
       if (movieButtons.length === 0) return;
 
-      const movieIndex = activeEl ? movieButtons.indexOf(activeEl as HTMLButtonElement) : -1;
-      const modeIndex = activeEl ? modeButtons.indexOf(activeEl as HTMLButtonElement) : -1;
+      // An overlay checkbox occupies the same grid position as its poster.
+      const tileButton = isOverlayCheckbox
+        ? (activeEl.closest(".channel-icon-wrap")?.querySelector<HTMLButtonElement>(".channel-icon-btn") ?? null)
+        : (activeEl as HTMLButtonElement);
+      const movieIndex = tileButton ? movieButtons.indexOf(tileButton) : -1;
+      const modeIndex = modeButtons.indexOf(activeEl as HTMLButtonElement);
 
       const firstButtonRect = movieButtons[0]?.getBoundingClientRect();
       const listRect = movieButtons[0]?.closest(".channel-list")?.getBoundingClientRect();
@@ -1538,53 +1646,109 @@ export function App() {
         ? Math.max(1, Math.floor((listRect.width + 10) / (firstButtonRect.width + 10)))
         : 1;
 
+      // Land on a tile: prefer its poster button; hidden tiles have disabled
+      // posters in the playlist manager, so fall back to their checkbox.
+      const focusTile = (index: number): void => {
+        const btn = movieButtons[index];
+        if (!btn) return;
+        const stop = !btn.disabled ? btn : tileCheckboxFor(btn);
+        stop?.focus();
+      };
+      // Stay in the checkbox layer while moving sideways for bulk toggling.
+      const focusTileCheckbox = (index: number): void => {
+        const btn = movieButtons[index];
+        if (!btn) return;
+        const stop = tileCheckboxFor(btn) || (!btn.disabled ? btn : null);
+        stop?.focus();
+      };
+
       if (modeIndex >= 0) {
-        if (e.key === "ArrowRight" && modeIndex < modeButtons.length - 1) {
+        if (key === "ArrowRight" && modeIndex < modeButtons.length - 1) {
           e.preventDefault();
           modeButtons[modeIndex + 1]?.focus();
           return;
         }
-        if (e.key === "ArrowLeft" && modeIndex > 0) {
+        if (key === "ArrowLeft" && modeIndex > 0) {
           e.preventDefault();
           modeButtons[modeIndex - 1]?.focus();
           return;
         }
-        if (e.key === "ArrowDown") {
+        if (key === "ArrowDown") {
           e.preventDefault();
-          movieButtons[0]?.focus();
+          focusTile(0);
           return;
         }
       }
 
-      if (movieIndex >= 0) {
-        if (e.key === "ArrowUp") {
+      if (movieIndex >= 0 && isOverlayCheckbox) {
+        if (key === "ArrowDown") {
+          e.preventDefault();
+          // Back to this tile's poster; if it's hidden/disabled, next row down.
+          if (tileButton && !tileButton.disabled) tileButton.focus();
+          else focusTile(Math.min(movieButtons.length - 1, movieIndex + columns));
+          return;
+        }
+        if (key === "ArrowUp") {
           e.preventDefault();
           if (movieIndex < columns) {
             (modeButtons[1] || modeButtons[0])?.focus();
             return;
           }
-          movieButtons[Math.max(0, movieIndex - columns)]?.focus();
+          focusTile(movieIndex - columns);
           return;
         }
-
-        if (e.key === "ArrowDown") {
-          e.preventDefault();
-          movieButtons[Math.min(movieButtons.length - 1, movieIndex + columns)]?.focus();
-          return;
-        }
-
-        if (e.key === "ArrowLeft") {
+        if (key === "ArrowLeft") {
           if (movieIndex > 0) {
             e.preventDefault();
-            movieButtons[movieIndex - 1]?.focus();
+            focusTileCheckbox(movieIndex - 1);
+          }
+          return;
+        }
+        if (key === "ArrowRight") {
+          if (movieIndex < movieButtons.length - 1) {
+            e.preventDefault();
+            focusTileCheckbox(movieIndex + 1);
+          }
+          return;
+        }
+        return;
+      }
+
+      if (movieIndex >= 0) {
+        if (key === "ArrowUp") {
+          e.preventDefault();
+          // Overlay checkbox first (playlist manager), then the row above.
+          const cb = tileCheckboxFor(tileButton);
+          if (cb) {
+            cb.focus();
+            return;
+          }
+          if (movieIndex < columns) {
+            (modeButtons[1] || modeButtons[0])?.focus();
+            return;
+          }
+          focusTile(movieIndex - columns);
+          return;
+        }
+
+        if (key === "ArrowDown") {
+          e.preventDefault();
+          focusTile(Math.min(movieButtons.length - 1, movieIndex + columns));
+          return;
+        }
+
+        if (key === "ArrowLeft") {
+          if (movieIndex > 0) {
+            e.preventDefault();
+            focusTile(movieIndex - 1);
           }
           return;
         }
 
-        if (e.key === "ArrowRight") {
+        if (key === "ArrowRight") {
           if (movieIndex < movieButtons.length - 1) {
             e.preventDefault();
-            movieButtons[movieIndex + 1]?.focus();
+            focusTile(movieIndex + 1);
           }
         }
       }
@@ -1593,6 +1757,155 @@ export function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isContentIconsView, filteredChannels.length]);
+
+  useEffect(() => {
+    // Remote arrow-key navigation for the list views (live TV page and
+    // playlist manager in TV mode). These screens were pointer-only, which
+    // strands TV remotes: arrows move focus through the group column, the
+    // channel column, and per-row visibility checkboxes.
+    const remoteListNavActive =
+      !showOpeningScreen &&
+      activePanel === null &&
+      (contentPage === "live" || (contentPage === "playlistManager" && contentMode === "tv"));
+    if (!remoteListNavActive) return;
+
+    const enabledButton = (row: HTMLElement | null): HTMLButtonElement | null => {
+      if (!row) return null;
+      if (row instanceof HTMLButtonElement) return row.disabled ? null : row;
+      const btn = row.querySelector<HTMLButtonElement>("button");
+      return btn && !btn.disabled ? btn : null;
+    };
+
+    const enabledCheckbox = (row: HTMLElement | null): HTMLInputElement | null => {
+      if (!row || row instanceof HTMLButtonElement) return null;
+      const cb = row.querySelector<HTMLInputElement>('input[type="checkbox"]');
+      return cb && !cb.disabled ? cb : null;
+    };
+
+    const rowStop = (row: HTMLElement | null): HTMLElement | null =>
+      enabledButton(row) || enabledCheckbox(row);
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isTextEntryTarget(e.target)) return;
+
+      const active = document.activeElement as HTMLElement | null;
+      const key = normalizeRemoteNavKey(e);
+
+      // Remote OK sends Enter; native checkboxes only toggle on Space.
+      if (key === "Enter") {
+        if (active instanceof HTMLInputElement && active.type === "checkbox") {
+          e.preventDefault();
+          active.click();
+        }
+        return;
+      }
+
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return;
+
+      const groupRows = Array.from(document.querySelectorAll<HTMLElement>(".group-list .group-item"));
+      const channelRows = Array.from(document.querySelectorAll<HTMLElement>(".channel-list .channel-item"))
+        .filter((row) => !row.classList.contains("channel-header-item"));
+      const toolbarButtons = Array.from(
+        document.querySelectorAll<HTMLElement>(".group-list .group-list-bulk-btn")
+      );
+      const loadMoreBtn = document.querySelector<HTMLElement>(".channel-list .channel-load-more-btn");
+      if (groupRows.length === 0 && channelRows.length === 0) return;
+
+      const isCheckbox = active instanceof HTMLInputElement && active.type === "checkbox";
+      const findRowIndex = (rows: HTMLElement[]) =>
+        rows.findIndex((row) => row === active || (!!active && row.contains(active)));
+
+      const toolbarIndex = active ? toolbarButtons.indexOf(active) : -1;
+      const groupIndex = findRowIndex(groupRows);
+      const channelIndex = findRowIndex(channelRows);
+      const onLoadMore = !!active && active === loadMoreBtn;
+
+      const currentGroupStop = () =>
+        rowStop(document.querySelector<HTMLElement>(".group-list .group-item.active")) ||
+        rowStop(groupRows[0] || null);
+
+      // Keep column identity while moving vertically: checkbox stays in the
+      // checkbox column, button stays in the button column.
+      const verticalStop = (row: HTMLElement | null): HTMLElement | null => {
+        if (!row) return null;
+        if (isCheckbox) return enabledCheckbox(row) || enabledButton(row);
+        return enabledButton(row) || enabledCheckbox(row);
+      };
+
+      const moveTo = (el: HTMLElement | null) => {
+        e.preventDefault();
+        if (el) el.focus();
+      };
+
+      // Focus is outside the lists: capture only from inert targets (body,
+      // video surface), never steal from other focused buttons (EPG, player).
+      if (toolbarIndex < 0 && groupIndex < 0 && channelIndex < 0 && !onLoadMore) {
+        const inert =
+          !active ||
+          active === document.body ||
+          active === document.documentElement ||
+          active instanceof HTMLMediaElement;
+        if (!inert) return;
+        moveTo(currentGroupStop() || verticalStop(channelRows[0] || null));
+        return;
+      }
+
+      if (toolbarIndex >= 0) {
+        if (key === "ArrowLeft") moveTo(toolbarButtons[toolbarIndex - 1] || null);
+        else if (key === "ArrowRight") moveTo(toolbarButtons[toolbarIndex + 1] || null);
+        else if (key === "ArrowDown") moveTo(currentGroupStop());
+        else e.preventDefault();
+        return;
+      }
+
+      if (groupIndex >= 0) {
+        const row = groupRows[groupIndex];
+        if (key === "ArrowUp") {
+          if (groupIndex === 0) moveTo(toolbarButtons[0] || null);
+          else moveTo(verticalStop(groupRows[groupIndex - 1]));
+        } else if (key === "ArrowDown") {
+          moveTo(verticalStop(groupRows[groupIndex + 1] || null));
+        } else if (key === "ArrowLeft") {
+          // Row button -> its visibility checkbox (playlist manager).
+          if (!isCheckbox) moveTo(enabledCheckbox(row) || null);
+          else e.preventDefault();
+        } else {
+          // Right: checkbox -> row button, button -> channel column.
+          if (isCheckbox) moveTo(enabledButton(row));
+          else moveTo(verticalStop(channelRows[0] || null) || loadMoreBtn);
+        }
+        return;
+      }
+
+      if (onLoadMore) {
+        if (key === "ArrowUp") moveTo(verticalStop(channelRows[channelRows.length - 1] || null));
+        else if (key === "ArrowLeft") moveTo(currentGroupStop());
+        else e.preventDefault();
+        return;
+      }
+
+      if (channelIndex >= 0) {
+        const row = channelRows[channelIndex];
+        if (key === "ArrowUp") {
+          moveTo(verticalStop(channelRows[channelIndex - 1] || null));
+        } else if (key === "ArrowDown") {
+          if (channelIndex === channelRows.length - 1) moveTo(loadMoreBtn);
+          else moveTo(verticalStop(channelRows[channelIndex + 1] || null));
+        } else if (key === "ArrowLeft") {
+          // Row button -> its checkbox first (playlist manager), then groups.
+          if (!isCheckbox && enabledCheckbox(row)) moveTo(enabledCheckbox(row));
+          else moveTo(currentGroupStop());
+        } else {
+          // Right: checkbox -> row button; button -> stay put.
+          if (isCheckbox) moveTo(enabledButton(row));
+          else e.preventDefault();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showOpeningScreen, activePanel, contentPage, contentMode]);
 
   function normalizePlayableChannelUrl(ch: any): string {
     const rawUrl = String(ch?.url || "");
@@ -1986,12 +2299,6 @@ export function App() {
     const modeChannels = latestChannels.filter((channel) => matchesContentMode(channel, content));
 
     if (modeChannels.length === 0) {
-      setLoginError(`No saved ${content} entries are available. Open Playlist Manager and choose Reload.`);
-      setContentPage("playlistManager");
-      setActivePanel(null);
-      setShowOpeningScreen(false);
-      return;
-
       // No channels for this mode yet. If we have playlists, auto-load the first
       // one (and force a content-mode preference for the user's choice) instead
       // of dropping a confusing "no channels" alert.

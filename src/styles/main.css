@@ -1062,8 +1062,17 @@ body.theme-light .playlist-edit-form label {
 }
 
 .list-toggle-row input[type="checkbox"] {
-  width: auto;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
   margin: 0;
+  cursor: pointer;
+  accent-color: #7ec5ff;
+}
+
+.list-toggle-row input[type="checkbox"]:focus {
+  outline: 3px solid #7ec5ff;
+  outline-offset: 2px;
 }
 
 .group-select-btn {
@@ -1081,6 +1090,12 @@ body.theme-light .playlist-edit-form label {
   text-align: left;
   padding: 0;
   cursor: pointer;
+}
+
+.group-select-btn:focus {
+  outline: 2px solid #7ec5ff;
+  outline-offset: 2px;
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .group-item-count {
@@ -1107,6 +1122,12 @@ body.theme-light .playlist-edit-form label {
 .channel-select-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.channel-select-btn:focus {
+  outline: 2px solid #7ec5ff;
+  outline-offset: 2px;
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .channel-list-icons {
@@ -1204,12 +1225,22 @@ body.theme-light .playlist-edit-form label {
   z-index: 2;
   background: rgba(0, 0, 0, 0.55);
   border-radius: 6px;
-  padding: 2px 4px;
+  padding: 4px 6px;
 }
 
 .channel-icon-toggle input[type="checkbox"] {
-  width: auto;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
   margin: 0;
+  cursor: pointer;
+  accent-color: #7ec5ff;
+  display: block;
+}
+
+.channel-icon-toggle input[type="checkbox"]:focus {
+  outline: 3px solid #7ec5ff;
+  outline-offset: 2px;
 }
 
 .channel-icon-favorite {
@@ -2297,10 +2328,14 @@ body.theme-light .recording-setup-btn {
   border-radius: 50%;
   background: radial-gradient(circle, rgba(41, 151, 255, 0.35), transparent 65%);
   filter: blur(18px);
+  /* Decorative only. On webOS Chromium the blur filter can hoist this above
+     the menu card in stacking order, silently swallowing pointer clicks. */
+  pointer-events: none;
 }
 
 .opening-card {
   position: relative;
+  z-index: 1;
   width: min(90vw, 760px);
   background: rgba(6, 16, 33, 0.86);
   border: 1px solid rgba(160, 210, 255, 0.28);

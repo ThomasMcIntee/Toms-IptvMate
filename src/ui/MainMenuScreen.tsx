@@ -122,6 +122,37 @@ export default function MainMenuScreen({
     return () => window.clearTimeout(timer);
   }, [visible]);
 
+  // Some webOS pointer firmwares deliver mousedown/mouseup on these buttons
+  // but drop the synthesized click, leaving the menu unclickable by Magic
+  // Remote. Fire the action from mouseup when no click follows shortly after.
+  useEffect(() => {
+    if (!visible) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    let lastClickAt = 0;
+    const onClickCapture = () => {
+      lastClickAt = Date.now();
+    };
+    const onMouseUp = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      const btn = target?.closest?.(".opening-btn") as HTMLButtonElement | null;
+      if (!btn || btn.disabled) return;
+      window.setTimeout(() => {
+        if (Date.now() - lastClickAt > 250) {
+          btn.click();
+        }
+      }, 260);
+    };
+
+    container.addEventListener("click", onClickCapture, true);
+    container.addEventListener("mouseup", onMouseUp);
+    return () => {
+      container.removeEventListener("click", onClickCapture, true);
+      container.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [visible]);
+
   useEffect(() => {
     if (!visible) {
       setHydrationWaitExpired(false);

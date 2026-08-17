@@ -132,58 +132,160 @@ function normalizeRemoteKeyEvents() {
   keepKeyboardFocus();
 }
 
-// Debug overlay for webOS TV troubleshooting
-function createDebugOverlay() {
-  const overlay = document.createElement('div');
-  overlay.id = 'webos-debug-overlay';
-  overlay.style.cssText = 'position:fixed;top:10px;left:10px;background:rgba(0,0,0,0.8);color:#0f0;font-family:monospace;font-size:14px;padding:10px;z-index:999999;max-width:80%;max-height:200px;overflow:auto;pointer-events:none;';
-  document.body.appendChild(overlay);
-  
-  const log = (msg: string) => {
-    const line = document.createElement('div');
-    line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-    overlay.appendChild(line);
-    if (overlay.children.length > 25) overlay.removeChild(overlay.firstChild!);
-    console.log('[webos-debug]', msg);
-  };
-  
-  log('Debug overlay initialized');
-  log(`UA: ${navigator.userAgent.substring(0, 60)}...`);
-  log(`webOS detected: ${isWebOsRuntime()}`);
-  log(`localStorage: ${typeof localStorage !== 'undefined'}`);
-  log(`indexedDB: ${typeof indexedDB !== 'undefined'}`);
-  
-  // Test localStorage directly
-  try {
-    const testKey = '__webos_test__';
-    localStorage.setItem(testKey, 'ok');
-    const testVal = localStorage.getItem(testKey);
-    localStorage.removeItem(testKey);
-    log(`localStorage test: ${testVal === 'ok' ? 'OK' : 'FAIL'}`);
-  } catch (e) {
-    log(`localStorage test: ERROR ${e}`);
-  }
-  
-  // Log key events
-  window.addEventListener('keydown', (e) => {
-    log(`KEY: ${e.key} (code=${e.keyCode})`);
-  }, true);
-  
-  // Make log function globally available
-  (window as any).webosDebugLog = log;
-  
-  // Auto-hide after 60 seconds (longer for debugging)
-  setTimeout(() => {
-    overlay.style.display = 'none';
-  }, 60000);
-}
+// Hidden diagnostics: an always-on ring-buffer logger (invisible) plus an
+// on-demand overlay toggled with the remote's RED button (keyCode 403) or F2.
+// Nothing renders on screen unless explicitly toggled.
+declare const __APP_VERSION__: string;
 
-// Initialize debug overlay early
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', createDebugOverlay);
-} else {
-  createDebugOverlay();
-}
+(function initHiddenDiagnostics() {
+  const buffer: string[] = [];
+  const MAX_LINES = 120;
+  let overlay: HTMLDivElement | null = null;
+
+  const appVersion = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "dev";
+
+  const describeActiveElement = (): string => {
+    const el = document.activeElement as HTMLElement | null;
+    if (!el) return "none";
+    const cls = String(el.className || "").split(" ")[0];
+    return `${el.tagName.toLowerCase()}${cls ? `.${cls}` : ""}`;
+  };
+
+  const storageSnapshot = (): string[] => {
+    const lines: string[] = [];
+    try {
+      const playlistsRaw = localStorage.getItem("iptvmate_playlists");
+      lines.push(`ls playlists: ${playlistsRaw === null ? "null" : `${playlistsRaw.length} chars`}`);
+      const channelsRaw = localStorage.getItem("iptvmate_channels_cache");
+      lines.push(`ls channels: ${channelsRaw === null ? "null" : `${channelsRaw.length} chars`}`);
+      lines.push(`ls keys: ${localStorage.length}`);
+    } catch (err) {
+      lines.push(`localStorage ERROR: ${err}`);
+    }
+    lines.push(`webOS.service: ${!!(window as any).webOS?.service}`);
+    lines.push(`indexedDB: ${typeof indexedDB !== "undefined"}`);
+    lines.push(`focus: ${describeActiveElement()}`);
+    return lines;
+  };
+
+  const renderOverlay = () => {
+    if (!overlay) return;
+    overlay.textContent = "";
+
+    const header = document.createElement("div");
+    header.style.cssText = "color:#fff;font-weight:bold;margin-bottom:4px;";
+    header.textContent = `Toms IPTVmate v${appVersion} — diagnostics (5x UP closes)`;
+    overlay.appendChild(header);
+
+    for (const line of storageSnapshot()) {
+      const div = document.createElement("div");
+      div.style.color = "#9ad1ff";
+      div.textContent = line;
+      overlay.appendChild(div);
+    }
+
+    for (const line of buffer.slice(-40)) {
+      const div = document.createElement("div");
+      div.textContent = line;
+      overlay.appendChild(div);
+    }
+
+    overlay.scrollTop = overlay.scrollHeight;
+  };
+
+  const record = (msg: string) => {
+    const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    buffer.push(line);
+    if (buffer.length > MAX_LINES) buffer.shift();
+    console.log("[webos-debug]", msg);
+    renderOverlay();
+  };
+
+  (window as any).webosDebugLog = record;
+
+  window.addEventListener("error", (event) => {
+    const err = event as ErrorEvent;
+    record(`ERROR: ${err.message || "unknown"} @${err.filename || "?"}:${err.lineno || 0}`);
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = String((event as PromiseRejectionEvent).reason || "");
+    record(`REJECTION: ${reason.slice(0, 200)}`);
+  });
+
+  const toggleOverlay = () => {
+    if (overlay) {
+      overlay.remove();
+      overlay = null;
+      return;
+    }
+    overlay = document.createElement("div");
+    overlay.id = "webos-diagnostics-overlay";
+    overlay.style.cssText =
+      "position:fixed;top:10px;left:10px;right:10px;max-height:70%;background:rgba(0,0,0,0.85);color:#0f0;font-family:monospace;font-size:13px;padding:10px;z-index:999999;overflow:auto;pointer-events:none;white-space:pre-wrap;";
+    (document.body || document.documentElement).appendChild(overlay);
+    renderOverlay();
+  };
+
+  // Toggles: RED color button (keyCode 403), F2 (desktop), or five rapid
+  // UP presses (works on remotes without color buttons).
+  let upPressTimes: number[] = [];
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (Number(event.keyCode || 0) === 403 || event.key === "F2") {
+        toggleOverlay();
+        return;
+      }
+
+      const isUp = event.key === "ArrowUp" || event.key === "Up" || Number(event.keyCode || 0) === 38;
+      if (!isUp) return;
+      const now = Date.now();
+      upPressTimes = upPressTimes.filter((t) => now - t < 2500);
+      upPressTimes.push(now);
+      if (upPressTimes.length >= 5) {
+        upPressTimes = [];
+        toggleOverlay();
+      }
+    },
+    true
+  );
+
+  // Record the first raw key events so the overlay shows exactly what the
+  // remote sends on this firmware (key name + keyCode).
+  let rawKeyLogCount = 0;
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (rawKeyLogCount >= 30) return;
+      rawKeyLogCount += 1;
+      record(`key: "${event.key}" code=${event.keyCode}`);
+    },
+    true
+  );
+
+  // Record pointer events too — diagnoses "clicks do nothing" reports by
+  // showing whether the Magic Remote press reaches the page and what it hits.
+  let pointerLogCount = 0;
+  const describeTarget = (target: EventTarget | null): string => {
+    const el = target as HTMLElement | null;
+    if (!el || !el.tagName) return "?";
+    const cls = String(el.className || "").split(" ")[0];
+    return `${el.tagName.toLowerCase()}${cls ? `.${cls}` : ""}`;
+  };
+  (["mousedown", "mouseup", "click"] as const).forEach((type) => {
+    window.addEventListener(
+      type,
+      (event) => {
+        if (pointerLogCount >= 45) return;
+        pointerLogCount += 1;
+        record(`${type}: ${describeTarget(event.target)}`);
+      },
+      true
+    );
+  });
+
+  record(`boot v${appVersion} UA:${navigator.userAgent.slice(0, 60)}`);
+})();
 
 normalizeRemoteKeyEvents();
 

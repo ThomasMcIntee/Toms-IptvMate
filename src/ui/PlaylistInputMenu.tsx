@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { loadPlaylists, savePlaylist, type PlaylistEntry } from "../core/playlistStore";
+import { normalizeRemoteNavKey } from "../core/remoteKeys";
 
 type SaveDiagnostics = {
   origin: string;
@@ -33,6 +34,65 @@ export default function PlaylistInputMenu({ visible, onPlaylistSaved }: { visibl
   const [portalUrl, setPortalUrl] = useState("");
   const [mac, setMac] = useState("");
   const [saveDiagnostics, setSaveDiagnostics] = useState<SaveDiagnostics | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // TV remote navigation. Capture phase so it wins over the inputs'
+  // stopPropagation; Up/Down move linearly through fields and buttons.
+  // Left/Right also move, but only from buttons — arrows must keep editing
+  // text inside inputs.
+  useEffect(() => {
+    if (!visible) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const root = rootRef.current;
+      if (!root) return;
+
+      const key = normalizeRemoteNavKey(e);
+      const isVertical = key === "ArrowUp" || key === "ArrowDown";
+      const isHorizontal = key === "ArrowLeft" || key === "ArrowRight";
+      if (!isVertical && !isHorizontal) return;
+
+      const active = document.activeElement as HTMLElement | null;
+      const activeOutsidePanel =
+        !!active &&
+        active !== document.body &&
+        active !== document.documentElement &&
+        !root.contains(active);
+      if (activeOutsidePanel) return;
+
+      if (isHorizontal && (!active || active.tagName !== "BUTTON")) return;
+
+      const stops = Array.from(root.querySelectorAll<HTMLElement>("input, select, button")).filter(
+        (el) => !(el as HTMLInputElement | HTMLButtonElement).disabled && el.offsetParent !== null
+      );
+      if (stops.length === 0) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const index = active ? stops.indexOf(active) : -1;
+      if (index < 0) {
+        stops[0]?.focus();
+        return;
+      }
+
+      const forward = key === "ArrowDown" || key === "ArrowRight";
+      const next = forward ? Math.min(stops.length - 1, index + 1) : Math.max(0, index - 1);
+      stops[next]?.focus();
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [visible]);
+
+  // Land remote focus on the first field when the form opens.
+  useEffect(() => {
+    if (!visible) return;
+    const timer = window.setTimeout(() => {
+      rootRef.current?.querySelector<HTMLElement>("input, select, button")?.focus();
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [visible]);
 
   if (!visible) return null;
 
@@ -137,7 +197,7 @@ export default function PlaylistInputMenu({ visible, onPlaylistSaved }: { visibl
   }
 
   return (
-    <div className="side-panel">
+    <div className="side-panel" ref={rootRef}>
       <h2>Add Playlist</h2>
 
       {validationError && <div className="form-error">{validationError}</div>}

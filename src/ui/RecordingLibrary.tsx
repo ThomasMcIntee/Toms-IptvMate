@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import packageJson from "../../package.json";
+import { loadPlaylists, describeStoredPlaylists } from "../core/playlistStore";
+import { getAllChannels } from "../core/channelStore";
+import { webosDbSelfTest } from "../core/webosStorage";
 import {
   getPlaybackBufferLevel,
   setPlaybackBufferLevel,
@@ -21,6 +24,52 @@ type Props = {
 
 export default function RecordingLibrary({ visible, onOpenPlayback, onOpenStorage, onExit }: Props) {
   const appVersion = String((packageJson as { version?: string }).version || "dev");
+  const [storageSummary, setStorageSummary] = useState("");
+  const [savedDataInfo, setSavedDataInfo] = useState("");
+  const [dbStatus, setDbStatus] = useState("testing…");
+
+  // Storage health readout so persistence issues can be diagnosed on the TV
+  // without the hidden overlay.
+  useEffect(() => {
+    if (!visible) return;
+
+    try {
+      const playlistCount = loadPlaylists().length;
+      const channelCount = getAllChannels().length;
+      let lsPlaylists = "missing";
+      let lsChannels = "missing";
+      try {
+        const rawPlaylists = localStorage.getItem("iptvmate_playlists");
+        if (rawPlaylists !== null) lsPlaylists = `${rawPlaylists.length} chars`;
+        const rawChannels = localStorage.getItem("iptvmate_channels_cache");
+        if (rawChannels !== null) lsChannels = `${rawChannels.length} chars`;
+      } catch {
+        lsPlaylists = "error";
+        lsChannels = "error";
+      }
+      setStorageSummary(
+        `${playlistCount} playlists, ${channelCount} channels loaded | saved: playlists ${lsPlaylists}, channels ${lsChannels}`
+      );
+    } catch {
+      setStorageSummary("unavailable");
+    }
+
+    try {
+      setSavedDataInfo(describeStoredPlaylists());
+    } catch {
+      setSavedDataInfo("unavailable");
+    }
+
+    let cancelled = false;
+    setDbStatus("testing…");
+    void webosDbSelfTest().then((result) => {
+      if (!cancelled) setDbStatus(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [visible]);
+
   const [masterCode, setMasterCode] = useState(() => {
     try {
       return localStorage.getItem("iptvmate_setup_master_code") || "";
@@ -179,6 +228,15 @@ export default function RecordingLibrary({ visible, onOpenPlayback, onOpenStorag
 
         <div className="recording-setup-version" aria-label={t("programVersion")}>
           {t("programVersion")}: v{appVersion}
+        </div>
+        <div className="recording-setup-version" aria-label="Storage status">
+          Storage: {storageSummary}
+        </div>
+        <div className="recording-setup-version" aria-label="Saved playlist data">
+          Saved data: {savedDataInfo}
+        </div>
+        <div className="recording-setup-version" aria-label="TV database status">
+          TV database: {dbStatus}
         </div>
       </div>
     </div>

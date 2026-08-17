@@ -1263,6 +1263,11 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
 
 export default defineConfig({
   base: "./",
+  define: {
+    __APP_VERSION__: JSON.stringify(
+      (JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8")) as { version?: string }).version || "0.0.0"
+    )
+  },
   plugins: [
     react({ fastRefresh: false }),
     {

@@ -1,6 +1,6 @@
 {
   "name": "toms-iptvmate",
-  "version": "1.2.8",
+  "version": "1.4.1",
   "main": "electron/main.cjs",
   "files": [
     "dist",

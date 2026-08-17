@@ -796,10 +796,6 @@ export default function PlaylistManager({
         Loaded playlist: <strong>{loadedPlaylist?.name || "None"}</strong>
       </p>
 
-      <p className="playlist-diagnostics-text" aria-live="polite">
-        Parsed: {storageDiagnostics.parsed} | raw main: {storageDiagnostics.primaryRawCount} | raw session: {storageDiagnostics.sessionRawCount} | raw legacy: {storageDiagnostics.legacyRawCount} | playlist keys: {storageDiagnostics.storageKeysWithPlaylist}
-      </p>
-
       <div className="playlist-manager-parental-actions">
         <button
           className={`btn-secondary btn-flex${activeRoleContext === "adult" ? " playlist-role-toggle-active" : ""}`}

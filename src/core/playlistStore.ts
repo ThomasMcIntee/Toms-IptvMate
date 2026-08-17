@@ -1,5 +1,7 @@
 export type PlaylistType = "m3u" | "xtream" | "stalker";
 
+import { isWebOsDbAvailable, webosDbGet, webosDbSet } from "./webosStorage";
+
 export type PlaylistEntry = {
   id: string;
   name: string;
@@ -57,6 +59,8 @@ const PLAYLISTS_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 5;
 let inMemoryPlaylists: PlaylistEntry[] = [];
 let indexedDbHydrationStarted = false;
 let indexedDbHydrationCompleted = false;
+let webosDbHydrationStarted = false;
+let webosDbHydrationCompleted = false;
 let storageKeyRecoveryAttempted = false;
 let crossOriginImportAttempts = 0;
 let crossOriginImportInFlight = false;
@@ -435,6 +439,12 @@ function safeSetPlaylists(entries: PlaylistEntry[], emitChangeEvent = true) {
     // Ignore cookie fallback errors.
   }
 
+  // webOS DB8 lives outside the purgeable web-storage partition — it is the
+  // only layer that reliably survives app closes/power cycles on LG TVs.
+  if (isWebOsDbAvailable()) {
+    void webosDbSet(KEY, JSON.stringify(entries)).catch(() => {});
+  }
+
   void savePlaylistsIndexedDb(entries);
 
   if (emitChangeEvent) {
@@ -593,7 +603,87 @@ function hydratePlaylistsFromIndexedDb() {
 }
 
 export function isPlaylistsHydrationPending(): boolean {
-  return indexedDbHydrationStarted && !indexedDbHydrationCompleted;
+  const indexedDbPending = indexedDbHydrationStarted && !indexedDbHydrationCompleted;
+  const webosDbPending = webosDbHydrationStarted && !webosDbHydrationCompleted;
+  return indexedDbPending || webosDbPending;
+}
+
+// Diagnostic for the Setup screen: explains why saved playlist data does or
+// does not load, without exposing credentials.
+export function describeStoredPlaylists(): string {
+  try {
+    let raw: string | null = null;
+    try {
+      raw = localStorage.getItem(KEY);
+    } catch {
+      return "localStorage read error";
+    }
+    if (raw === null) return "no saved data";
+
+    let parsedJson: unknown = null;
+    let parseFailed = false;
+    try {
+      parsedJson = JSON.parse(raw);
+    } catch {
+      parseFailed = true;
+    }
+    if (parseFailed) {
+      return `raw ${raw.length} chars, JSON PARSE FAILED (data corrupt/truncated), ends: "${raw.slice(-20)}"`;
+    }
+
+    const collection = extractPlaylistCollection(parsedJson);
+    const valid = collection.map(toPlaylistEntry).filter((entry): entry is PlaylistEntry => !!entry);
+
+    let firstInfo = "none";
+    const first = collection[0];
+    if (first && typeof first === "object") {
+      const obj = first as Record<string, unknown>;
+      const topKeys = Object.keys(obj).slice(0, 8).join("+");
+      const data = obj.data && typeof obj.data === "object" ? (obj.data as Record<string, unknown>) : null;
+      const dataKeys = data ? Object.keys(data).slice(0, 8).join("+") : "none";
+      firstInfo = `type=${String(obj.type || "?")} keys=${topKeys} dataKeys=${dataKeys}`;
+    }
+
+    return `raw ${raw.length} chars, entries ${collection.length}, valid ${valid.length}, first: ${firstInfo}`;
+  } catch (err) {
+    return `diagnostic error: ${err instanceof Error ? err.message : "unknown"}`;
+  }
+}
+
+function hydratePlaylistsFromWebosDb() {
+  if (webosDbHydrationStarted) return;
+  webosDbHydrationStarted = true;
+
+  if (!isWebOsDbAvailable()) {
+    webosDbHydrationCompleted = true;
+    return;
+  }
+
+  const hydrationRevision = playlistMutationRevision;
+
+  void (async () => {
+    try {
+      const raw = await webosDbGet(KEY);
+      if (!raw) return;
+      if (hydrationRevision !== playlistMutationRevision) return;
+
+      const restored = dedupePlaylists(
+        extractPlaylistCollection(raw)
+          .map(toPlaylistEntry)
+          .filter((entry): entry is PlaylistEntry => !!entry)
+      );
+      if (restored.length === 0) return;
+
+      const current = readJsonArray(KEY).map(toPlaylistEntry).filter((x): x is PlaylistEntry => !!x);
+      if (current.length > 0) return;
+      if (hydrationRevision !== playlistMutationRevision) return;
+
+      safeSetPlaylists(restored);
+    } finally {
+      webosDbHydrationCompleted = true;
+      dispatchPlaylistStoreEvent("playlistsHydrationComplete");
+    }
+  })();
 }
 
 function normalizeType(rawType: unknown, rawSource: unknown): PlaylistType | null {
@@ -839,6 +929,12 @@ function readJsonArray(key: string): unknown[] {
     return extractPlaylistCollection(parsed);
   } catch {
     if (key === KEY) {
+      try {
+        const log = (window as any).webosDebugLog;
+        if (log) log("playlists: localStorage JSON parse FAILED, using fallbacks");
+      } catch {
+        // Ignore logging failures.
+      }
       try {
         const sessionRaw = sessionStorage.getItem(SESSION_KEY);
         if (sessionRaw) {
@@ -1100,6 +1196,7 @@ function migrateLegacyPlaylists(): PlaylistEntry[] {
 
 export function loadPlaylists(): PlaylistEntry[] {
   hydratePlaylistsFromIndexedDb();
+  hydratePlaylistsFromWebosDb();
 
   const current = readJsonArray(KEY).map(toPlaylistEntry).filter((x): x is PlaylistEntry => !!x);
   const legacy = readJsonArray(LEGACY_KEY).map(toPlaylistEntry).filter((x): x is PlaylistEntry => !!x);

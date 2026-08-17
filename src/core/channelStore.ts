@@ -16,6 +16,8 @@ export type Channel = {
   };
 };
 
+import { isWebOsDbAvailable, webosDbGetLarge, webosDbSetLarge } from "./webosStorage";
+
 let channels: Channel[] = [];
 let activeGroup: string = "All";
 let roleChannelWriteLock: "adult" | "child" | null = null;
@@ -509,6 +511,58 @@ async function saveCachedChannelsIndexedDb(list: Channel[]) {
   db.close();
 }
 
+// webOS DB8 mirror for the channel cache. localStorage/IndexedDB get purged
+// on LG TVs when the app fully closes or the TV power-cycles; DB8 records
+// survive, so cached channels can restore offline on the next launch.
+// The save is debounced and single-flight: serializing megabytes and pushing
+// chunked Luna calls must never compete with an in-progress playlist load.
+let pendingWebosDbChannels: Channel[] | null = null;
+let webosDbSaveTimer: number | null = null;
+let webosDbSaveInFlight = false;
+
+function saveCachedChannelsWebosDb(list: Channel[]): void {
+  if (!isWebOsDbAvailable()) return;
+
+  pendingWebosDbChannels = list;
+  if (webosDbSaveTimer !== null || webosDbSaveInFlight) return;
+
+  webosDbSaveTimer = window.setTimeout(() => {
+    webosDbSaveTimer = null;
+    const toSave = pendingWebosDbChannels;
+    pendingWebosDbChannels = null;
+    if (!toSave || !isWebOsDbAvailable()) return;
+
+    webosDbSaveInFlight = true;
+    void (async () => {
+      const debugLog = (window as any).webosDebugLog;
+      try {
+        const payload = JSON.stringify(toSave.map(toCacheChannel));
+        const ok = await webosDbSetLarge(CHANNELS_CACHE_KEY, payload);
+        if (debugLog) debugLog(`cache-save: db8 ${ok ? "ok" : "FAILED"} (${toSave.length} channels)`);
+      } catch (err) {
+        if (debugLog) debugLog(`cache-save: db8 threw ${err instanceof Error ? err.message : "error"}`);
+      } finally {
+        webosDbSaveInFlight = false;
+        // A newer list may have arrived while saving; queue it.
+        if (pendingWebosDbChannels) saveCachedChannelsWebosDb(pendingWebosDbChannels);
+      }
+    })();
+  }, 5000);
+}
+
+async function loadCachedChannelsWebosDb(): Promise<Channel[]> {
+  if (!isWebOsDbAvailable()) return [];
+  try {
+    const raw = await webosDbGetLarge(CHANNELS_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(toValidChannel).filter((item): item is Channel => !!item);
+  } catch {
+    return [];
+  }
+}
+
 async function loadCachedChannelsIndexedDb(): Promise<Channel[]> {
   const db = await openChannelsCacheDb();
   if (!db) return [];
@@ -639,6 +693,7 @@ export function setChannels(list: Channel[], source: string = "unknown") {
   if (shouldPersistCache) {
     saveCachedChannels(channels);
     void saveCachedChannelsIndexedDb(channels);
+    saveCachedChannelsWebosDb(channels);
   }
 
   const currentIds = new Set(channels.map((c) => c.id));
@@ -718,6 +773,21 @@ export async function restoreChannelsCache(): Promise<Channel[]> {
     applyCachedChannels(fromIndexedDb);
     recordChannelWriteTrace("restore-cache-indexeddb", true, fromIndexedDb.length);
     saveCachedChannels(fromIndexedDb);
+    return channels;
+  }
+
+  // Final fallback: webOS DB8 survives the storage purges that clear the
+  // layers above on LG TVs.
+  const fromWebosDb = await loadCachedChannelsWebosDb();
+  if (roleChannelWriteLock) {
+    recordChannelWriteTrace("restore-cache-webosdb-locked", false, channels.length);
+    return channels;
+  }
+  if (fromWebosDb.length > 0) {
+    applyCachedChannels(fromWebosDb);
+    recordChannelWriteTrace("restore-cache-webosdb", true, fromWebosDb.length);
+    saveCachedChannels(fromWebosDb);
+    void saveCachedChannelsIndexedDb(fromWebosDb);
     return channels;
   }
 
