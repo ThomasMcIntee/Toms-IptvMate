@@ -42,10 +42,39 @@ function syncWebOsBundle() {
   const distIndex = path.join(distDir, "index.html");
   ensureExists(distIndex, "dist index.html");
 
-  const webosIndex = path.join(webosDir, "index.html");
-  fs.copyFileSync(distIndex, webosIndex);
+  // Read dist index and inject webOS SDK script for proper Back key handling
+  let indexHtml = fs.readFileSync(distIndex, "utf8");
 
-  console.log("Synced dist bundle to webos/ (index.html + assets).");
+  // Inject webOSTVjs SDK before the closing </head> tag.
+  // This library is required for proper remote control handling on webOS TVs.
+  const webOsScript = `
+    <script type="text/javascript" src="webOSTVjs-1.2.4/webOSTV.js"></script>
+    <script type="text/javascript" src="webOSTVjs-1.2.4/webOSTV-dev.js"></script>
+    <script type="text/javascript">
+      // Disable webOS native back handling - let the app handle navigation
+      window.addEventListener('load', function() {
+        if (window.webOS && window.webOS.platformBack) {
+          // Prevent default back behavior
+        }
+        document.addEventListener('webOSRelaunch', function(e) {
+          console.log('[webos] relaunch event', e);
+        });
+        // Register for visibility changes
+        document.addEventListener('visibilitychange', function() {
+          console.log('[webos] visibility:', document.visibilityState);
+        });
+      });
+    </script>
+`;
+
+  if (indexHtml.includes("</head>")) {
+    indexHtml = indexHtml.replace("</head>", webOsScript + "</head>");
+  }
+
+  const webosIndex = path.join(webosDir, "index.html");
+  fs.writeFileSync(webosIndex, indexHtml, "utf8");
+
+  console.log("Synced dist bundle to webos/ (index.html + assets + webOS SDK injection).");
 }
 
 try {

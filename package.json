@@ -1,6 +1,6 @@
 {
   "name": "toms-iptvmate",
-  "version": "1.1.7",
+  "version": "1.2.8",
   "main": "electron/main.cjs",
   "files": [
     "dist",
@@ -29,10 +29,10 @@
     "hls.js": "^1.7.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "shaka-player": "^5.2.5"
+    "shaka-player": "^5.2.6"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.4.2",
+    "@capacitor/cli": "^8.5.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",

@@ -30,6 +30,12 @@ const CHANNELS_CACHE_META_KEY = "iptvmate_channels_cache_meta";
 const CHANNELS_CACHE_DB = "iptvmate_cache";
 const CHANNELS_CACHE_STORE = "channels";
 const CHANNELS_CACHE_RECORD_KEY = "latest";
+// webOS TV flash storage can take several seconds to open IndexedDB and read a
+// multi-megabyte channel record at cold boot. Aggressive (~1.2s) timeouts made
+// startup treat the cache as missing, so content never auto-loaded on TVs.
+// When there is genuinely no cached record, reads still return quickly — this
+// timeout only bites when the DB is truly hung.
+const CHANNELS_CACHE_DB_TIMEOUT_MS = 10000;
 
 export type ChannelCacheScope = "live" | "movies" | "series";
 
@@ -351,20 +357,28 @@ export function clearCurrentChannels(source: string = "unknown") {
 }
 
 function loadCachedChannelsWithPresence(): { hasValue: boolean; channels: Channel[] } {
+  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
   try {
     const raw = localStorage.getItem(CHANNELS_CACHE_KEY);
+    debugLog(`cache-load: raw=${raw ? raw.length + ' chars' : 'null'}`);
     if (raw === null) return { hasValue: false, channels: [] };
 
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return { hasValue: true, channels: [] };
+    if (!Array.isArray(parsed)) {
+      debugLog('cache-load: not array');
+      return { hasValue: true, channels: [] };
+    }
 
-    return {
+    const result = {
       hasValue: true,
       channels: parsed
         .map(toValidChannel)
         .filter((item): item is Channel => !!item)
     };
-  } catch {
+    debugLog(`cache-load: ${result.channels.length} channels`);
+    return result;
+  } catch (e) {
+    debugLog(`cache-load error: ${e}`);
     return { hasValue: true, channels: [] };
   }
 }
@@ -372,8 +386,11 @@ function loadCachedChannelsWithPresence(): { hasValue: boolean; channels: Channe
 function saveCachedChannels(list: Channel[]) {
   try {
     localStorage.setItem(CHANNELS_CACHE_KEY, JSON.stringify(list.map(toCacheChannel)));
-  } catch {
-    // Ignore persistence errors.
+  } catch (err) {
+    // Large channel lists routinely exceed the localStorage quota on TVs.
+    // IndexedDB remains the durable store; surface the failure for on-TV debugging.
+    const debugLog = (window as any).webosDebugLog;
+    if (debugLog) debugLog(`cache-save: localStorage failed (${err instanceof Error ? err.name : "error"})`);
   }
 }
 
@@ -421,6 +438,15 @@ async function openChannelsCacheDb(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === "undefined") return null;
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: IDBDatabase | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const timeout = window.setTimeout(() => finish(null), CHANNELS_CACHE_DB_TIMEOUT_MS);
+
     try {
       const request = indexedDB.open(CHANNELS_CACHE_DB, 1);
 
@@ -431,26 +457,51 @@ async function openChannelsCacheDb(): Promise<IDBDatabase | null> {
         }
       };
 
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => resolve(null);
+      request.onsuccess = () => {
+        window.clearTimeout(timeout);
+        finish(request.result);
+      };
+      request.onerror = () => {
+        window.clearTimeout(timeout);
+        finish(null);
+      };
+      request.onblocked = () => {
+        window.clearTimeout(timeout);
+        finish(null);
+      };
     } catch {
-      resolve(null);
+      window.clearTimeout(timeout);
+      finish(null);
     }
   });
 }
 
 async function saveCachedChannelsIndexedDb(list: Channel[]) {
+  const debugLog = (window as any).webosDebugLog;
   const db = await openChannelsCacheDb();
-  if (!db) return;
+  if (!db) {
+    if (debugLog) debugLog("cache-save: idb open failed, channels NOT persisted");
+    return;
+  }
 
   await new Promise<void>((resolve) => {
     try {
       const tx = db.transaction(CHANNELS_CACHE_STORE, "readwrite");
       tx.objectStore(CHANNELS_CACHE_STORE).put(list.map(toCacheChannel), CHANNELS_CACHE_RECORD_KEY);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-      tx.onabort = () => resolve();
+      tx.oncomplete = () => {
+        if (debugLog) debugLog(`cache-save: idb persisted ${list.length} channels`);
+        resolve();
+      };
+      tx.onerror = () => {
+        if (debugLog) debugLog("cache-save: idb tx error");
+        resolve();
+      };
+      tx.onabort = () => {
+        if (debugLog) debugLog("cache-save: idb tx abort");
+        resolve();
+      };
     } catch {
+      if (debugLog) debugLog("cache-save: idb tx exception");
       resolve();
     }
   });
@@ -462,27 +513,32 @@ async function loadCachedChannelsIndexedDb(): Promise<Channel[]> {
   const db = await openChannelsCacheDb();
   if (!db) return [];
 
-  const result = await new Promise<Channel[]>((resolve) => {
-    try {
-      const tx = db.transaction(CHANNELS_CACHE_STORE, "readonly");
-      const request = tx.objectStore(CHANNELS_CACHE_STORE).get(CHANNELS_CACHE_RECORD_KEY);
-      request.onsuccess = () => {
-        const value = request.result as unknown;
-        if (!Array.isArray(value)) {
-          resolve([]);
-          return;
-        }
+  const result = await Promise.race([
+    new Promise<Channel[]>((resolve) => {
+      try {
+        const tx = db.transaction(CHANNELS_CACHE_STORE, "readonly");
+        const request = tx.objectStore(CHANNELS_CACHE_STORE).get(CHANNELS_CACHE_RECORD_KEY);
+        request.onsuccess = () => {
+          const value = request.result as unknown;
+          if (!Array.isArray(value)) {
+            resolve([]);
+            return;
+          }
 
-        const channels = value.map(toValidChannel).filter((item): item is Channel => !!item);
-        resolve(channels);
-      };
-      request.onerror = () => resolve([]);
-      tx.onerror = () => resolve([]);
-      tx.onabort = () => resolve([]);
-    } catch {
-      resolve([]);
-    }
-  });
+          const channels = value.map(toValidChannel).filter((item): item is Channel => !!item);
+          resolve(channels);
+        };
+        request.onerror = () => resolve([]);
+        tx.onerror = () => resolve([]);
+        tx.onabort = () => resolve([]);
+      } catch {
+        resolve([]);
+      }
+    }),
+    new Promise<Channel[]>((resolve) => {
+      window.setTimeout(() => resolve([]), CHANNELS_CACHE_DB_TIMEOUT_MS);
+    })
+  ]);
 
   db.close();
   return result;
@@ -616,7 +672,12 @@ export async function restoreChannelsCache(): Promise<Channel[]> {
   const fromLocalStorage = loadCachedChannelsWithPresence();
   if (fromLocalStorage.hasValue) {
     if (fromLocalStorage.channels.length > 0) {
-      const fromIndexedDb = await loadCachedChannelsIndexedDb();
+      const fromIndexedDb = await Promise.race([
+        loadCachedChannelsIndexedDb(),
+        new Promise<Channel[]>((resolve) => {
+          window.setTimeout(() => resolve([]), CHANNELS_CACHE_DB_TIMEOUT_MS);
+        })
+      ]);
       if (roleChannelWriteLock) {
         recordChannelWriteTrace("restore-cache-indexeddb-locked", false, channels.length);
         return channels;
@@ -641,7 +702,12 @@ export async function restoreChannelsCache(): Promise<Channel[]> {
     // while IndexedDB still has the last valid loaded channels.
   }
 
-  const fromIndexedDb = await loadCachedChannelsIndexedDb();
+  const fromIndexedDb = await Promise.race([
+    loadCachedChannelsIndexedDb(),
+    new Promise<Channel[]>((resolve) => {
+      window.setTimeout(() => resolve([]), CHANNELS_CACHE_DB_TIMEOUT_MS);
+    })
+  ]);
   if (roleChannelWriteLock) {
     // Role lock may have been enabled while awaiting IndexedDB.
     recordChannelWriteTrace("restore-cache-indexeddb-locked", false, channels.length);

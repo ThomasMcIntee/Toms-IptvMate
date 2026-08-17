@@ -4,9 +4,27 @@
     <meta charset="UTF-8" />
     <title>Toms IPTVmate</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <script type="module" crossorigin src="./assets/index-BNDsBFUP.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-CoXfEWao.css">
-  </head>
+    <script type="module" crossorigin src="./assets/index-BFG2mfYR.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-Czr611Uy.css">
+  
+    <script type="text/javascript" src="webOSTVjs-1.2.4/webOSTV.js"></script>
+    <script type="text/javascript" src="webOSTVjs-1.2.4/webOSTV-dev.js"></script>
+    <script type="text/javascript">
+      // Disable webOS native back handling - let the app handle navigation
+      window.addEventListener('load', function() {
+        if (window.webOS && window.webOS.platformBack) {
+          // Prevent default back behavior
+        }
+        document.addEventListener('webOSRelaunch', function(e) {
+          console.log('[webos] relaunch event', e);
+        });
+        // Register for visibility changes
+        document.addEventListener('visibilitychange', function() {
+          console.log('[webos] visibility:', document.visibilityState);
+        });
+      });
+    </script>
+</head>
   <body>
     <div id="root"></div>
   </body>

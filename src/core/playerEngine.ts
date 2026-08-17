@@ -815,6 +815,16 @@ export function playUrl(
     (isLiveContent && isTransportStreamSource ? initialLiveTranscodeUrl : null) ||
     liveRelayUrl ||
     toPrimaryPlaybackUrl(rootSourceUrl, shouldPreferTranscode);
+  
+  // Log the URL being used on webOS for debugging
+  if (isWebOsRuntime()) {
+    const debugLog = (window as any).webosDebugLog;
+    if (debugLog) {
+      debugLog(`PLAY: url=${playbackUrl.substring(0, 80)}`);
+      debugLog(`PLAY: isLive=${isLiveContent} isHLS=${isManifestLikeSource} isTS=${isTransportStreamSource}`);
+    }
+  }
+  
   const shouldUseHlsJs =
     playbackUrl.includes("/__transcode") ||
     isManifestLikeSource ||
@@ -852,8 +862,14 @@ export function playUrl(
   videoEl.removeAttribute("src");
   videoEl.load();
 
-  if (Hls.isSupported() && !forceNativePlayback && shouldUseHlsJsPath) {
+  // On webOS TVs, prefer native HLS playback for better codec compatibility
+  const isWebOS = isWebOsRuntime();
+  const webOsNativeHlsAvailable = isWebOS && videoEl.canPlayType("application/vnd.apple.mpegurl");
+
+  if (Hls.isSupported() && !forceNativePlayback && shouldUseHlsJsPath && !webOsNativeHlsAvailable) {
+    // Skip Shaka Player on webOS TVs - use HLS.js instead for better compatibility
     const shouldTryShakaForVodTranscode =
+      !isWebOS &&
       isLocalTranscodePlayback &&
       contentType !== "live" &&
       !isVideoOnlyPlaybackUrl &&
@@ -2256,10 +2272,39 @@ export function playUrl(
     });
     hls.loadSource(playbackUrl);
     hls.attachMedia(videoEl);
-  } else if (shouldUseNativeHls && videoEl.canPlayType("application/vnd.apple.mpegurl")) {
-    videoEl.src = playbackUrl;
+  } else if ((shouldUseNativeHls || (isWebOsRuntime() && isManifestLikeSource)) && videoEl.canPlayType("application/vnd.apple.mpegurl")) {
+    // Prefer native HLS on webOS TVs for HLS manifests only
+    const isWebOS = isWebOsRuntime();
+    console.log("[playUrl] Using native HLS playback", { isWebOS, url: playbackUrl.substring(0, 100) });
+    
+    // On webOS, try HTTP instead of HTTPS
+    let finalUrl = playbackUrl;
+    if (isWebOS && playbackUrl.startsWith("https://")) {
+      finalUrl = playbackUrl.replace("https://", "http://");
+    }
+    
+    // On webOS, log additional debug info
+    if (isWebOS) {
+      const debugLog = (window as any).webosDebugLog;
+      if (debugLog) {
+        debugLog(`PLAYER: native HLS mode`);
+        debugLog(`PLAYER: url=${finalUrl.substring(0, 80)}`);
+      }
+    }
+    
+    videoEl.src = finalUrl;
     videoEl.onerror = () => {
       if (isStaleRequest() || hasPlaybackStarted) return;
+      
+      const isWebOS = isWebOsRuntime();
+      const errorCode = videoEl.error?.code || 0;
+      const errorMsg = videoEl.error?.message || "unknown";
+      
+      if (isWebOS) {
+        const debugLog = (window as any).webosDebugLog;
+        if (debugLog) debugLog(`PLAYER: HLS error code=${errorCode} msg=${errorMsg}`);
+      }
+      console.log("[playUrl] Native HLS error", { errorCode, errorMsg, url: finalUrl.substring(0, 60) });
 
       if (!hasRetriedHttpFallback) {
         const fallbackUrl = toHttpFallbackUrl(fallbackBaseUrl);
@@ -2311,6 +2356,27 @@ export function playUrl(
           );
           return;
         }
+        
+        // On webOS, try external CORS proxy as last resort for live
+        if (isWebOsRuntime() && proxyFallbackStage === 0) {
+          const externalProxyUrl = toExternalProxyFallbackUrl(fallbackBaseUrl);
+          if (externalProxyUrl) {
+            const debugLog = (window as any).webosDebugLog;
+            if (debugLog) debugLog(`PLAYER: trying CORS proxy - ${externalProxyUrl.substring(0, 60)}`);
+            emitPlayerTranscoding("Trying alternative stream path...");
+            playUrl(
+              externalProxyUrl,
+              hasRetriedHttpFallback,
+              false,
+              2,
+              hasTriedNativeFallback,
+              hasTriedTranscodeFallback,
+              hasRetriedTranscodeBootstrap,
+              contentType
+            );
+            return;
+          }
+        }
       }
 
       if (contentType !== "live" && proxyFallbackStage <= 1) {
@@ -2352,7 +2418,9 @@ export function playUrl(
         }
       }
 
-      emitPlayerError("Stream failed to load (network/protocol error).");
+      emitPlayerError(isWebOsRuntime() 
+        ? "Stream not available (server may block TV access)." 
+        : "Stream failed to load (network/protocol error).");
     };
     videoEl.addEventListener(
       "loadedmetadata",
@@ -2364,9 +2432,41 @@ export function playUrl(
       { once: true }
     );
   } else {
-    videoEl.src = playbackUrl;
+    // Direct playback - used for non-HLS content (TS streams, MP4, etc.)
+    const isWebOS = isWebOsRuntime();
+    if (isWebOS) {
+      const debugLog = (window as any).webosDebugLog;
+      if (debugLog) {
+        debugLog(`PLAYER: direct mode`);
+        debugLog(`PLAYER: url=${playbackUrl.substring(0, 80)}`);
+        debugLog(`PLAYER: canPlay video/mp2t: ${videoEl.canPlayType('video/mp2t')}`);
+        debugLog(`PLAYER: canPlay video/mp4: ${videoEl.canPlayType('video/mp4')}`);
+        debugLog(`PLAYER: canPlay application/x-mpegURL: ${videoEl.canPlayType('application/x-mpegURL')}`);
+      }
+    }
+    console.log("[playUrl] Using direct playback", { isWebOS, url: playbackUrl.substring(0, 100) });
+    
+    // On webOS, try to use HTTP instead of HTTPS to avoid mixed content issues
+    let finalUrl = playbackUrl;
+    if (isWebOS && playbackUrl.startsWith("https://")) {
+      finalUrl = playbackUrl.replace("https://", "http://");
+      const debugLog = (window as any).webosDebugLog;
+      if (debugLog) debugLog(`PLAYER: converted to HTTP: ${finalUrl.substring(0, 60)}`);
+    }
+    
+    videoEl.src = finalUrl;
     videoEl.onerror = () => {
       if (isStaleRequest() || hasPlaybackStarted) return;
+      
+      const isWebOS = isWebOsRuntime();
+      const errorCode = videoEl.error?.code || 0;
+      const errorMsg = videoEl.error?.message || "unknown";
+      
+      if (isWebOS) {
+        const debugLog = (window as any).webosDebugLog;
+        if (debugLog) debugLog(`PLAYER: error code=${errorCode} msg=${errorMsg}`);
+      }
+      console.log("[playUrl] Direct playback error", { errorCode, errorMsg, url: finalUrl.substring(0, 60) });
 
       if (!hasRetriedHttpFallback) {
         const fallbackUrl = toHttpFallbackUrl(fallbackBaseUrl);
@@ -2514,7 +2614,9 @@ export function playUrl(
         }
       }
 
-      emitPlayerError("Stream failed: unsupported codecs/format or network/protocol issue.");
+      emitPlayerError(isWebOsRuntime()
+        ? "Stream not available (server may block TV access)."
+        : "Stream failed: unsupported codecs/format or network/protocol issue.");
     };
     videoEl.load();
     void safePlay(videoEl);

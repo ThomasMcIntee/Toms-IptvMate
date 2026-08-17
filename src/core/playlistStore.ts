@@ -23,8 +23,8 @@ const SESSION_KEY = "iptvmate_playlists_session";
 const PLAYLISTS_DB = "iptvmate_playlists_cache";
 const PLAYLISTS_STORE = "playlists";
 const PLAYLISTS_RECORD_KEY = "latest";
-const PLAYLISTS_DB_OPEN_TIMEOUT_MS = 1500;
-const PLAYLISTS_DB_LOAD_TIMEOUT_MS = 1800;
+const PLAYLISTS_DB_OPEN_TIMEOUT_MS = 8000;
+const PLAYLISTS_DB_LOAD_TIMEOUT_MS = 10000;
 const PLAYLIST_BRIDGE_TIMEOUT_MS = 3200;
 const DEV_PLAYLIST_BRIDGE_RETRY_COOLDOWN_MS = 2000;
 const DEV_PLAYLIST_BRIDGE_MAX_ATTEMPTS = 6;
@@ -45,6 +45,15 @@ const DEV_PLAYLIST_BRIDGE_ORIGINS = [
 const RECOVERY_PLAYLIST_URL = "recovery://cached-channels";
 const RECOVERY_PLAYLIST_NAME = "recovered channels";
 const WINDOW_NAME_PLAYLIST_PREFIX = "iptvmate_playlists=";
+const PLAYLISTS_COOKIE_KEY = "iptvmate_playlists_cookie";
+// Some webOS TV firmware builds purge localStorage/IndexedDB for packaged
+// web apps when the app process is fully closed (not just suspended), while
+// cookies with a long expiry survive because they live in the browser's
+// persistent cookie jar rather than per-app storage. Keep a cookie mirror as
+// a last-resort durability layer for that case. Cookies are capped around
+// 4KB, so this is only used when the payload fits.
+const PLAYLISTS_COOKIE_MAX_LENGTH = 3800;
+const PLAYLISTS_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 5;
 let inMemoryPlaylists: PlaylistEntry[] = [];
 let indexedDbHydrationStarted = false;
 let indexedDbHydrationCompleted = false;
@@ -418,6 +427,12 @@ function safeSetPlaylists(entries: PlaylistEntry[], emitChangeEvent = true) {
     writePlaylistsToWindowName(entries);
   } catch {
     // Ignore window.name fallback errors.
+  }
+
+  try {
+    writePlaylistsToCookie(entries);
+  } catch {
+    // Ignore cookie fallback errors.
   }
 
   void savePlaylistsIndexedDb(entries);
@@ -814,6 +829,8 @@ function readJsonArray(key: string): unknown[] {
           const sessionParsed = JSON.parse(sessionRaw) as unknown;
           return extractPlaylistCollection(sessionParsed);
         }
+        const cookieEntries = readPlaylistsFromCookie();
+        if (cookieEntries.length > 0) return cookieEntries;
         return readPlaylistsFromWindowName();
       }
       return [];
@@ -828,6 +845,8 @@ function readJsonArray(key: string): unknown[] {
           const sessionParsed = JSON.parse(sessionRaw) as unknown;
           return extractPlaylistCollection(sessionParsed);
         }
+        const cookieEntries = readPlaylistsFromCookie();
+        if (cookieEntries.length > 0) return cookieEntries;
         return readPlaylistsFromWindowName();
       } catch {
         return readPlaylistsFromWindowName();
@@ -883,6 +902,46 @@ function readPlaylistsFromWindowName(): unknown[] {
   }
 }
 
+function writePlaylistsToCookie(entries: PlaylistEntry[]): void {
+  if (typeof document === "undefined") return;
+
+  try {
+    const encoded = encodeURIComponent(JSON.stringify(entries));
+    if (encoded.length > PLAYLISTS_COOKIE_MAX_LENGTH) {
+      // Payload too large for a cookie; drop any stale cookie so we don't
+      // resurrect an outdated playlist list on next launch.
+      document.cookie = `${PLAYLISTS_COOKIE_KEY}=; Max-Age=0; path=/`;
+      return;
+    }
+    document.cookie = `${PLAYLISTS_COOKIE_KEY}=${encoded}; Max-Age=${PLAYLISTS_COOKIE_MAX_AGE_SECONDS}; path=/`;
+  } catch {
+    // Ignore cookie persistence errors.
+  }
+}
+
+function readPlaylistsFromCookie(): unknown[] {
+  if (typeof document === "undefined") return [];
+
+  try {
+    const cookies = String(document.cookie || "").split(";");
+    for (const cookie of cookies) {
+      const trimmed = cookie.trim();
+      if (!trimmed.startsWith(`${PLAYLISTS_COOKIE_KEY}=`)) continue;
+
+      const encodedPayload = trimmed.slice(PLAYLISTS_COOKIE_KEY.length + 1);
+      if (!encodedPayload) return [];
+
+      const decoded = decodeURIComponent(encodedPayload);
+      const parsed = JSON.parse(decoded) as unknown;
+      return extractPlaylistCollection(parsed);
+    }
+  } catch {
+    // Ignore cookie parsing errors.
+  }
+
+  return [];
+}
+
 function collectPlaylistsFromStorageArea(area: Storage | null): PlaylistEntry[] {
   if (!area) return [];
 
@@ -909,7 +968,10 @@ function collectPlaylistsFromStorageArea(area: Storage | null): PlaylistEntry[] 
 function recoverPlaylistsFromAnyStorageKey(): PlaylistEntry[] {
   const fromLocal = collectPlaylistsFromStorageArea(typeof localStorage !== "undefined" ? localStorage : null);
   const fromSession = collectPlaylistsFromStorageArea(typeof sessionStorage !== "undefined" ? sessionStorage : null);
-  return dedupePlaylists([...fromLocal, ...fromSession]);
+  const fromCookie = readPlaylistsFromCookie()
+    .map(toPlaylistEntry)
+    .filter((entry): entry is PlaylistEntry => !!entry);
+  return dedupePlaylists([...fromLocal, ...fromSession, ...fromCookie]);
 }
 
 function toPlaylistEntry(candidate: unknown): PlaylistEntry | null {

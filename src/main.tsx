@@ -41,6 +41,12 @@ type NormalizedRemoteKeyboardEvent = KeyboardEvent & {
   webOsRemoteNormalized?: boolean;
 };
 
+function isWebOsRuntime(): boolean {
+  const agent = String(navigator?.userAgent || "");
+  const runtime = (window as Window & { webOS?: unknown; PalmServiceBridge?: unknown }).webOS;
+  return /WebOSTV|webOS|LG WebOS/i.test(agent) || Boolean(runtime) || Boolean((window as Window & { PalmServiceBridge?: unknown }).PalmServiceBridge);
+}
+
 function isRemoteBackEvent(event: KeyboardEvent): boolean {
   const rawKey = String(event.key || "");
   const normalizedKey = REMOTE_KEY_ALIASES[rawKey] ||
@@ -49,62 +55,8 @@ function isRemoteBackEvent(event: KeyboardEvent): boolean {
   return normalizedKey === "Backspace" || normalizedKey === "Escape";
 }
 
-function getVisibleFocusableElements(): HTMLElement[] {
-  const selector = [
-    "button:not([disabled])",
-    "a[href]",
-    "input:not([disabled])",
-    "select:not([disabled])",
-    "textarea:not([disabled])",
-    '[tabindex]:not([tabindex="-1"])'
-  ].join(",");
-
-  return Array.from(document.querySelectorAll<HTMLElement>(selector)).filter((element) => {
-    const rect = element.getBoundingClientRect();
-    const style = window.getComputedStyle(element);
-    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-  });
-}
-
-function moveRemoteFocus(key: string) {
-  const focusable = getVisibleFocusableElements();
-  if (focusable.length === 0) return;
-
-  const active = document.activeElement as HTMLElement | null;
-  if (!active || !focusable.includes(active)) {
-    focusable[0]?.focus();
-    return;
-  }
-
-  const currentRect = active.getBoundingClientRect();
-  const currentX = currentRect.left + currentRect.width / 2;
-  const currentY = currentRect.top + currentRect.height / 2;
-  let best: { element: HTMLElement; score: number } | null = null;
-
-  for (const element of focusable) {
-    if (element === active) continue;
-    const rect = element.getBoundingClientRect();
-    const deltaX = rect.left + rect.width / 2 - currentX;
-    const deltaY = rect.top + rect.height / 2 - currentY;
-    const isInDirection =
-      (key === "ArrowLeft" && deltaX < -1) ||
-      (key === "ArrowRight" && deltaX > 1) ||
-      (key === "ArrowUp" && deltaY < -1) ||
-      (key === "ArrowDown" && deltaY > 1);
-    if (!isInDirection) continue;
-
-    const primaryDistance = key === "ArrowLeft" || key === "ArrowRight" ? Math.abs(deltaX) : Math.abs(deltaY);
-    const crossDistance = key === "ArrowLeft" || key === "ArrowRight" ? Math.abs(deltaY) : Math.abs(deltaX);
-    const score = primaryDistance + crossDistance * 2;
-    if (!best || score < best.score) best = { element, score };
-  }
-
-  best?.element.focus();
-}
-
+// Simplified key normalization - NO preventDefault here, let React handle events
 function normalizeRemoteKeyEvents() {
-  let suppressCurrentBackKeyUp = false;
-
   const keepKeyboardFocus = () => {
     if (!document.body) return;
     if (!document.body.hasAttribute("tabindex")) {
@@ -116,106 +68,128 @@ function normalizeRemoteKeyEvents() {
     }
   };
 
+  // Focus body on pointer events
   window.addEventListener("pointerdown", () => {
     window.setTimeout(keepKeyboardFocus, 0);
   });
+
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       keepKeyboardFocus();
     }
   });
 
-  const suppressNativeBackExit = (event: KeyboardEvent) => {
-    if (!isRemoteBackEvent(event)) return;
-
-    if (event.type === "keyup") {
-      if (!suppressCurrentBackKeyUp) return;
-      suppressCurrentBackKeyUp = false;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      return;
-    }
-
-    if (document.body?.dataset.nativeBackExit === "allowed") return;
-    suppressCurrentBackKeyUp = true;
-    event.preventDefault();
-  };
-
-  window.addEventListener("keydown", suppressNativeBackExit, true);
-  window.addEventListener("keyup", suppressNativeBackExit, true);
-
+  // Normalize remote key values so React sees standard key names
   window.addEventListener("keydown", (event) => {
     const rawKey = String(event.key || "");
+    const keyCode = Number(event.keyCode || 0);
+    
+    // Debug log
+    const debugLog = (window as any).webosDebugLog;
+    if (debugLog) {
+      debugLog(`KEY: ${rawKey} code=${keyCode}`);
+    }
+    
+    // Normalize the key property for React to handle
     const normalizedKey = REMOTE_KEY_ALIASES[rawKey] ||
-      REMOTE_KEYCODE_MAP[Number(event.keyCode || 0)];
-    if (!normalizedKey || normalizedKey === rawKey) return;
-
-    event.stopImmediatePropagation();
-
-    const normalizedEvent = new KeyboardEvent("keydown", {
-      key: normalizedKey,
-      code: normalizedKey === "Enter" ? "Enter" : normalizedKey,
-      bubbles: true,
-      cancelable: true,
-      repeat: event.repeat,
-      altKey: event.altKey,
-      ctrlKey: event.ctrlKey,
-      metaKey: event.metaKey,
-      shiftKey: event.shiftKey
-    }) as NormalizedRemoteKeyboardEvent;
-    Object.defineProperty(normalizedEvent, "webOsRemoteNormalized", { value: true });
-
-    const activeElement = document.activeElement;
-    const target = activeElement instanceof HTMLElement && activeElement.isConnected
-      ? activeElement
-      : window;
-    target.dispatchEvent(normalizedEvent);
-    if (normalizedEvent.defaultPrevented) {
-      event.preventDefault();
+      REMOTE_KEYCODE_MAP[keyCode];
+    
+    if (normalizedKey && normalizedKey !== rawKey) {
+      try {
+        Object.defineProperty(event, "key", { value: normalizedKey, configurable: true });
+        Object.defineProperty(event, "code", {
+          value: normalizedKey === "Enter" ? "Enter" : normalizedKey,
+          configurable: true
+        });
+      } catch {
+        // Some browsers don't allow this
+      }
     }
   }, true);
 
-  window.addEventListener("keydown", (event: NormalizedRemoteKeyboardEvent) => {
-    const isArrow = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key);
-    const isNormalizedEnter = event.key === "Enter" && event.webOsRemoteNormalized;
-    if (!isArrow && !isNormalizedEnter) return;
-
-    window.setTimeout(() => {
-      if (event.defaultPrevented) return;
-      const active = document.activeElement as HTMLElement | null;
-      if (active instanceof HTMLMediaElement) {
-        if (isNormalizedEnter) {
-          if (active.paused) void active.play();
-          else active.pause();
-        } else if (event.key === "ArrowLeft" && Number.isFinite(active.duration)) {
-          active.currentTime = Math.max(0, active.currentTime - 10);
-        } else if (event.key === "ArrowRight" && Number.isFinite(active.duration)) {
-          active.currentTime = Math.min(active.duration, active.currentTime + 10);
-        } else if (event.key === "ArrowUp") {
-          active.muted = false;
-          active.volume = Math.min(1, active.volume + 0.1);
-        } else if (event.key === "ArrowDown") {
-          active.volume = Math.max(0, active.volume - 0.1);
-        }
-        event.preventDefault();
-        return;
-      }
-
-      if (isArrow) {
-        moveRemoteFocus(event.key);
-        event.preventDefault();
-        return;
-      }
-
-      active?.click();
+  // Handle Enter on focused elements
+  window.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    
+    const active = document.activeElement as HTMLElement | null;
+    if (!active) return;
+    
+    // For video elements, handle play/pause
+    if (active instanceof HTMLMediaElement) {
+      if (active.paused) void active.play();
+      else active.pause();
       event.preventDefault();
-    }, 0);
+      return;
+    }
+    
+    // For buttons, click them
+    if (active.tagName === "BUTTON" || active.getAttribute("role") === "button") {
+      active.click();
+      event.preventDefault();
+    }
   });
 
   keepKeyboardFocus();
 }
 
+// Debug overlay for webOS TV troubleshooting
+function createDebugOverlay() {
+  const overlay = document.createElement('div');
+  overlay.id = 'webos-debug-overlay';
+  overlay.style.cssText = 'position:fixed;top:10px;left:10px;background:rgba(0,0,0,0.8);color:#0f0;font-family:monospace;font-size:14px;padding:10px;z-index:999999;max-width:80%;max-height:200px;overflow:auto;pointer-events:none;';
+  document.body.appendChild(overlay);
+  
+  const log = (msg: string) => {
+    const line = document.createElement('div');
+    line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    overlay.appendChild(line);
+    if (overlay.children.length > 25) overlay.removeChild(overlay.firstChild!);
+    console.log('[webos-debug]', msg);
+  };
+  
+  log('Debug overlay initialized');
+  log(`UA: ${navigator.userAgent.substring(0, 60)}...`);
+  log(`webOS detected: ${isWebOsRuntime()}`);
+  log(`localStorage: ${typeof localStorage !== 'undefined'}`);
+  log(`indexedDB: ${typeof indexedDB !== 'undefined'}`);
+  
+  // Test localStorage directly
+  try {
+    const testKey = '__webos_test__';
+    localStorage.setItem(testKey, 'ok');
+    const testVal = localStorage.getItem(testKey);
+    localStorage.removeItem(testKey);
+    log(`localStorage test: ${testVal === 'ok' ? 'OK' : 'FAIL'}`);
+  } catch (e) {
+    log(`localStorage test: ERROR ${e}`);
+  }
+  
+  // Log key events
+  window.addEventListener('keydown', (e) => {
+    log(`KEY: ${e.key} (code=${e.keyCode})`);
+  }, true);
+  
+  // Make log function globally available
+  (window as any).webosDebugLog = log;
+  
+  // Auto-hide after 60 seconds (longer for debugging)
+  setTimeout(() => {
+    overlay.style.display = 'none';
+  }, 60000);
+}
+
+// Initialize debug overlay early
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', createDebugOverlay);
+} else {
+  createDebugOverlay();
+}
+
 normalizeRemoteKeyEvents();
+
+// NOTE: Back key handling is done by webOS SDK (webOSTVjs-1.2.4/webOSTV.js)
+// which intercepts Back at document level and dispatches 'webosBackKey' event
+// App.tsx listens for that event to handle in-app navigation
 
 async function readBridgePlaylistsFromIndexedDb(): Promise<unknown[]> {
   if (typeof indexedDB === "undefined") return [];

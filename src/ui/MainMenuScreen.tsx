@@ -13,18 +13,53 @@ const MAIN_MENU_KEYCODE_MAP: Record<number, string> = {
   29462: "ArrowUp",
   29463: "ArrowDown",
   461: "Backspace",
-  10009: "Backspace"
+  10009: "Backspace",
+  8: "Backspace",
+  27: "Escape"
 };
+
+// webOS remote sends various Back key names
+const BACK_KEY_ALIASES: Record<string, string> = {
+  Back: "Backspace",
+  BrowserBack: "Backspace",
+  GoBack: "Backspace",
+  XF86Back: "Backspace",
+  Return: "Backspace"
+};
+
+function isWebOsRuntime(): boolean {
+  const agent = String(navigator?.userAgent || "");
+  const runtime = (window as Window & { webOS?: unknown; PalmServiceBridge?: unknown }).webOS;
+  return /WebOSTV|webOS|LG WebOS/i.test(agent) || Boolean(runtime) || Boolean((window as Window & { PalmServiceBridge?: unknown }).PalmServiceBridge);
+}
 
 function normalizedMenuKey(event: KeyboardEvent): { key: string; fromFallback: boolean } {
   const raw = String(event.key || "");
+  const keyCode = Number(event.keyCode || 0);
+  
+  // Debug logging
+  const debugLog = (window as any).webosDebugLog;
+  if (debugLog) {
+    debugLog(`menu-key: raw=${raw} code=${keyCode}`);
+  }
+  
+  // First check if it's a known Back key alias
+  if (BACK_KEY_ALIASES[raw]) {
+    return { key: "Backspace", fromFallback: false };
+  }
+  
+  // Check keyCode for Back keys
+  if (keyCode === 461 || keyCode === 10009 || keyCode === 8) {
+    return { key: "Backspace", fromFallback: true };
+  }
+  
   if (raw && raw !== "Unidentified") {
     const normalizedRaw =
       raw === "OK" || raw === "Select" || raw === "NumpadEnter" ? "Enter" : raw;
     return { key: normalizedRaw, fromFallback: false };
   }
 
-  const fallback = MAIN_MENU_KEYCODE_MAP[Number(event.keyCode || 0)] || raw;
+  const fallback = MAIN_MENU_KEYCODE_MAP[keyCode] || raw;
   return { key: fallback, fromFallback: true };
 }
 
@@ -114,6 +149,13 @@ export default function MainMenuScreen({
 
     const onKeyDown = (event: KeyboardEvent) => {
       const { key, fromFallback } = normalizedMenuKey(event);
+      
+      // Log all navigation keys for debugging
+      const debugLog = (window as any).webosDebugLog;
+      if (debugLog) {
+        debugLog(`MENU: key=${key} fb=${fromFallback}`);
+      }
+      
       if (!["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Enter", "Backspace", "Escape"].includes(key)) {
         return;
       }
@@ -123,20 +165,24 @@ export default function MainMenuScreen({
         // webOS can emit duplicate back-like events for one button press.
         if (now - lastBackHandledAtRef.current < 350) {
           event.preventDefault();
-          event.stopPropagation();
           return;
         }
         lastBackHandledAtRef.current = now;
-        // Let app-level back handler decide navigation instead of forcing exit.
+        // Don't prevent default or stop propagation - let App.tsx handle navigation
         return;
       }
 
       const buttons = Array.from(
         containerRef.current?.querySelectorAll<HTMLButtonElement>(".opening-btn") || []
       );
-      if (buttons.length === 0) return;
+      if (buttons.length === 0) {
+        if (debugLog) debugLog(`MENU: no buttons found`);
+        return;
+      }
 
       const active = document.activeElement as HTMLElement | null;
+      if (debugLog) debugLog(`MENU: active=${active?.tagName} btns=${buttons.length}`);
+      
       let index = active ? buttons.indexOf(active as HTMLButtonElement) : -1;
       if (index < 0 && (key === "ArrowDown" || key === "ArrowRight")) {
         buttons[0]?.focus();
@@ -163,13 +209,13 @@ export default function MainMenuScreen({
       buttons[nextIndex]?.focus();
 
       event.preventDefault();
-      event.stopPropagation();
     };
 
-    window.addEventListener("keydown", onKeyDown);
+    // Use capture phase so we get events before webOS shell
+    window.addEventListener("keydown", onKeyDown, true);
     return () => {
       window.clearTimeout(timer);
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown, true);
     };
   }, [visible]);
 

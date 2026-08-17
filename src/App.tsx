@@ -88,6 +88,12 @@ function writeStoredItem(key: string, value: string): void {
   }
 }
 
+function isWebOsRuntime(): boolean {
+  const agent = String(navigator?.userAgent || "");
+  const runtime = (window as Window & { webOS?: unknown; PalmServiceBridge?: unknown }).webOS;
+  return /WebOSTV|webOS|LG WebOS/i.test(agent) || Boolean(runtime) || Boolean((window as Window & { PalmServiceBridge?: unknown }).PalmServiceBridge);
+}
+
 function isBackKeyEvent(event: KeyboardEvent): boolean {
   const key = String(event.key || "");
   if (
@@ -108,6 +114,8 @@ function isBackKeyEvent(event: KeyboardEvent): boolean {
 
 export function App() {
   useEffect(() => {
+    const debugLog = (window as any).webosDebugLog;
+    if (debugLog) debugLog('React App mounted!');
     loadRecordings();
   }, []);
 
@@ -219,7 +227,9 @@ export function App() {
 
   useEffect(() => {
     if (!document.body) return;
-    document.body.dataset.nativeBackExit = shouldShowOpeningMenu && !activePanel ? "allowed" : "blocked";
+    // Keep Back behavior in-app so the user returns to the main menu before
+    // leaving the app. webOS native exit should not preempt menu navigation.
+    document.body.dataset.nativeBackExit = "blocked";
   }, [shouldShowOpeningMenu, activePanel]);
 
   useEffect(() => {
@@ -1064,28 +1074,50 @@ export function App() {
   }, [accessLevel]);
 
   useEffect(() => {
-    if (!showOpeningScreen) return;
-    if (startupCacheHydrationCompletedRef.current) return;
-    if (readSetupSecurity().loginRequired && !accessLevel) {
+    const debugLog = (window as any).webosDebugLog || console.log.bind(console);
+    const security = readSetupSecurity();
+    
+    debugLog(`startup-check: show=${showOpeningScreen} completed=${startupCacheHydrationCompletedRef.current} login=${security.loginRequired} access=${accessLevel} inflight=${startupAutoLoadInFlightRef.current}`);
+
+    if (!showOpeningScreen) {
+      debugLog('startup: SKIP - not on opening screen');
+      return;
+    }
+    if (startupCacheHydrationCompletedRef.current) {
+      debugLog('startup: SKIP - already completed');
+      return;
+    }
+    if (security.loginRequired && !accessLevel) {
+      debugLog('startup: SKIP - waiting for login');
       // Pre-warm the channel cache in the background so role login is instant.
       void restoreChannelsCache();
       return;
     }
-    if (accessLevel === "adult" || accessLevel === "child") return;
-    if (startupAutoLoadInFlightRef.current) return;
+    if (accessLevel === "adult" || accessLevel === "child") {
+      debugLog('startup: SKIP - has access level');
+      return;
+    }
+    if (startupAutoLoadInFlightRef.current) {
+      debugLog('startup: SKIP - already in flight');
+      return;
+    }
 
     const playlists = loadPlaylists();
     const playlistsHydrationPending = isPlaylistsHydrationPending();
+    
+    debugLog(`startup: playlists=${playlists.length} hydrationPending=${playlistsHydrationPending}`);
 
     // IndexedDB hydration may populate playlists shortly after startup.
     // Wait for hydration events instead of finalizing an empty auto-load path.
     if (playlists.length === 0 && playlistsHydrationPending) {
+      debugLog('startup: SKIP - waiting for playlist hydration');
       return;
     }
 
     // If channels are already in memory from a same-session load, keep the
     // opening menu visible and align shared playlist state.
     if (getAllChannels().length > 0) {
+      debugLog('startup: using existing in-memory channels');
       startupCacheHydrationCompletedRef.current = true;
       const storedPlaylistId = readStoredItem(SHARED_PLAYLIST_ID_KEY);
       if (storedPlaylistId) setActivePlaylistId(storedPlaylistId);
@@ -1093,27 +1125,33 @@ export function App() {
       setContentMode("tv");
       setActiveGroup(pickDefaultLiveGroup(getAllChannels()));
       setActivePanel(null);
-      setShowOpeningScreen(true);
+      setShowOpeningScreen(false);
       return;
     }
 
+    debugLog('startup: PROCEEDING with cache load');
     let cancelled = false;
     startupAutoLoadInFlightRef.current = true;
 
     (async () => {
+      const debugLog = (window as any).webosDebugLog || console.log.bind(console);
+      debugLog('startup: restoring cache...');
+      
       // 1. Try restoring from local cache for an instant start, but do not
       // block startup for a long time on slow IndexedDB/storage reads.
       const restored = await restoreChannelsCache();
+      debugLog(`startup: restored ${restored.length} channels`);
       if (cancelled) return;
 
       function applyPreparedContent(channelList: any[], playlistId: string, visibilityRole?: "adult" | "child") {
+        debugLog(`startup: applying ${channelList.length} channels`);
         if (playlistId) setActivePlaylistId(playlistId);
         setContentPage("live");
         setContentMode("tv");
         setActiveGroup(pickDefaultLiveGroup(channelList));
         setActivePanel(null);
-        setShowOpeningScreen(true);
-        
+        setShowOpeningScreen(false);
+
         // Defer visibility role application to after initial render (avoids blocking on large playlists)
         if (visibilityRole) {
           if (typeof requestIdleCallback !== "undefined") {
@@ -1133,9 +1171,11 @@ export function App() {
         applyPreparedContent(restored, storedPlaylistId, "adult");
         setChannelUpdateTick((tick) => tick + 1);
         setCategoryRefreshTick((tick) => tick + 1);
+        debugLog('startup: cache applied successfully');
         return;
       }
 
+      debugLog('startup: no cache found, staying on menu');
       // Keep startup local. An explicit content action can fetch a saved playlist
       // when no channel cache exists, then persist it for future launches.
       startupCacheHydrationCompletedRef.current = true;
@@ -1316,61 +1356,107 @@ export function App() {
   }, [seriesPickerEpisodes]);
 
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (isTextEntryTarget(e.target)) return;
-      const isBack = isBackKeyEvent(e);
-
-      if (isBack && isSeriesPickerVisible) {
-        e.preventDefault();
+    // Helper to handle Back navigation (shared by webosBackKey and keydown)
+    const handleBackNavigation = () => {
+      const debugLog = (window as any).webosDebugLog;
+      
+      // Handle Back navigation
+      if (isSeriesPickerVisible) {
         setIsSeriesPickerVisible(false);
-        return;
+        return true;
       }
 
-      if (isBack && isVodPlaybackFullscreen) {
-        e.preventDefault();
+      if (isVodPlaybackFullscreen) {
         exitVodPlayback();
-        return;
+        return true;
       }
 
-      if (isBack && contentPage === "live" && isEffectiveLiveFullscreen) {
-        e.preventDefault();
+      if (contentPage === "live" && isEffectiveLiveFullscreen) {
         setIsLiveFullscreenRequested(false);
         setShowLiveMenu(true);
-        return;
+        return true;
       }
 
-      if (isBack && showOpeningScreen && !activePanel) {
-        return;
-      }
-
-      if (isBack) {
-        e.preventDefault();
-        e.stopPropagation();
-
-        // Return nested screens to their parent; top-level panels return to the main menu.
-        if (activePanel) {
-          if (activePanel === "recordingPlayback" || activePanel === "recordingStorage") {
-            setActivePanel("recordings");
-          } else if (activePanel === "playlist" && contentPage === "playlistManager") {
-            setActivePanel(null);
-          } else {
-            setActivePanel(null);
-            setShowOpeningScreen(true);
-          }
-        } else {
-          if (currentChannel && contentPage === "live") {
-            exitLivePlaybackToBrowser();
-          } else if (currentChannel && (contentPage === "movies" || contentPage === "series" || contentPage === "playlistManager")) {
-            stopCurrentVodPlaybackIfNeeded();
-            setCurrentChannel(null);
-            setShowOpeningScreen(true);
-          } else {
-            setShowOpeningScreen(true);
+      if (showOpeningScreen && !activePanel) {
+        // On main menu - Back should exit the app (or do nothing on desktop)
+        const isWebOS = /\bweb0?s\b|netcast|smarttv/i.test(navigator.userAgent || "");
+        if (isWebOS) {
+          if (debugLog) debugLog(`APP: Back -> exit app`);
+          try {
+            if ((window as any).webOS?.platformBack) {
+              (window as any).webOS.platformBack();
+            } else {
+              window.close();
+            }
+          } catch (e) {
+            if (debugLog) debugLog(`APP: exit failed: ${e}`);
           }
         }
+        // On desktop, Back from main menu does nothing (or user can close browser)
+        return true;
+      }
 
+      // Return nested screens to their parent
+      if (activePanel) {
+        if (activePanel === "recordingPlayback" || activePanel === "recordingStorage") {
+          setActivePanel("recordings");
+        } else if (activePanel === "playlist" && contentPage === "playlistManager") {
+          setActivePanel(null);
+        } else {
+          setActivePanel(null);
+          setShowOpeningScreen(true);
+        }
+        return true;
+      } else {
+        if (currentChannel && contentPage === "live") {
+          exitLivePlaybackToBrowser();
+        } else if (currentChannel && (contentPage === "movies" || contentPage === "series" || contentPage === "playlistManager")) {
+          stopCurrentVodPlaybackIfNeeded();
+          setCurrentChannel(null);
+          setShowOpeningScreen(true);
+        } else {
+          setShowOpeningScreen(true);
+        }
+        return true;
+      }
+    };
+
+    // Listen for custom webosBackKey event (dispatched by webOS SDK)
+    const handleWebosBack = () => {
+      const debugLog = (window as any).webosDebugLog;
+      if (debugLog) debugLog(`APP: webosBackKey event received`);
+      handleBackNavigation();
+    };
+    
+    window.addEventListener('webosBackKey', handleWebosBack);
+    
+    // Regular keydown handler
+    const onKeyDown = (e: KeyboardEvent) => {
+      const debugLog = (window as any).webosDebugLog;
+      
+      // Log every keydown that reaches this handler
+      if (debugLog) {
+        debugLog(`APP-HANDLER: key=${e.key} code=${e.keyCode}`);
+      }
+      
+      const isBack = isBackKeyEvent(e);
+      
+      // On webOS, Back is handled by webOS SDK + webosBackKey event
+      // On other platforms, handle Back here directly
+      const isWebOS = (window as any).webOS?.libVersion;
+      
+      if (isBack) {
+        if (isWebOS) {
+          // webOS SDK will dispatch webosBackKey event
+          return;
+        }
+        // Non-webOS: handle Back directly
+        e.preventDefault();
+        handleBackNavigation();
         return;
       }
+      
+      if (isTextEntryTarget(e.target)) return;
 
       if (e.key === "f" || e.key === "F") {
         e.preventDefault();
@@ -1388,9 +1474,13 @@ export function App() {
       }
     };
 
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activePanel, isVodPlaybackFullscreen, currentChannel, isSeriesPickerVisible, contentPage, isEffectiveLiveFullscreen, showOpeningScreen]);
+    // Use capture phase so we get the event before webOS shell
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener('webosBackKey', handleWebosBack);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [activePanel, isVodPlaybackFullscreen, currentChannel, isSeriesPickerVisible, contentPage, isEffectiveLiveFullscreen, showOpeningScreen, hasPlaylists]);
 
   useEffect(() => {
     const onWindowError = (event: ErrorEvent) => {
