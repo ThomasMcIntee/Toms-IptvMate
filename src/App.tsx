@@ -1122,18 +1122,12 @@ export function App() {
       startupCacheHydrationCompletedRef.current = true;
       const storedPlaylistId = readStoredItem(SHARED_PLAYLIST_ID_KEY);
       if (storedPlaylistId) setActivePlaylistId(storedPlaylistId);
-      if (isWebOsRuntime()) {
-        // TV remotes navigate by arrow keys, which only the opening menu
-        // handles. Stay on the menu with content preloaded; the live page is
-        // pointer-driven and would strand the remote with nothing focused.
-        setActivePanel(null);
-        return;
-      }
-      setContentPage("live");
+      // Always land on the main menu at startup, regardless of platform.
+      // Content (group/mode) is preloaded so Live TV opens instantly once
+      // the user explicitly chooses it from the menu.
       setContentMode("tv");
       setActiveGroup(pickDefaultLiveGroup(getAllChannels()));
       setActivePanel(null);
-      setShowOpeningScreen(false);
       return;
     }
 
@@ -1154,20 +1148,12 @@ export function App() {
       function applyPreparedContent(channelList: any[], playlistId: string, visibilityRole?: "adult" | "child") {
         debugLog(`startup: applying ${channelList.length} channels`);
         if (playlistId) setActivePlaylistId(playlistId);
-        if (isWebOsRuntime()) {
-          // TV remotes navigate by arrow keys, which only the opening menu
-          // handles. Prepare content state but stay on the menu; jumping to
-          // the pointer-driven live page strands the remote with no focus.
-          setContentMode("tv");
-          setActiveGroup(pickDefaultLiveGroup(channelList));
-          setActivePanel(null);
-        } else {
-          setContentPage("live");
-          setContentMode("tv");
-          setActiveGroup(pickDefaultLiveGroup(channelList));
-          setActivePanel(null);
-          setShowOpeningScreen(false);
-        }
+        // Always land on the main menu at startup, regardless of platform.
+        // Content (group/mode) is preloaded so Live TV opens instantly once
+        // the user explicitly chooses it from the menu.
+        setContentMode("tv");
+        setActiveGroup(pickDefaultLiveGroup(channelList));
+        setActivePanel(null);
 
         // Defer visibility role application to after initial render (avoids blocking on large playlists)
         if (visibilityRole) {
