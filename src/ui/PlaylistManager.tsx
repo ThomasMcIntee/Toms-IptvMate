@@ -13,6 +13,7 @@ import {
   setChannels,
   Channel,
   getAllChannels,
+  getVisibilitySnapshot,
   getVisibilitySnapshotForChannelIds,
   applyVisibilitySnapshotForCurrentChannels,
   setActiveVisibilityRole,
@@ -174,10 +175,11 @@ function parseRoleCache(raw: string | null, playlistId: string): RoleCachePayloa
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<RoleCachePayload>;
-    if (!parsed || !Array.isArray(parsed.channels)) return null;
+    if (!parsed) return null;
 
-    const channels = parsed.channels.map((item) => sanitizeChannel(item)).filter((item): item is Channel => !!item);
-    if (channels.length === 0) return null;
+    // channels might be missing in localStorage to save space.
+    const rawChannels = Array.isArray(parsed.channels) ? parsed.channels : [];
+    const channels = rawChannels.map((item) => sanitizeChannel(item)).filter((item): item is Channel => !!item);
 
     const visibility =
       parsed.visibility && typeof parsed.visibility === "object"
@@ -271,7 +273,12 @@ async function readRoleCacheFromDb(kind: "adult" | "child", playlistId: string):
 }
 
 async function writeRoleCache(kind: "adult" | "child", payload: RoleCachePayload): Promise<void> {
-  writeStorageItem(roleCacheStorageKey(kind), JSON.stringify(payload));
+  // Store a lightweight version in localStorage (exclude channels)
+  const metaOnly = {
+    playlistId: payload.playlistId,
+    visibility: payload.visibility
+  };
+  writeStorageItem(roleCacheStorageKey(kind), JSON.stringify(metaOnly));
 
   const db = await openRoleCacheDb();
   if (!db) return;
@@ -293,7 +300,7 @@ async function writeRoleCache(kind: "adult" | "child", payload: RoleCachePayload
 
 async function readRoleCache(kind: "adult" | "child", playlistId: string): Promise<RoleCachePayload | null> {
   const fromLocal = parseRoleCache(readStorageItem(roleCacheStorageKey(kind)), playlistId);
-  if (fromLocal) return fromLocal;
+  if (fromLocal && fromLocal.channels.length > 0) return fromLocal;
   return readRoleCacheFromDb(kind, playlistId);
 }
 
@@ -740,7 +747,7 @@ export default function PlaylistManager({
       }
       if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
 
-      const visibility = getVisibilitySnapshotForChannelIds(channels.map((channel) => channel.id));
+      const visibility = getVisibilitySnapshot();
 
       const samePlaylistAssignedToBothRoles = adultPlaylistId === p.id && childPlaylistId === p.id;
       const persistAdult =

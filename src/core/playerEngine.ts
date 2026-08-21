@@ -76,8 +76,12 @@ const ATTEMPT_WINDOW_MS = 20000;
 const MAX_ATTEMPTS_PER_WINDOW = 30;
 const DEFAULT_ELECTRON_RELAY_ORIGIN = "http://127.0.0.1:4173";
 
+function isCapacitorRuntime(): boolean {
+  return !!(window as any).Capacitor || navigator.userAgent.includes("Capacitor");
+}
+
 function getRelayBaseOrigin(): string | null {
-  if (isWebOsRuntime()) return null;
+  if (isWebOsRuntime() || isCapacitorRuntime()) return null;
 
   const protocol = window.location.protocol;
 

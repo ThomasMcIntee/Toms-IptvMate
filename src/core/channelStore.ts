@@ -31,6 +31,7 @@ const CHANNELS_CACHE_KEY = "iptvmate_channels_cache";
 const CHANNELS_CACHE_META_KEY = "iptvmate_channels_cache_meta";
 const CHANNELS_CACHE_DB = "iptvmate_cache";
 const CHANNELS_CACHE_STORE = "channels";
+const VISIBILITY_STORE = "visibility";
 const CHANNELS_CACHE_RECORD_KEY = "latest";
 // webOS TV flash storage can take several seconds to open IndexedDB and read a
 // multi-megabyte channel record at cold boot. Aggressive (~1.2s) timeouts made
@@ -386,6 +387,16 @@ function loadCachedChannelsWithPresence(): { hasValue: boolean; channels: Channe
 }
 
 function saveCachedChannels(list: Channel[]) {
+  // Only use localStorage for small lists to avoid OOM and QuotaExceededError.
+  // IndexedDB is the primary store for large IPTV playlists.
+  if (list.length > 2000) {
+    try {
+      localStorage.removeItem(CHANNELS_CACHE_KEY);
+    } catch {
+      // Ignore
+    }
+    return;
+  }
   try {
     localStorage.setItem(CHANNELS_CACHE_KEY, JSON.stringify(list.map(toCacheChannel)));
   } catch (err) {
@@ -450,12 +461,15 @@ async function openChannelsCacheDb(): Promise<IDBDatabase | null> {
     const timeout = window.setTimeout(() => finish(null), CHANNELS_CACHE_DB_TIMEOUT_MS);
 
     try {
-      const request = indexedDB.open(CHANNELS_CACHE_DB, 1);
+      const request = indexedDB.open(CHANNELS_CACHE_DB, 2);
 
       request.onupgradeneeded = () => {
         const db = request.result;
         if (!db.objectStoreNames.contains(CHANNELS_CACHE_STORE)) {
           db.createObjectStore(CHANNELS_CACHE_STORE);
+        }
+        if (!db.objectStoreNames.contains(VISIBILITY_STORE)) {
+          db.createObjectStore(VISIBILITY_STORE);
         }
       };
 
@@ -635,8 +649,20 @@ export function saveRoleVisibility(role: "adult" | "child") {
   try {
     localStorage.setItem(key, JSON.stringify(visibilityState));
   } catch {
-    // Ignore persistence errors.
+    // Large visibility maps can exceed localStorage quota.
   }
+
+  // Also persist to IndexedDB for reliability
+  void (async () => {
+    const db = await openChannelsCacheDb();
+    if (!db) return;
+    try {
+      const tx = db.transaction(VISIBILITY_STORE, "readwrite");
+      tx.objectStore(VISIBILITY_STORE).put(visibilityState, key);
+    } catch {
+      // Ignore
+    }
+  })();
 }
 
 /** Switch between adult (default) and child visibility states.
@@ -645,23 +671,44 @@ export function saveRoleVisibility(role: "adult" | "child") {
 export function setActiveVisibilityRole(role: "adult" | "child") {
   activeVisibilityRole = role;
   const savedKey = role === "child" ? CHILD_SAVED_KEY : ADULT_SAVED_KEY;
+
+  // Start with a fallback to empty state
+  let nextState: VisibilityState = { groups: {}, channels: {} };
+
   try {
-    // Only read from the saved key. Reset never touches it.
     const raw = localStorage.getItem(savedKey);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<VisibilityState>;
-      visibilityState = {
+      nextState = {
         groups: parsed.groups ?? {},
         channels: parsed.channels ?? {}
       };
-    } else {
-      // No saved settings yet — start fully visible.
-      visibilityState = { groups: {}, channels: {} };
+      visibilityState = nextState;
+      dispatchVisibilityChanged();
     }
   } catch {
-    visibilityState = { groups: {}, channels: {} };
+    // Fall through to IDB
   }
-  dispatchVisibilityChanged();
+
+  // Always attempt to refine from IndexedDB in case localStorage was truncated
+  void (async () => {
+    const db = await openChannelsCacheDb();
+    if (!db) return;
+    try {
+      const tx = db.transaction(VISIBILITY_STORE, "readonly");
+      const request = tx.objectStore(VISIBILITY_STORE).get(savedKey);
+      request.onsuccess = () => {
+        const val = request.result as VisibilityState | undefined;
+        if (val && (Object.keys(val.groups).length > 0 || Object.keys(val.channels).length > 0)) {
+          // If IDB has more data or we are currently empty, prefer it.
+          visibilityState = val;
+          dispatchVisibilityChanged();
+        }
+      };
+    } catch {
+      // Ignore
+    }
+  })();
 }
 
 function dispatchVisibilityChanged() {
@@ -969,6 +1016,8 @@ export function setChannelFavoriteRecord(channel: Partial<Channel> | null | unde
 
 export function resetVisibilityForCurrentChannels() {
   const visibleGroups: Record<string, boolean> = {};
+  // Optimization: Don't store "true" for every channel. Assume visible by default.
+  // This saves significant memory and storage space for large playlists.
   const visibleChannels: Record<string, boolean> = {};
 
   for (const channel of channels) {
@@ -976,7 +1025,6 @@ export function resetVisibilityForCurrentChannels() {
     if (groupName !== "All") {
       visibleGroups[groupName] = true;
     }
-    visibleChannels[channel.id] = true;
   }
 
   visibilityState = {
@@ -985,6 +1033,13 @@ export function resetVisibilityForCurrentChannels() {
   };
   saveVisibilityState();
   dispatchVisibilityChanged();
+}
+
+export function getVisibilitySnapshot(): ChannelVisibilitySnapshot {
+  return {
+    groups: { ...visibilityState.groups },
+    channels: { ...visibilityState.channels }
+  };
 }
 
 export function getVisibilitySnapshotForChannelIds(channelIds: string[]): ChannelVisibilitySnapshot {

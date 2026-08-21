@@ -15,11 +15,11 @@
       </SelectionState>
       <SelectionState runConfigName="New Run Config">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2026-08-14T20:04:41.186343700Z">
+        <DropdownSelection timestamp="2026-08-21T17:26:34.198089100Z">
           <Target type="DEFAULT_BOOT">
-            <template>
-              <DeviceId pluginId="FirebaseDirectAccess" type="TEMPLATE" identifier="model_id=frankel/36" />
-            </template>
+            <handle>
+              <DeviceId pluginId="Default" identifier="serial=192.168.0.200:5555;connection=547d9f32" />
+            </handle>
           </Target>
         </DropdownSelection>
         <DialogSelection />
