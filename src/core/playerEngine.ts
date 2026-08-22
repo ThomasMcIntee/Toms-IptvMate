@@ -304,15 +304,16 @@ function isLikelyTransportStreamUrl(url: string): boolean {
 }
 
 function wrapTransportStreamInHlsManifest(url: string): string {
-  // Use a more descriptive manifest that includes codec information.
-  // This can help hls.js and native players identify the stream better.
+  // Always relay the internal URL to bypass CORS/Mixed Content
+  const relayedUrl = toProxyFallbackUrl(url) || url;
+
   const manifest = `#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-TARGETDURATION:60
 #EXT-X-MEDIA-SEQUENCE:0
 #EXT-X-DISCONTINUITY
 #EXTINF:60.0,
-${url}
+${relayedUrl}
 #EXT-X-ENDLIST`;
   const blob = new Blob([manifest], { type: "application/x-mpegURL" });
   const blobUrl = URL.createObjectURL(blob);
@@ -866,10 +867,16 @@ export function playUrl(
     liveRelayUrl ||
     toPrimaryPlaybackUrl(rootSourceUrl, shouldPreferTranscode);
 
-  // On Android/Capacitor, if we end up with a raw .ts stream, wrap it in a local manifest.
-  // This allows hls.js to handle the demuxing, bypassing the WebView's lack of native TS support.
+  // On Android/Capacitor, if we end up with a raw .ts stream, try to use the Native Player
+  // with the relay first. Native players on TV devices often have better MPEG-TS support
+  // than hls.js (which requires MSE, and MSE often hates long .ts streams).
   if (isCapacitorRuntime() && isLikelyTransportStreamUrl(playbackUrl) && !forceNativePlayback) {
-    playbackUrl = wrapTransportStreamInHlsManifest(playbackUrl);
+    // Only wrap in HLS if we explicitly want to try hls.js (e.g. after a native failure)
+    // For now, let's try direct relayed playback.
+    const relayedTs = toProxyFallbackUrl(playbackUrl);
+    if (relayedTs) {
+      playbackUrl = relayedTs;
+    }
   }
 
   const currentIsManifest = isLikelyHlsManifestUrl(playbackUrl) || playbackUrl.startsWith("blob:");
@@ -877,9 +884,8 @@ export function playUrl(
 
   const shouldUseHlsJs =
     playbackUrl.includes("/__transcode") ||
-    playbackUrl.includes("/__stream") ||
-    currentIsManifest ||
-    (isCapacitorRuntime() && currentIsTransportStream);
+    (playbackUrl.includes("/__stream") && currentIsManifest) ||
+    currentIsManifest;
 
   console.log(`[playUrl-calc] shouldUseHlsJs=${shouldUseHlsJs} isManifest=${currentIsManifest} isTS=${currentIsTransportStream} url=${playbackUrl.substring(0, 100)}`);
 
@@ -916,12 +922,13 @@ export function playUrl(
   videoEl.removeAttribute("src");
   videoEl.load();
 
-  // On webOS TVs and Android, prefer native HLS playback for real manifests
-  // for better codec compatibility and hardware integration.
+  // On webOS TVs, prefer native HLS playback for real manifests.
+  // On Android (Capacitor), ALWAYS use HLS.js if possible, as it's much better
+  // at handling the variety of codecs and stream errors common in IPTV.
   const isWebOS = isWebOsRuntime();
   const isCapacitor = isCapacitorRuntime();
-  const isRealManifest = isLikelyHlsManifestUrl(playbackUrl);
-  const nativeHlsAvailable = (isWebOS || isCapacitor) && isRealManifest && videoEl.canPlayType("application/vnd.apple.mpegurl");
+  const isRealManifest = isLikelyHlsManifestUrl(playbackUrl) || playbackUrl.startsWith("blob:");
+  const nativeHlsAvailable = isWebOS && isRealManifest && videoEl.canPlayType("application/vnd.apple.mpegurl");
 
   if (Hls.isSupported() && !forceNativePlayback && shouldUseHlsJsPath && !nativeHlsAvailable) {
     // Skip Shaka Player on webOS/Android - use HLS.js or Native instead
@@ -2362,7 +2369,20 @@ export function playUrl(
         const debugLog = (window as any).webosDebugLog;
         if (debugLog) debugLog(`PLAYER: HLS error code=${errorCode} msg=${errorMsg}`);
       }
-      console.log("[playUrl] Native HLS error", { errorCode, errorMsg, url: finalUrl.substring(0, 60) });
+
+      let errorCategory = "Unknown";
+      if (errorCode === 1) errorCategory = "Aborted";
+      if (errorCode === 2) errorCategory = "Network";
+      if (errorCode === 3) errorCategory = "Codec (Decode Error)";
+      if (errorCode === 4) errorCategory = "Source Not Supported";
+
+      console.log(`[playUrl] Native Error [${errorCategory}]`, {
+        errorCode,
+        errorMsg,
+        readyState: videoEl.readyState,
+        networkState: videoEl.networkState,
+        url: finalUrl.substring(0, 100)
+      });
 
       if (!hasRetriedHttpFallback) {
         const fallbackUrl = toHttpFallbackUrl(fallbackBaseUrl);
