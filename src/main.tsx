@@ -44,7 +44,8 @@ type NormalizedRemoteKeyboardEvent = KeyboardEvent & {
 function isWebOsRuntime(): boolean {
   const agent = String(navigator?.userAgent || "");
   const runtime = (window as Window & { webOS?: unknown; PalmServiceBridge?: unknown }).webOS;
-  return /WebOSTV|webOS|LG WebOS/i.test(agent) || Boolean(runtime) || Boolean((window as Window & { PalmServiceBridge?: unknown }).PalmServiceBridge);
+  const isAndroid = /Android/i.test(agent);
+  return (/WebOSTV|webOS|LG WebOS/i.test(agent) || Boolean(runtime) || Boolean((window as Window & { PalmServiceBridge?: unknown }).PalmServiceBridge)) && !isAndroid;
 }
 
 function isRemoteBackEvent(event: KeyboardEvent): boolean {

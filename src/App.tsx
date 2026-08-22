@@ -1447,7 +1447,7 @@ export function App() {
 
       if (showOpeningScreen && !activePanel) {
         // On main menu - Back should exit the app (or do nothing on desktop)
-        const isWebOS = /\bweb0?s\b|netcast|smarttv/i.test(navigator.userAgent || "");
+        const isWebOS = /Web0S|NetCast/i.test(navigator.userAgent || "") && !/Android/i.test(navigator.userAgent || "");
         if (isWebOS) {
           if (debugLog) debugLog(`APP: Back -> exit app`);
           try {
