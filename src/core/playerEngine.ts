@@ -91,7 +91,11 @@ function isWebOsRuntime(): boolean {
 function isCapacitorRuntime(): boolean {
   const isCap = !!(window as any).Capacitor ||
                navigator.userAgent.includes("Capacitor") ||
-               (window.location.hostname === "localhost" && !window.location.port);
+               // Capacitor on Android typically runs on http://localhost (no port) or http://app
+               // Desktop dev servers run on http://localhost:PORT (with port)
+               (window.location.hostname === "localhost" && !window.location.port) ||
+               (window.location.hostname === "app" && !window.location.port) ||
+               (window.location.protocol === "http:" && !window.location.port && isAndroidRuntime());
   return isCap;
 }
 
@@ -303,21 +307,36 @@ function isLikelyTransportStreamUrl(url: string): boolean {
   return /\.ts(?:\?|$)/i.test(url);
 }
 
-function wrapTransportStreamInHlsManifest(url: string): string {
+function wrapTransportStreamInHlsManifest(url: string, isLive: boolean = false): string {
   // Always relay the internal URL to bypass CORS/Mixed Content
   const relayedUrl = toProxyFallbackUrl(url) || url;
 
+  // For live streams, create a live HLS manifest (no ENDLIST, with proper live tags)
+  if (isLive) {
+    const manifest = `#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:60
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:EVENT
+#EXTINF:60.0,
+${relayedUrl}`;
+    const blob = new Blob([manifest], { type: "application/vnd.apple.mpegurl" });
+    const blobUrl = URL.createObjectURL(blob);
+    console.log(`[hls-wrap] created live manifest: ${blobUrl} for: ${relayedUrl}`);
+    return blobUrl;
+  }
+
+  // For VOD, create a static manifest
   const manifest = `#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-TARGETDURATION:60
 #EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-DISCONTINUITY
 #EXTINF:60.0,
 ${relayedUrl}
 #EXT-X-ENDLIST`;
-  const blob = new Blob([manifest], { type: "application/x-mpegURL" });
+  const blob = new Blob([manifest], { type: "application/vnd.apple.mpegurl" });
   const blobUrl = URL.createObjectURL(blob);
-  console.log(`[hls-wrap] created blob URL for TS stream: ${blobUrl}`);
+  console.log(`[hls-wrap] created VOD manifest: ${blobUrl} for: ${relayedUrl}`);
   return blobUrl;
 }
 
@@ -443,6 +462,11 @@ function toProxyFallbackUrl(url: string): string | null {
   if (isAlreadyRelayed(url)) return null;
 
   if (isCapacitorRuntime()) {
+    // If it's a TS stream, request a virtual playlist from the native proxy.
+    // This is much more stable than blob URLs on Fire TV devices.
+    if (isLikelyTransportStreamUrl(url)) {
+      return `${window.location.origin}/__playlist.m3u8?url=${encodeURIComponent(url)}`;
+    }
     return `${window.location.origin}/__stream?url=${encodeURIComponent(url)}`;
   }
 
@@ -846,8 +870,7 @@ export function playUrl(
     !forceNativePlayback &&
     !isRequestedTranscode &&
     isLiveContent &&
-    !hasTriedTranscodeFallback &&
-    false
+    !hasTriedTranscodeFallback
       ? toTranscodeFallbackUrl(rootSourceUrl, false, "compat")
       : null;
   const liveRelayUrl = !forceNativePlayback && !isRequestedTranscode && isLiveContent ? toProxyFallbackUrl(rootSourceUrl) : null;
@@ -867,27 +890,43 @@ export function playUrl(
     liveRelayUrl ||
     toPrimaryPlaybackUrl(rootSourceUrl, shouldPreferTranscode);
 
-  // On Android/Capacitor, if we end up with a raw .ts stream, try to use the Native Player
-  // with the relay first. Native players on TV devices often have better MPEG-TS support
-  // than hls.js (which requires MSE, and MSE often hates long .ts streams).
-  if (isCapacitorRuntime() && isLikelyTransportStreamUrl(playbackUrl) && !forceNativePlayback) {
-    // Only wrap in HLS if we explicitly want to try hls.js (e.g. after a native failure)
-    // For now, let's try direct relayed playback.
-    const relayedTs = toProxyFallbackUrl(playbackUrl);
-    if (relayedTs) {
-      playbackUrl = relayedTs;
-    }
+  // On Android/Capacitor, always route through the native proxy to bypass security blocks.
+  // For .ts containers, wrap them in an HLS manifest so HLS.js can handle demuxing,
+  // since browsers can't play raw MPEG-TS and may not support the codecs (HEVC, AC3, DTS).
+  const isCap = isCapacitorRuntime();
+  const needsProxy = isCap && !playbackUrl.includes("/__stream");
+  const isTsContainer = isLikelyTransportStreamUrl(playbackUrl) || playbackUrl.includes(".ts");
+
+  if (needsProxy) {
+    const relayed = toProxyFallbackUrl(playbackUrl);
+    if (relayed) playbackUrl = relayed;
   }
 
-  const currentIsManifest = isLikelyHlsManifestUrl(playbackUrl) || playbackUrl.startsWith("blob:");
-  const currentIsTransportStream = isLikelyTransportStreamUrl(playbackUrl);
+  // Wrap .ts streams in an HLS manifest for HLS.js to handle demuxing.
+  // This is critical for both web and Android, as browsers can't play raw MPEG-TS
+  // and may not support the codecs used in IPTV streams.
+  if (isTsContainer && !playbackUrl.startsWith("blob:") && !playbackUrl.includes("/__transcode")) {
+    playbackUrl = wrapTransportStreamInHlsManifest(playbackUrl, contentType === "live");
+  }
 
+  const currentIsManifest = isLikelyHlsManifestUrl(playbackUrl) || playbackUrl.includes(".m3u8") || playbackUrl.startsWith("blob:");
+  const currentIsTransportStream = isTsContainer;
+
+  const hlsSupported = Hls.isSupported();
+  const canPlayNativeHls = !!videoEl.canPlayType("application/vnd.apple.mpegurl") || !!videoEl.canPlayType("application/x-mpegURL");
+
+  // Use HLS.js for transcode URLs, manifests (including wrapped .ts), and relay URLs.
+  // This ensures proper codec handling and fallback chain on all platforms.
   const shouldUseHlsJs =
     playbackUrl.includes("/__transcode") ||
-    (playbackUrl.includes("/__stream") && currentIsManifest) ||
+    playbackUrl.includes("/__stream") ||
     currentIsManifest;
 
-  console.log(`[playUrl-calc] shouldUseHlsJs=${shouldUseHlsJs} isManifest=${currentIsManifest} isTS=${currentIsTransportStream} url=${playbackUrl.substring(0, 100)}`);
+  console.log(`[playUrl-calc] hlsSupported=${hlsSupported} canPlayNativeHls=${canPlayNativeHls} shouldUseHlsJs=${shouldUseHlsJs} isManifest=${currentIsManifest} isTS=${currentIsTransportStream} isCapacitor=${isCap} url=${playbackUrl.substring(0, 100)}`);
+
+
+
+
 
   const shouldUseNativeHls = shouldUseHlsJs;
   const shouldUseHlsJsPath = shouldUseHlsJs;
@@ -923,14 +962,17 @@ export function playUrl(
   videoEl.load();
 
   // On webOS TVs, prefer native HLS playback for real manifests.
-  // On Android (Capacitor), ALWAYS use HLS.js if possible, as it's much better
+  // On Android (Capacitor), ALWAYS use HLS.js if supported, as it's much better
   // at handling the variety of codecs and stream errors common in IPTV.
   const isWebOS = isWebOsRuntime();
   const isCapacitor = isCapacitorRuntime();
   const isRealManifest = isLikelyHlsManifestUrl(playbackUrl) || playbackUrl.startsWith("blob:");
-  const nativeHlsAvailable = isWebOS && isRealManifest && videoEl.canPlayType("application/vnd.apple.mpegurl");
 
-  if (Hls.isSupported() && !forceNativePlayback && shouldUseHlsJsPath && !nativeHlsAvailable) {
+  // Only use Native HLS on webOS for real manifests.
+  // On Android/Capacitor, we always want HLS.js if it's available.
+  const preferNativeHls = isWebOS && isRealManifest && videoEl.canPlayType("application/vnd.apple.mpegurl");
+
+  if (Hls.isSupported() && !forceNativePlayback && shouldUseHlsJsPath && !preferNativeHls) {
     // Skip Shaka Player on webOS/Android - use HLS.js or Native instead
     const shouldTryShakaForVodTranscode =
       !isWebOS &&
@@ -939,6 +981,7 @@ export function playUrl(
       contentType !== "live" &&
       !isVideoOnlyPlaybackUrl &&
       !skipShakaOnce;
+
 
     if (shouldTryShakaForVodTranscode) {
       const launchShaka = async () => {
@@ -1063,13 +1106,14 @@ export function playUrl(
       currentAudioMode === "standard" ? "compat" : currentAudioMode === "compat" ? "safe" : null;
     const bufferPreset = PLAYBACK_BUFFER_PRESETS[playbackBufferLevel];
     hls = new Hls({
-      enableWorker: !isLocalTranscodePlayback, // Disable worker for local transcode (avoid async append race)
+      enableWorker: !isLocalTranscodePlayback && !isCapacitorRuntime(),
       defaultAudioCodec:
         isLocalTranscodePlayback && !/[?&]amode=safe(?:&|$)/.test(playbackUrl)
           ? "mp4a.40.2"
           : undefined,
       startPosition: isLocalTranscodePlayback && contentType !== "live" ? 0 : -1,
       lowLatencyMode: isLocalTranscodePlayback && contentType === "live",
+
       liveDurationInfinity: isLocalTranscodePlayback && contentType === "live",
       manifestLoadingTimeOut: isLocalTranscodePlayback ? 120000 : 20000,
       levelLoadingTimeOut: isLocalTranscodePlayback ? 120000 : 10000,
@@ -1138,7 +1182,9 @@ export function playUrl(
     // Watchdog only for relay (non-transcode) paths.
     // Escalate to transcode only when we see explicit unsupported-audio decoder errors.
     if (!isLocalTranscodePlayback) {
-      const startupTimeoutMs = contentType === "live" ? 1000 : 8000;
+      const isCap = isCapacitorRuntime();
+      // Increase timeout for live streams to allow more time for relay/transcode startup
+      const startupTimeoutMs = contentType === "live" ? (isCap ? 15000 : 8000) : 15000;
       startupFallbackTimer = window.setTimeout(() => {
         if (isStaleRequest()) return;
         if (hasStartedPlayback || (contentType !== "live" && hasLoadedMetadata)) return;

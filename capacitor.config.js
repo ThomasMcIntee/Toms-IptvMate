@@ -5,7 +5,7 @@ const config = {
   bundledWebRuntime: false,
   server: {
     androidScheme: "http",
-    hostname: "app",
+    hostname: "localhost",
     allowNavigation: ["*"]
   }
 };

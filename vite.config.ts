@@ -1269,7 +1269,7 @@ export default defineConfig({
     )
   },
   plugins: [
-    react({ fastRefresh: false }),
+    react(),
     {
       name: "iptvmate-stream-relay",
       configureServer(server) {
@@ -1286,8 +1286,7 @@ export default defineConfig({
     outDir: "dist"
   },
   server: {
-    host: "0.0.0.0",
-    hmr: false
+    host: "0.0.0.0"
   },
   preview: {
     host: "0.0.0.0"

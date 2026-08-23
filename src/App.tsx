@@ -2874,6 +2874,8 @@ export function App() {
             disableRemotePlayback={true}
             tabIndex={0}
           />
+
+
         </div>
       )}
       {shouldRenderMainVideo && !useLivePreviewShell && (
@@ -2887,6 +2889,8 @@ export function App() {
           disableRemotePlayback={contentPage === "live"}
           tabIndex={0}
         />
+
+
       )}
       {forceLivePreviewLayout && !isPlaylistInputPanelOpen && (
         <div className="live-preview-placeholder" aria-hidden="true">
