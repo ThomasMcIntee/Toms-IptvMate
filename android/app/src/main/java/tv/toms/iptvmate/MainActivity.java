@@ -106,14 +106,32 @@ public class MainActivity extends BridgeActivity {
                                     // Generate a stable HLS manifest that tricks the hardware player
                                     Log.i(TAG, "Generating Virtual HLS for: " + targetUrl);
                                     String segmentUrl = "http://localhost/__stream?url=" + Uri.encode(targetUrl);
-                                    String manifest = "#EXTM3U\n" +
-                                                     "#EXT-X-VERSION:3\n" +
-                                                     "#EXT-X-TARGETDURATION:60\n" +
-                                                     "#EXT-X-MEDIA-SEQUENCE:0\n" +
-                                                     "#EXTINF:60.0,\n" +
-                                                     segmentUrl + "\n" +
-                                                     "#EXT-X-ENDLIST";
                                     
+                                    // Detect if this is a live stream (URL contains /live/)
+                                    boolean isLive = targetUrl.toLowerCase().contains("/live/");
+                                    
+                                    StringBuilder manifestBuilder = new StringBuilder();
+                                    manifestBuilder.append("#EXTM3U\n");
+                                    manifestBuilder.append("#EXT-X-VERSION:3\n");
+                                    manifestBuilder.append("#EXT-X-TARGETDURATION:60\n");
+                                    manifestBuilder.append("#EXT-X-MEDIA-SEQUENCE:0\n");
+                                    
+                                    if (isLive) {
+                                        // Live stream: no ENDLIST, use EVENT playlist type
+                                        manifestBuilder.append("#EXT-X-PLAYLIST-TYPE:EVENT\n");
+                                    }
+                                    
+                                    manifestBuilder.append("#EXTINF:60.0,\n");
+                                    manifestBuilder.append(segmentUrl).append("\n");
+                                    
+                                    if (!isLive) {
+                                        // VOD stream: add ENDLIST
+                                        manifestBuilder.append("#EXT-X-ENDLIST");
+                                    }
+                                    
+                                    String manifest = manifestBuilder.toString();
+                                    Log.i(TAG, "Generated " + (isLive ? "LIVE" : "VOD") + " manifest for: " + targetUrl);
+
                                     InputStream is = new ByteArrayInputStream(manifest.getBytes("UTF-8"));
                                     WebResourceResponse resp = new WebResourceResponse("application/vnd.apple.mpegurl", "UTF-8", is);
                                     Map<String, String> headers = new HashMap<>();
@@ -140,7 +158,7 @@ public class MainActivity extends BridgeActivity {
                                         conn.setRequestProperty(key, header.getValue());
                                     }
                                 }
-                                
+
                                 // Consistent TiviMate identity to bypass provider filters
                                 conn.setRequestProperty("User-Agent", "TiviMate/4.7.0 (Linux; Android 9; AFTKM Build/PS7279)");
 
@@ -202,7 +220,7 @@ public class MainActivity extends BridgeActivity {
                                 for (Map.Entry<String, java.util.List<String>> header : conn.getHeaderFields().entrySet()) {
                                     String key = header.getKey();
                                     if (key != null) {
-                                        if (key.equalsIgnoreCase("Content-Length") || 
+                                        if (key.equalsIgnoreCase("Content-Length") ||
                                             key.equalsIgnoreCase("Content-Range") ||
                                             key.equalsIgnoreCase("Accept-Ranges") ||
                                             key.equalsIgnoreCase("Content-Type")) {

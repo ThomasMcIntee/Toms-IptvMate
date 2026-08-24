@@ -1002,6 +1002,55 @@ export function App() {
   }, [contentPage]);
 
   useEffect(() => {
+    // Global double-click handler for program/channel names to trigger fullscreen
+    const handleProgramDoubleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      
+      // Check if the clicked element or its parent has a program/channel name class
+      const programElement = target.closest(
+        '.nn-program, .epg-grid-title, .epg-event-title, .epg-search-guide-programme-title, .channel-icon-label, .channel-row-btn'
+      );
+      
+      if (!programElement) return;
+      
+      // Don't trigger if we're on the opening screen
+      if (showOpeningScreen) return;
+      
+      // For live TV, use the CSS-based fullscreen AND native fullscreen on video
+      if (contentPage === "live") {
+        setIsLiveFullscreenRequested(true);
+        setShowLiveMenu(false);
+        
+        // Also trigger native fullscreen on the video element
+        const video = document.querySelector('video');
+        if (video) {
+          if (video.requestFullscreen) {
+            void video.requestFullscreen().catch(() => {});
+          } else if ((video as any).webkitRequestFullscreen) {
+            void (video as any).webkitRequestFullscreen().catch(() => {});
+          }
+        }
+        return;
+      }
+      
+      // For other content, use native browser fullscreen
+      const video = document.querySelector('video');
+      const targetElement = video || document.documentElement;
+      
+      if (targetElement.requestFullscreen) {
+        void targetElement.requestFullscreen().catch(() => {});
+      } else if ((targetElement as any).webkitRequestFullscreen) {
+        void (targetElement as any).webkitRequestFullscreen().catch(() => {});
+      }
+    };
+
+    document.addEventListener("dblclick", handleProgramDoubleClick);
+    return () => {
+      document.removeEventListener("dblclick", handleProgramDoubleClick);
+    };
+  }, [showOpeningScreen, contentPage]);
+
+  useEffect(() => {
     if (showOpeningScreen || contentPage !== "live") return;
 
     const applyPinnedPreviewPosition = () => {
