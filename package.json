@@ -14,12 +14,14 @@
     "preview": "vite preview",
     "cap:sync": "npx cap sync",
     "cap:android": "npx cap open android",
+    "cap:ios": "npx cap open ios",
     "android:build": "node scripts/build-android.cjs",
+    "ios:build": "node scripts/build-ios.cjs",
     "desktop:package": "node scripts/repair-electron-install.cjs && electron-builder --win nsis --config.electronDist=node_modules/electron/dist",
     "webos:version-sync": "node scripts/sync-webos-version.cjs",
     "webos:sync": "node scripts/sync-webos-build.cjs",
     "webos:package": "npm run webos:version-sync && npm run build && npm run webos:sync && npx ares-package -n webos/",
-    "build:all": "npm run build && npx cap sync android && npm run android:build && npm run webos:version-sync && npm run webos:sync && npx ares-package -n webos/ && npm run desktop:package",
+    "build:all": "npm run build && npx cap sync android && npm run android:build && npx cap sync ios && npm run ios:build && npm run webos:version-sync && npm run webos:sync && npx ares-package -n webos/ && npm run desktop:package",
     "postinstall": "node scripts/fix-webos-cli-rimraf.cjs"
   },
   "dependencies": {
