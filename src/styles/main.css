@@ -5,6 +5,19 @@ body {
   font-family: system-ui, sans-serif;
 }
 
+body.is-capacitor,
+body.is-capacitor .app-root {
+  background: #000 !important;
+}
+
+body.is-capacitor .app-root video.player-main {
+  z-index: 0;
+}
+
+
+
+
+
 body.theme-light {
   background: #f4f7fc;
   color: #111827;

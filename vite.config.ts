@@ -276,13 +276,10 @@ function shouldPreferRelayInput(sourceUrl: string): boolean {
     return true;
   }
 
-  // Live provider endpoints are frequently unstable when FFmpeg connects
-  // directly (bitstream corruption / decoder init failures). Prefer relay
-  // ingest so retries share the same normalization path as browser playback.
-  if (/\/live\/[^/]+\/[^/]+\/\d+\.[a-z0-9]+(?:\?|$)/i.test(sourceUrl)) {
-    return true;
-  }
-
+  // Live TV: prefer direct input for FFmpeg.
+  // The relay path was causing bitstream corruption and decoder init failures
+  // because it was introducing timing issues and incomplete data forwarding.
+  // Direct connection to the source is more reliable for live streams.
   return false;
 }
 

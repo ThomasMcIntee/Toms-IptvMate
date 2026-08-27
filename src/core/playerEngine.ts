@@ -1,5 +1,12 @@
 import Hls from "hls.js";
 import { ContentType } from "./channelStore";
+import {
+  isAndroidRuntime,
+  isWebOsRuntime,
+  isCapacitorRuntime,
+  isElectronRuntime,
+  isLikelyLocalRuntime
+} from "./player/platformDetection";
 
 let hls: Hls | null = null;
 let shakaPlayer: any = null;
@@ -76,29 +83,6 @@ const ATTEMPT_WINDOW_MS = 20000;
 const MAX_ATTEMPTS_PER_WINDOW = 30;
 const DEFAULT_ELECTRON_RELAY_ORIGIN = "http://127.0.0.1:4173";
 
-function isAndroidRuntime(): boolean {
-  return /Android/i.test(navigator.userAgent);
-}
-
-function isWebOsRuntime(): boolean {
-  // Be specific to LG webOS to avoid misidentifying Android Smart TVs/Fire TVs.
-  const agent = navigator.userAgent;
-  const hasWebOsBrand = /Web0S|NetCast/i.test(agent);
-  const hasLgSpecificApi = !!(window as any).PalmServiceBridge || !!(window as any).webOS;
-  return (hasWebOsBrand || hasLgSpecificApi) && !isAndroidRuntime();
-}
-
-function isCapacitorRuntime(): boolean {
-  const isCap = !!(window as any).Capacitor ||
-               navigator.userAgent.includes("Capacitor") ||
-               // Capacitor on Android typically runs on http://localhost (no port) or http://app
-               // Desktop dev servers run on http://localhost:PORT (with port)
-               (window.location.hostname === "localhost" && !window.location.port) ||
-               (window.location.hostname === "app" && !window.location.port) ||
-               (window.location.protocol === "http:" && !window.location.port && isAndroidRuntime());
-  return isCap;
-}
-
 function getRelayBaseOrigin(): string | null {
   // Never use the dev relay on webOS.
   // It only exists on the developer's PC.
@@ -115,8 +99,15 @@ function getRelayBaseOrigin(): string | null {
       if (host && host !== "localhost" && host !== "127.0.0.1" && host !== "app") {
         return window.location.origin;
       }
-      // Otherwise, can't access dev server from Android
-      return null;
+      // For localhost/app on Android (e.g., Firestick), the native proxy intercepts
+      // requests on the same origin via WebView's shouldInterceptRequest
+      const scopedWindow = window as Window & { __IPTV_RELAY_ORIGIN__?: string };
+      const explicitRelayOrigin = scopedWindow.__IPTV_RELAY_ORIGIN__?.trim();
+      if (explicitRelayOrigin) {
+        return explicitRelayOrigin;
+      }
+      // Use the app's own origin - the native Android proxy intercepts /__stream requests
+      return window.location.origin;
     }
     // Only local dev/preview hosts expose the Vite relay/transcode middleware.
     return isLikelyLocalRuntime() ? window.location.origin : null;
@@ -129,14 +120,15 @@ function getRelayBaseOrigin(): string | null {
       const explicitRelayOrigin = scopedWindow.__IPTV_RELAY_ORIGIN__?.trim();
       return explicitRelayOrigin || DEFAULT_ELECTRON_RELAY_ORIGIN;
     }
-    // For Capacitor/Android, the native proxy listens on localhost:4173
+    // For Capacitor/Android, the native proxy intercepts requests via WebView
+    // Use explicit relay origin if set, otherwise try localhost:4173 as fallback
     if (isCapacitorRuntime()) {
       const scopedWindow = window as Window & { __IPTV_RELAY_ORIGIN__?: string };
       const explicitRelayOrigin = scopedWindow.__IPTV_RELAY_ORIGIN__?.trim();
       if (explicitRelayOrigin) {
         return explicitRelayOrigin;
       }
-      // Android native proxy listens on localhost:4173
+      // Fallback for file:// protocol - native proxy may listen on localhost:4173
       return "http://localhost:4173";
     }
     return null;
@@ -306,13 +298,23 @@ function hasQueryParam(url: string, key: string): boolean {
 }
 
 function isAlreadyRelayed(url: string): boolean {
+  if (!url) return false;
+  const lower = url.toLowerCase();
   return (
-    url.includes("/__stream?") ||
-    isTranscodeBootstrapUrl(url) ||
-    url.includes("/__transcode/session/") ||
-    url.includes("corsproxy.io/?")
+    lower.includes("/__stream") ||
+    lower.includes("/__playlist") ||
+    lower.includes("/__transcode") ||
+    lower.includes("corsproxy.io") ||
+    lower.includes(window.location.hostname.toLowerCase() + "/")
   );
 }
+
+
+
+
+
+
+
 
 function isTranscodeBootstrapUrl(url: string): boolean {
   return url.includes("/__transcode?") && hasQueryParam(url, "url");
@@ -448,7 +450,12 @@ function toPrimaryPlaybackUrl(url: string, preferTranscode = true): string {
   if (!/^https?:\/\//i.test(url)) return url;
   if (isAlreadyRelayed(url)) return url;
 
+  // On Android/Capacitor, we handle all relaying logic inside playUrl()
+  // to avoid Stage 0 hardware playback being accidentally relayed.
+  if (isCapacitorRuntime()) return url;
+
   if (isLikelyLocalRuntime() || !!getRelayBaseOrigin()) {
+
     const relayBase = getRelayBaseOrigin();
     if (!relayBase) return url;
 
@@ -486,22 +493,38 @@ function toProxyFallbackUrl(url: string, isTsStream: boolean = false): string | 
 
   if (isCapacitorRuntime()) {
     // For Capacitor/Android, use the native proxy
-    // For .ts streams, use /__playlist.m3u8 which generates a virtual HLS manifest
-    // For other streams, use /__stream which fetches the raw stream
-    const endpoint = isTsStream ? "/__playlist.m3u8" : "/__stream";
-    const proxyUrl = `http://localhost${endpoint}?url=${encodeURIComponent(url)}`;
-    console.log(`[android-proxy] Converting URL: ${url.substring(0, 80)}... -> ${proxyUrl.substring(0, 100)}...`);
+    // Use getRelayBaseOrigin() to handle both http:// and file:// protocols
+    const relayBase = getRelayBaseOrigin();
+    const origin = relayBase || (window.location.protocol === "http:" || window.location.protocol === "https:" ? window.location.origin : null);
+    if (!origin) return null;
+    const endpoint = isTsStream ? "/__playlist" : "/__stream";
+    const proxyUrl = `${origin}${endpoint}?url=${encodeURIComponent(url)}`;
+    console.log(`[android-proxy] Created relay: ${proxyUrl.substring(0, 100)}...`);
     return proxyUrl;
   }
 
   return toRelayUrl(`/__stream?url=${encodeURIComponent(url)}`);
 }
 
+
+
+
+
+
 function toExternalProxyFallbackUrl(url: string): string | null {
   if (!/^https?:\/\//i.test(url)) return null;
   if (isAlreadyRelayed(url)) return null;
+  if (isCapacitorRuntime()) {
+    // For Capacitor/Android, use the native proxy
+    // Use getRelayBaseOrigin() to handle both http:// and file:// protocols
+    const relayBase = getRelayBaseOrigin();
+    const origin = relayBase || (window.location.protocol === "http:" || window.location.protocol === "https:" ? window.location.origin : null);
+    if (!origin) return null;
+    return `${origin}/__stream?url=${encodeURIComponent(url)}`;
+  }
   return `https://corsproxy.io/?${encodeURIComponent(url)}`;
 }
+
 
 function toTranscodeFallbackUrl(
   url: string,
@@ -897,74 +920,100 @@ export function playUrl(
     !hasTriedTranscodeFallback
       ? toTranscodeFallbackUrl(rootSourceUrl, false, "compat")
       : null;
-  const liveRelayUrl = !forceNativePlayback && !isRequestedTranscode && isLiveContent ? toProxyFallbackUrl(rootSourceUrl) : null;
+  const isCap = isCapacitorRuntime();
+  // For Live TV on localhost/dev, use transcode instead of relay.
+  // The relay just pipes raw stream data, which doesn't work for MPEG-TS streams in the browser.
+  // The transcode endpoint uses FFmpeg to convert the stream to HLS, which the browser can play.
+  const shouldUseTranscodeForLive = isLiveContent && (isLikelyLocalRuntime() || !!getRelayBaseOrigin());
+  const liveRelayUrl = !isCap && !forceNativePlayback && !isRequestedTranscode && isLiveContent && !shouldUseTranscodeForLive
+    ? toProxyFallbackUrl(rootSourceUrl)
+    : null;
   const isManifestLikeSource = isLikelyHlsManifestUrl(rootSourceUrl);
   const isTransportStreamSource = isLikelyTransportStreamUrl(rootSourceUrl);
   const directNativeRelayUrl =
-    forceNativePlayback && isLiveContent && isTransportStreamSource
+    !isCap && forceNativePlayback && isLiveContent && isTransportStreamSource
       ? toProxyFallbackUrl(rootSourceUrl)
       : null;
+
   let playbackUrl =
     directNativeRelayUrl ||
     (forceNativePlayback ? rootSourceUrl : null) ||
     rebootstrapVodSessionUrl ||
     (isRequestedTranscode ? normalizedUrl : null) ||
     initialVodTranscodeUrl ||
-    (isLiveContent && isTransportStreamSource ? initialLiveTranscodeUrl : null) ||
+    initialLiveTranscodeUrl ||
     liveRelayUrl ||
     toPrimaryPlaybackUrl(rootSourceUrl, shouldPreferTranscode);
 
-  // On Android/Capacitor, route through the native proxy to bypass CORS.
-  // The Android app has a native proxy in MainActivity.java that intercepts /__stream?url= requests.
-  // For .ts streams, we play them directly through the proxy without HLS wrapping,
-  // because the native proxy returns a continuous stream that doesn't work well with HLS manifests.
-  const isCap = isCapacitorRuntime();
-  const isTsContainer = isLikelyTransportStreamUrl(playbackUrl) || playbackUrl.includes(".ts");
+  // On Android/Capacitor, we have a clear split strategy:
+  // 1. Stage 0: Direct Hardware Path (Native Player + ORIGINAL URL).
+  //    This uses Fire TV hardware decoders directly.
+  //    We set the system-wide User-Agent to TiviMate in MainActivity.java to ensure access.
+  // 2. Stage 1: Software Path (HLS.js + Native Proxy).
+  //    Fallback for streams that need custom header manipulation or CORS bypass.
+  const isTsContainer = isLikelyTransportStreamUrl(playbackUrl) || playbackUrl.toLowerCase().includes(".ts");
 
-  console.log(`[android-debug] isCap=${isCap}, isTsContainer=${isTsContainer}, url=${playbackUrl.substring(0, 80)}...`);
+  if (isCap) {
+    if (playbackUrl.includes("/__transcode")) {
+      // Transcode session: use the local relay
+      const relayed = toProxyFallbackUrl(playbackUrl);
+      if (relayed) playbackUrl = relayed;
+    } else if (proxyFallbackStage === 0 && !hasTriedNativeFallback && !isAlreadyRelayed(playbackUrl)) {
+      // Stage 0: Hardware path. Use REAL URL. Do NOT relay here.
+      // This ensures the Fire TV system player connects directly to the provider.
+      console.log(`[android-native] Hardware path (direct): ${playbackUrl.substring(0, 100)}...`);
+    } else if (!isAlreadyRelayed(playbackUrl)) {
+      // Stage 1+: Software fallback. Use RELAY URL.
+      console.log(`[android-proxy] Software fallback (relay): ${playbackUrl.substring(0, 80)}...`);
+      const relayed = toProxyFallbackUrl(playbackUrl, isTsContainer);
+      if (relayed) playbackUrl = relayed;
+    }
+  } else {
+    // Non-Android platforms
+    const needsRelay = !isAlreadyRelayed(playbackUrl);
+    if (needsRelay) {
+      const relayed = toProxyFallbackUrl(playbackUrl);
+      if (relayed) playbackUrl = relayed;
+    }
 
-  // Route through native proxy on Android/Capacitor to bypass CORS
-  if (isCap && !playbackUrl.startsWith("blob:") && !playbackUrl.includes("/__stream") && !playbackUrl.includes("/__playlist.m3u8") && !playbackUrl.includes("/__transcode")) {
-    console.log(`[android-debug] Routing through native proxy`);
-    const relayed = toProxyFallbackUrl(playbackUrl, isTsContainer);
-    if (relayed) {
-      console.log(`[android-debug] Proxied URL: ${relayed.substring(0, 100)}...`);
-      playbackUrl = relayed;
-    } else {
-      console.log(`[android-debug] Failed to create proxy URL`);
+    if (isTsContainer && !playbackUrl.startsWith("blob:") && !playbackUrl.includes("/__transcode")) {
+      playbackUrl = wrapTransportStreamInHlsManifest(playbackUrl, contentType === "live");
     }
   }
 
-  // Wrap .ts streams in an HLS manifest for HLS.js to handle demuxing.
-  // BUT: On Android/Capacitor, the native proxy handles .ts streams directly.
-  // The WebView's native player can play .ts through the proxy without HLS wrapping.
-  // HLS wrapping causes timeouts because the LIVE manifest has one segment but
-  // the native proxy returns a continuous stream that never "completes".
-  if (isTsContainer && !playbackUrl.startsWith("blob:") && !playbackUrl.includes("/__transcode") && !isCap) {
-    playbackUrl = wrapTransportStreamInHlsManifest(playbackUrl, contentType === "live");
-  }
+
+
+
+
 
   const currentIsManifest = isLikelyHlsManifestUrl(playbackUrl) || playbackUrl.includes(".m3u8") || playbackUrl.startsWith("blob:");
-  const currentIsTransportStream = isTsContainer;
+  const currentIsTransportStream = !currentIsManifest && (isLikelyTransportStreamUrl(playbackUrl) || playbackUrl.toLowerCase().includes(".ts"));
 
   const hlsSupported = Hls.isSupported();
   const canPlayNativeHls = !!videoEl.canPlayType("application/vnd.apple.mpegurl") || !!videoEl.canPlayType("application/x-mpegURL");
 
-  // Use HLS.js for transcode URLs, manifests (including wrapped .ts), and relay URLs.
-  // This ensures proper codec handling and fallback chain on all platforms.
+  // On Android, we ONLY use HLS.js for transcode or relay fallbacks (Stage 1+).
+  // Native (ExoPlayer) is mandatory for stability and hardware codec support (MPEG2/AC3).
   const shouldUseHlsJs =
     playbackUrl.includes("/__transcode") ||
-    playbackUrl.includes("/__stream") ||
-    currentIsManifest;
-
-  console.log(`[playUrl-calc] hlsSupported=${hlsSupported} canPlayNativeHls=${canPlayNativeHls} shouldUseHlsJs=${shouldUseHlsJs} isManifest=${currentIsManifest} isTS=${currentIsTransportStream} isCapacitor=${isCap} url=${playbackUrl.substring(0, 100)}`);
+    (!isCap && currentIsManifest) ||
+    (isCap && (playbackUrl.includes("/__stream") || playbackUrl.includes("/__playlist")));
 
 
 
 
 
-  const shouldUseNativeHls = shouldUseHlsJs;
+
+
+
+
+  const shouldUseNativeHls = isCap || currentIsManifest || playbackUrl.includes(".m3u8");
+
   const shouldUseHlsJsPath = shouldUseHlsJs;
+
+  console.log(`[playUrl-calc] isCap=${isCap} shouldUseHlsJs=${shouldUseHlsJs} shouldUseNativeHls=${shouldUseNativeHls} isManifest=${currentIsManifest} isTS=${currentIsTransportStream} url=${playbackUrl.substring(0, 100)}`);
+
+
   const isLocalTranscodePlayback = playbackUrl.includes("/__transcode");
   const isVideoOnlyPlaybackUrl = /[?&]audio=0(?:&|$)/.test(playbackUrl);
 

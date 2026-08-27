@@ -19,7 +19,15 @@ export function getRelayBaseOrigin(): string | null {
       if (host && host !== "localhost" && host !== "127.0.0.1" && host !== "app") {
         return window.location.origin;
       }
-      return null;
+      // For localhost/app on Android (e.g., Firestick), the native proxy intercepts
+      // requests on the same origin via WebView's shouldInterceptRequest
+      const scopedWindow = window as Window & { __IPTV_RELAY_ORIGIN__?: string };
+      const explicitRelayOrigin = scopedWindow.__IPTV_RELAY_ORIGIN__?.trim();
+      if (explicitRelayOrigin) {
+        return explicitRelayOrigin;
+      }
+      // Use the app's own origin - the native Android proxy intercepts /__stream requests
+      return window.location.origin;
     }
     return isLikelyLocalRuntime() ? window.location.origin : null;
   }

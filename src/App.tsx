@@ -1367,6 +1367,12 @@ export function App() {
   }, [currentChannel]);
 
   useEffect(() => {
+    if (!!(window as any).Capacitor) {
+      document.body.classList.add('is-capacitor');
+    }
+  }, []);
+
+  useEffect(() => {
     const onPlayerError = (e: Event) => {
       if (suppressPlayerEventsRef.current) return;
       if (!currentChannelRef.current) return;
@@ -1495,10 +1501,13 @@ export function App() {
       }
 
       if (showOpeningScreen && !activePanel) {
-        // On main menu - Back should exit the app (or do nothing on desktop)
+        // On main menu - Back should exit the app
         const isWebOS = /Web0S|NetCast/i.test(navigator.userAgent || "") && !/Android/i.test(navigator.userAgent || "");
+        const isCap = !!(window as any).Capacitor || window.location.hostname === "app";
+
         if (isWebOS) {
-          if (debugLog) debugLog(`APP: Back -> exit app`);
+
+          if (debugLog) debugLog(`APP: Back -> exit app (webOS)`);
           try {
             if ((window as any).webOS?.platformBack) {
               (window as any).webOS.platformBack();
@@ -1508,10 +1517,26 @@ export function App() {
           } catch (e) {
             if (debugLog) debugLog(`APP: exit failed: ${e}`);
           }
+        } else if (isCap) {
+          if (debugLog) debugLog(`APP: Back -> exit app (Capacitor)`);
+          try {
+            // Use the Capacitor global to access plugins
+            const AppPlugin = (window as any).Capacitor?.Plugins?.App;
+            if (AppPlugin && typeof AppPlugin.exitApp === "function") {
+              void AppPlugin.exitApp();
+            } else {
+              window.close();
+            }
+          } catch (e) {
+            window.close();
+          }
         }
-        // On desktop, Back from main menu does nothing (or user can close browser)
+
+
+        // Consume the event even if exit fails to prevent browser history navigation
         return true;
       }
+
 
       // Return nested screens to their parent
       if (activePanel) {
@@ -2913,16 +2938,19 @@ export function App() {
     <div className="app-root">
       {shouldRenderMainVideo && useLivePreviewShell && (
         <div className={`live-preview-shell${isLivePreviewFullscreen ? " live-preview-shell-fullscreen" : ""}`} aria-hidden="false">
-          <video
-            id="player-main"
-            className={`player-main player-main-shell-video${currentChannel ? " player-main-native-controls" : ""}`}
-            autoPlay
-            playsInline
-            controls={!!currentChannel}
-            disablePictureInPicture={true}
-            disableRemotePlayback={true}
-            tabIndex={0}
-          />
+            <video
+              id="player-main"
+              className={`player-main player-main-shell-video${currentChannel ? " player-main-native-controls" : ""}`}
+              autoPlay
+              playsInline
+              controls={!!currentChannel}
+              disablePictureInPicture={true}
+              disableRemotePlayback={true}
+              tabIndex={0}
+              style={{ background: 'transparent', zIndex: 0 }}
+            />
+
+
 
 
         </div>
@@ -2937,7 +2965,10 @@ export function App() {
           disablePictureInPicture={contentPage === "live"}
           disableRemotePlayback={contentPage === "live"}
           tabIndex={0}
+          style={{ background: 'transparent', zIndex: 0 }}
         />
+
+
 
 
       )}

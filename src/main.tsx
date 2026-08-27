@@ -550,8 +550,12 @@ function enablePopupPlaylistExporter() {
   const targetOrigin = String(params.get("iptvmate_export_target") || "").trim();
   const requestId = String(params.get("iptvmate_export_request") || "").trim();
   if (!targetOrigin || !requestId) return;
-  if (!/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(targetOrigin)) return;
+  // Permissive origin check for Fire TV
+  if (!/^https?:\/\/(localhost|127\.0\.0\.1|app)(:\d+)?$/i.test(targetOrigin)) return;
   if (!window.opener || typeof window.opener.postMessage !== "function") return;
+
+
+
 
   void (async () => {
     const playlists = await collectBridgePlaylists();
@@ -581,7 +585,11 @@ function enablePopupPlaylistExporter() {
 function enableLocalPlaylistBridgeResponder() {
   window.addEventListener("message", (event) => {
     const origin = String(event.origin || "");
-    if (!/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return;
+    // Support app:// scheme or app hostname
+    if (!/^https?:\/\/(localhost|127\.0\.0\.1|app)(:\d+)?$/i.test(origin)) return;
+
+
+
 
     const payload = event.data as { type?: unknown; requestId?: unknown };
     const payloadType = String(payload?.type || "");
