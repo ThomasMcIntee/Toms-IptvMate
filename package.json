@@ -1,6 +1,6 @@
 {
   "name": "toms-iptvmate",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "main": "electron/main.cjs",
   "files": [
     "dist",
@@ -21,7 +21,7 @@
     "webos:version-sync": "node scripts/sync-webos-version.cjs",
     "webos:sync": "node scripts/sync-webos-build.cjs",
     "webos:package": "npm run webos:version-sync && npm run build && npm run webos:sync && npx ares-package -n webos/",
-    "build:all": "npm run build && npx cap sync android && npm run android:build && npx cap sync ios && npm run ios:build && npm run webos:version-sync && npm run webos:sync && npx ares-package -n webos/ && npm run desktop:package",
+    "build:all": "npm run build && npx cap sync android && npm run android:build && npm run webos:version-sync && npm run webos:sync && npx ares-package -n webos/ && npm run desktop:package",
     "postinstall": "node scripts/fix-webos-cli-rimraf.cjs"
   },
   "dependencies": {
@@ -31,19 +31,19 @@
     "hls.js": "^1.7.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "shaka-player": "^5.2.6"
+    "shaka-player": "^5.2.8"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.4.2",
+    "@capacitor/cli": "^8.5.0",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
-    "@vitejs/plugin-react": "^6.1.0",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.1",
     "@webos-tools/cli": "^3.2.3",
-    "electron": "^43.4.1",
+    "electron": "^44.0.0",
     "electron-builder": "^26.15.7",
     "typescript": "^7.0.2",
     "vite": "^8.2.2",
-    "webpack-cli": "^7.2.2"
+    "webpack-cli": "^7.2.3"
   },
   "overrides": {
     "@webos-tools/cli": {

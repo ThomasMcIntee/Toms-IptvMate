@@ -1,4 +1,4 @@
-import Hls from "hls.js";
+import type Hls from "hls.js";
 import { ContentType } from "./channelStore";
 import {
   isAndroidRuntime,
@@ -7,8 +7,22 @@ import {
   isElectronRuntime,
   isLikelyLocalRuntime
 } from "./player/platformDetection";
+import {
+  isNativePlayerAvailable,
+  playNativeUrl,
+  stopNativePlayback
+} from "./nativePlayerBridge";
 
 let hls: Hls | null = null;
+type HlsConstructor = typeof import("hls.js").default;
+let hlsModulePromise: Promise<HlsConstructor> | null = null;
+
+function loadHlsModule(): Promise<HlsConstructor> {
+  if (!hlsModulePromise) {
+    hlsModulePromise = import("hls.js").then((module) => module.default);
+  }
+  return hlsModulePromise;
+}
 let shakaPlayer: any = null;
 let skipShakaOnce = false;
 let videoEl: HTMLVideoElement | null = null;
@@ -284,6 +298,23 @@ function isLikelyLocalRuntime(): boolean {
   return false;
 }
 
+/** FFmpeg /__transcode exists only on desktop dev/Electron — not in the Fire TV APK. */
+function isTranscodeAvailable(): boolean {
+  const relayBase = getRelayBaseOrigin();
+  if (!relayBase) return false;
+
+  if (isCapacitorRuntime()) {
+    const host = window.location.hostname;
+    // Production Capacitor serves from http://app — native proxy only, no transcode.
+    if (host === "app") return false;
+    if (host === "localhost" && !window.location.port) return false;
+    // LAN dev against Vite (e.g. http://192.168.x.x:5173) can transcode.
+    return isLikelyLocalRuntime();
+  }
+
+  return isLikelyLocalRuntime() || !!relayBase;
+}
+
 function isElectronRuntime(): boolean {
   return /\belectron\b/i.test(navigator.userAgent || "");
 }
@@ -333,6 +364,15 @@ function isLikelyTransportStreamUrl(url: string): boolean {
 }
 
 function wrapTransportStreamInHlsManifest(url: string, isLive: boolean = false): string {
+  // On Android/Fire TV, use the native __playlist proxy instead of an in-memory blob manifest.
+  if (isCapacitorRuntime() && isLive) {
+    const playlistUrl = toProxyFallbackUrl(url, true);
+    if (playlistUrl) {
+      console.log(`[hls-wrap] using native playlist relay: ${playlistUrl.substring(0, 100)}...`);
+      return playlistUrl;
+    }
+  }
+
   // Always relay the internal URL to bypass CORS/Mixed Content
   const relayedUrl = toProxyFallbackUrl(url) || url;
 
@@ -532,7 +572,7 @@ function toTranscodeFallbackUrl(
   audioMode: "standard" | "compat" | "safe" = "standard",
   audioStreamOrder: number | null = null
 ): string | null {
-  if (!isLikelyLocalRuntime() && !getRelayBaseOrigin()) return null;
+  if (!isTranscodeAvailable()) return null;
   const relayBase = getRelayBaseOrigin();
   if (!relayBase) return null;
   const isSessionUrl = isTranscodeSessionUrl(url);
@@ -705,6 +745,8 @@ export function stopPlayback() {
   invalidateGlobalPlayAttempts();
   suppressPlayerEventsUntil = Date.now() + 3000;
 
+  stopNativePlayback();
+
   if (hls) {
     try {
       hls.stopLoad();
@@ -799,6 +841,88 @@ export function playUrl(
   const normalizedUrl = normalizeProblematicXtreamSourceUrl(normalizeStreamUrl(url));
   contentType = inferContentTypeFromUrl(normalizedUrl, contentType);
   const isLiveContent = contentType === "live";
+  const rootSourceUrlEarly = resolveRootSourceUrl(normalizedUrl);
+
+  const nativeBridgeReady = isNativePlayerAvailable();
+  if (isCapacitorRuntime() && isLiveContent && !hasTriedNativeFallback) {
+    console.log(`[playUrl-native-exo-check] bridge=${nativeBridgeReady} cap=${isCapacitorRuntime()}`);
+  }
+
+  // Fire TV / Android live IPTV: ExoPlayer handles continuous MPEG-TS + hardware codecs.
+  if (
+    isCapacitorRuntime() &&
+    isLiveContent &&
+    nativeBridgeReady &&
+    !hasTriedNativeFallback &&
+    !isTranscodeBootstrapUrl(normalizedUrl) &&
+    !isTranscodeSessionUrl(normalizedUrl)
+  ) {
+    if (hls) {
+      try {
+        hls.stopLoad();
+        hls.detachMedia();
+        hls.destroy();
+      } catch {
+        // Ignore teardown errors while switching player engines.
+      }
+      hls = null;
+    }
+
+    void teardownShakaPlayer();
+
+    if (videoEl) {
+      try {
+        videoEl.pause();
+        videoEl.onerror = null;
+        if (videoEl.src && videoEl.src.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(videoEl.src);
+          } catch {
+            // Ignore stale blob cleanup errors.
+          }
+        }
+        videoEl.removeAttribute("src");
+        videoEl.load();
+      } catch {
+        // Ignore media element reset errors.
+      }
+    }
+
+    stopNativePlayback();
+    const nativeUrl = normalizeStreamUrl(rootSourceUrlEarly);
+    console.log(`[playUrl-native-exo] url=${nativeUrl.slice(0, 100)}...`);
+    if (playNativeUrl(nativeUrl)) {
+      const onNativeExoError = (event: Event) => {
+        if (token !== playRequestToken) return;
+        const detail = (event as CustomEvent<{ source?: string; message?: string }>).detail;
+        if (detail?.source !== "native-exo") return;
+        window.removeEventListener("playerError", onNativeExoError as EventListener);
+        console.warn("[playUrl-native-exo] Native ExoPlayer failed, falling back to WebView relay");
+        emitPlayerTranscoding("Native player failed, trying relay playback...");
+        playUrl(
+          url,
+          hasRetriedHttpFallback,
+          false,
+          proxyFallbackStage,
+          true,
+          hasTriedTranscodeFallback,
+          hasRetriedTranscodeBootstrap,
+          contentType
+        );
+      };
+      window.addEventListener("playerError", onNativeExoError as EventListener);
+      window.addEventListener(
+        "playerPlaying",
+        () => window.removeEventListener("playerError", onNativeExoError as EventListener),
+        { once: true }
+      );
+      return;
+    }
+    if (!isCapacitorRuntime()) {
+      console.warn("[playUrl-native-exo] Native bridge unavailable, falling back to WebView player");
+    }
+  }
+
   const allowLiveVideoOnlyFallback = true;
   const isRequestedTranscode =
     isTranscodeBootstrapUrl(normalizedUrl) ||
@@ -958,12 +1082,30 @@ export function playUrl(
       // Transcode session: use the local relay
       const relayed = toProxyFallbackUrl(playbackUrl);
       if (relayed) playbackUrl = relayed;
-    } else if (proxyFallbackStage === 0 && !hasTriedNativeFallback && !isAlreadyRelayed(playbackUrl)) {
-      // Stage 0: Hardware path. Use REAL URL. Do NOT relay here.
-      // This ensures the Fire TV system player connects directly to the provider.
+    } else if (isLiveContent && !isAlreadyRelayed(playbackUrl) && !playbackUrl.startsWith("blob:")) {
+      if (isLikelyTransportStreamUrl(rootSourceUrl)) {
+        // Live MPEG-TS: stage 0 = progressive __stream (hardware decode), stage 1+ = __playlist + HLS.js
+        const usePlaylist = proxyFallbackStage > 0 || hasTriedNativeFallback;
+        const relayed = toProxyFallbackUrl(rootSourceUrl, usePlaylist);
+        if (relayed) {
+          console.log(
+            `[android-proxy] Live TS ${usePlaylist ? "HLS playlist" : "progressive"} relay: ${relayed.substring(0, 100)}...`
+          );
+          playbackUrl = relayed;
+        }
+      } else {
+        // Live .m3u8: proxy manifest through native relay for HLS.js
+        const relayed = toProxyFallbackUrl(rootSourceUrl, false);
+        if (relayed) {
+          console.log(`[android-proxy] Live manifest relay: ${relayed.substring(0, 100)}...`);
+          playbackUrl = relayed;
+        }
+      }
+    } else if (proxyFallbackStage === 0 && !hasTriedNativeFallback && !isAlreadyRelayed(playbackUrl) && !isLiveContent) {
+      // Stage 0 hardware path for VOD only.
       console.log(`[android-native] Hardware path (direct): ${playbackUrl.substring(0, 100)}...`);
-    } else if (!isAlreadyRelayed(playbackUrl)) {
-      // Stage 1+: Software fallback. Use RELAY URL.
+    } else if (!isAlreadyRelayed(playbackUrl) && !isLiveContent) {
+      // Stage 1+ software fallback for VOD.
       console.log(`[android-proxy] Software fallback (relay): ${playbackUrl.substring(0, 80)}...`);
       const relayed = toProxyFallbackUrl(playbackUrl, isTsContainer);
       if (relayed) playbackUrl = relayed;
@@ -975,29 +1117,44 @@ export function playUrl(
       const relayed = toProxyFallbackUrl(playbackUrl);
       if (relayed) playbackUrl = relayed;
     }
-
-    if (isTsContainer && !playbackUrl.startsWith("blob:") && !playbackUrl.includes("/__transcode")) {
-      playbackUrl = wrapTransportStreamInHlsManifest(playbackUrl, contentType === "live");
-    }
   }
 
+  // Wrap .ts streams in HLS manifest for ALL platforms (including Android/Capacitor)
+  // Android WebView's <video> element cannot natively play raw MPEG-TS streams,
+  // so we must wrap them in an HLS manifest for HLS.js to handle them.
+  if (
+    isTsContainer &&
+    !playbackUrl.startsWith("blob:") &&
+    !playbackUrl.includes("/__transcode") &&
+    !playbackUrl.includes("/__playlist") &&
+    !playbackUrl.includes("/__stream") &&
+    !(isCap && isLiveContent && isLikelyTransportStreamUrl(rootSourceUrl))
+  ) {
+    playbackUrl = wrapTransportStreamInHlsManifest(playbackUrl, contentType === "live");
+  }
 
-
-
-
+  const capLiveTsUseProgressive =
+    isCap &&
+    isLiveContent &&
+    isLikelyTransportStreamUrl(rootSourceUrl) &&
+    playbackUrl.includes("/__stream") &&
+    !playbackUrl.includes("/__playlist") &&
+    proxyFallbackStage === 0 &&
+    !hasTriedNativeFallback;
 
   const currentIsManifest = isLikelyHlsManifestUrl(playbackUrl) || playbackUrl.includes(".m3u8") || playbackUrl.startsWith("blob:");
   const currentIsTransportStream = !currentIsManifest && (isLikelyTransportStreamUrl(playbackUrl) || playbackUrl.toLowerCase().includes(".ts"));
 
-  const hlsSupported = Hls.isSupported();
-  const canPlayNativeHls = !!videoEl.canPlayType("application/vnd.apple.mpegurl") || !!videoEl.canPlayType("application/x-mpegURL");
-
   // On Android, we ONLY use HLS.js for transcode or relay fallbacks (Stage 1+).
   // Native (ExoPlayer) is mandatory for stability and hardware codec support (MPEG2/AC3).
+  // Also use HLS.js for blob URLs containing HLS manifests (from .ts stream wrapping).
   const shouldUseHlsJs =
     playbackUrl.includes("/__transcode") ||
     (!isCap && currentIsManifest) ||
-    (isCap && (playbackUrl.includes("/__stream") || playbackUrl.includes("/__playlist")));
+    (isCap && playbackUrl.includes("/__playlist")) ||
+    (isCap && playbackUrl.includes("/__stream") && !capLiveTsUseProgressive) ||
+    (isCap && currentIsManifest && playbackUrl.startsWith("blob:")) ||
+    (isCap && isLiveContent && isLikelyHlsManifestUrl(rootSourceUrl) && !isLikelyTransportStreamUrl(rootSourceUrl));
 
 
 
@@ -1007,11 +1164,12 @@ export function playUrl(
 
 
 
-  const shouldUseNativeHls = isCap || currentIsManifest || playbackUrl.includes(".m3u8");
+  // Never use WebView native HLS on Android/Capacitor — it lacks reliable HLS support.
+  const shouldUseNativeHls = !isCap && (currentIsManifest || playbackUrl.includes(".m3u8"));
 
   const shouldUseHlsJsPath = shouldUseHlsJs;
 
-  console.log(`[playUrl-calc] isCap=${isCap} shouldUseHlsJs=${shouldUseHlsJs} shouldUseNativeHls=${shouldUseNativeHls} isManifest=${currentIsManifest} isTS=${currentIsTransportStream} url=${playbackUrl.substring(0, 100)}`);
+  console.log(`[playUrl-calc] isCap=${isCap} shouldUseHlsJs=${shouldUseHlsJs} capLiveTsProgressive=${capLiveTsUseProgressive} shouldUseNativeHls=${shouldUseNativeHls} isManifest=${currentIsManifest} isTS=${currentIsTransportStream} url=${playbackUrl.substring(0, 100)}`);
 
 
   const isLocalTranscodePlayback = playbackUrl.includes("/__transcode");
@@ -1055,8 +1213,18 @@ export function playUrl(
   // Only use Native HLS on webOS for real manifests.
   // On Android/Capacitor, we always want HLS.js if it's available.
   const preferNativeHls = isWebOS && isRealManifest && videoEl.canPlayType("application/vnd.apple.mpegurl");
+  const allowHlsJsDespiteNativeFlag = isCap && isLiveContent && shouldUseHlsJsPath;
+  const shouldEnterHlsPath =
+    (!forceNativePlayback || allowHlsJsDespiteNativeFlag) &&
+    shouldUseHlsJsPath &&
+    !preferNativeHls &&
+    !capLiveTsUseProgressive;
 
-  if (Hls.isSupported() && !forceNativePlayback && shouldUseHlsJsPath && !preferNativeHls) {
+  if (shouldEnterHlsPath) {
+    void (async () => {
+      const HlsRuntime = await loadHlsModule();
+      if (isStaleRequest() || !HlsRuntime.isSupported()) return;
+
     // Skip Shaka Player on webOS/Android - use HLS.js or Native instead
     const shouldTryShakaForVodTranscode =
       !isWebOS &&
@@ -1189,16 +1357,19 @@ export function playUrl(
     const nextAudioMode =
       currentAudioMode === "standard" ? "compat" : currentAudioMode === "compat" ? "safe" : null;
     const bufferPreset = PLAYBACK_BUFFER_PRESETS[playbackBufferLevel];
-    hls = new Hls({
+    const isCapLiveHlsRelay =
+      isCapacitorRuntime() && contentType === "live" && playbackUrl.includes("/__playlist");
+    const useLiveHlsTuning = (isLocalTranscodePlayback || isCapLiveHlsRelay) && contentType === "live";
+    hls = new HlsRuntime({
       enableWorker: !isLocalTranscodePlayback && !isCapacitorRuntime(),
       defaultAudioCodec:
         isLocalTranscodePlayback && !/[?&]amode=safe(?:&|$)/.test(playbackUrl)
           ? "mp4a.40.2"
           : undefined,
       startPosition: isLocalTranscodePlayback && contentType !== "live" ? 0 : -1,
-      lowLatencyMode: isLocalTranscodePlayback && contentType === "live",
+      lowLatencyMode: useLiveHlsTuning,
 
-      liveDurationInfinity: isLocalTranscodePlayback && contentType === "live",
+      liveDurationInfinity: useLiveHlsTuning,
       manifestLoadingTimeOut: isLocalTranscodePlayback ? 120000 : 20000,
       levelLoadingTimeOut: isLocalTranscodePlayback ? 120000 : 10000,
       fragLoadingTimeOut: isLocalTranscodePlayback ? 120000 : 20000,
@@ -1266,12 +1437,13 @@ export function playUrl(
     // Watchdog only for relay (non-transcode) paths.
     // Escalate to transcode only when we see explicit unsupported-audio decoder errors.
     if (!isLocalTranscodePlayback) {
-      const isCap = isCapacitorRuntime();
-      // Increase timeout for live streams to allow more time for relay/transcode startup
-      const startupTimeoutMs = contentType === "live" ? (isCap ? 15000 : 8000) : 15000;
+      const isCapWatchdog = isCapacitorRuntime();
+      // Progressive TS relay can take longer on first connect (redirect + buffer).
+      const startupTimeoutMs = contentType === "live" ? (isCapWatchdog ? 30000 : 8000) : 15000;
       startupFallbackTimer = window.setTimeout(() => {
         if (isStaleRequest()) return;
         if (hasStartedPlayback || (contentType !== "live" && hasLoadedMetadata)) return;
+        if (hasManifestParsed && contentType === "live") return;
 
         const mediaErr = videoEl?.error;
         const isAudioDecoderUnsupported = isUnsupportedAudioDecoderError(mediaErr);
@@ -1280,6 +1452,22 @@ export function playUrl(
           // Live startup can stall with no explicit decoder error. In that case,
           // try one native fallback path only.
           if (contentType === "live" && !hasLoadedMetadata && !hasStartedPlayback && !hasTriedNativeFallback) {
+            if (isCapWatchdog && isLikelyTransportStreamUrl(rootSourceUrl)) {
+              emitPlayerTranscoding("Live startup stalled, trying HLS playlist relay...");
+              playUrl(
+                rootSourceUrl,
+                hasRetriedHttpFallback,
+                false,
+                1,
+                true,
+                hasTriedTranscodeFallback,
+                hasRetriedTranscodeBootstrap,
+                contentType
+              );
+              return;
+            }
+            if (isCapWatchdog) return;
+
             emitPlayerTranscoding("Live startup stalled, trying direct playback...");
             playUrl(
               rootSourceUrl,
@@ -2054,7 +2242,7 @@ export function playUrl(
           playUrl(
             externalProxyUrl,
             hasRetriedHttpFallback,
-            true,
+            false,
             2,
             true,
             hasTriedTranscodeFallback,
@@ -2087,7 +2275,7 @@ export function playUrl(
     };
 
 
-    hls.on(Hls.Events.ERROR, (_, data) => {
+    hls.on(HlsRuntime.Events.ERROR, (_, data) => {
       // Ignore errors from stale playback sessions - check FIRST
       if (isStaleRequest()) return;
       if (hasPlaybackStarted) return;
@@ -2339,7 +2527,7 @@ export function playUrl(
           return;
         }
 
-        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !mediaRecoveryTried) {
+        if (data.type === HlsRuntime.ErrorTypes.MEDIA_ERROR && !mediaRecoveryTried) {
           mediaRecoveryTried = true;
           fatalHandled = false;
           try {
@@ -2422,16 +2610,16 @@ export function playUrl(
         emitPlayerError(finalMsg);
       }
     });
-    hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
+    hls.on(HlsRuntime.Events.AUDIO_TRACKS_UPDATED, () => {
       if (!hls || isStaleRequest()) return;
       selectPreferredHlsAudioTrack(hls, "audio-tracks-updated");
     });
-    hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_, data) => {
+    hls.on(HlsRuntime.Events.AUDIO_TRACK_SWITCHED, (_, data) => {
       if (isStaleRequest()) return;
       const switchedTo = (data as { id?: number }).id;
       console.log(`[hls-audio] event=audio-track-switched id=${typeof switchedTo === "number" ? switchedTo : "unknown"}`);
     });
-    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+    hls.on(HlsRuntime.Events.MANIFEST_PARSED, () => {
       if (!videoEl || isStaleRequest()) return;
       hasManifestParsed = true;
       if (hls) {
@@ -2467,6 +2655,8 @@ export function playUrl(
     });
     hls.loadSource(playbackUrl);
     hls.attachMedia(videoEl);
+    })();
+    return;
   } else if ((shouldUseNativeHls || (isWebOsRuntime() && isManifestLikeSource)) && videoEl.canPlayType("application/vnd.apple.mpegurl")) {
     // Prefer native HLS on webOS TVs for HLS manifests only
     const isWebOS = isWebOsRuntime();
@@ -2676,6 +2866,27 @@ export function playUrl(
       }
       console.log("[playUrl] Direct playback error", { errorCode, errorMsg, url: finalUrl.substring(0, 60) });
 
+      if (
+        isCapacitorRuntime() &&
+        contentType === "live" &&
+        isLikelyTransportStreamUrl(rootSourceUrl) &&
+        proxyFallbackStage === 0 &&
+        !hasTriedNativeFallback
+      ) {
+        emitPlayerTranscoding("Progressive relay failed, trying HLS playlist relay...");
+        playUrl(
+          rootSourceUrl,
+          hasRetriedHttpFallback,
+          false,
+          1,
+          true,
+          hasTriedTranscodeFallback,
+          hasRetriedTranscodeBootstrap,
+          contentType
+        );
+        return;
+      }
+
       if (!hasRetriedHttpFallback) {
         const fallbackUrl = toHttpFallbackUrl(fallbackBaseUrl);
         if (fallbackUrl) {
@@ -2778,7 +2989,7 @@ export function playUrl(
           playUrl(
             externalProxyUrl,
             hasRetriedHttpFallback,
-            true,
+            false,
             2,
             true,
             hasTriedTranscodeFallback,

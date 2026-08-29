@@ -18,11 +18,13 @@ import {
   applyVisibilitySnapshotForCurrentChannels,
   setActiveVisibilityRole,
   saveRoleVisibility,
-  ChannelVisibilitySnapshot
+  ChannelVisibilitySnapshot,
+  ingestCapacitorLiveChannelCatalogAsync
 } from "../core/channelStore";
 import { loadEPGForPlaylist } from "../core/loaders/epgLoader";
 import { loadChannelsForPlaylist } from "../core/loaders/playlistLoader";
 import { loadEPGCache } from "../core/epgStore";
+import { isCapacitorRuntime } from "../core/player/platformDetection";
 
 const ADULT_CACHE_KEY = "iptvmate_adult_channels_cache";
 const CHILD_CACHE_KEY = "iptvmate_child_channels_cache";
@@ -191,9 +193,20 @@ function parseRoleCache(raw: string | null, playlistId: string): RoleCachePayloa
             channels:
               parsed.visibility.channels && typeof parsed.visibility.channels === "object"
                 ? (parsed.visibility.channels as Record<string, boolean>)
-                : {}
+                : {},
+            allGroupsHidden: parsed.visibility.allGroupsHidden === true
           }
         : undefined;
+
+    if (isCapacitorRuntime() && channels.length === 0 && parsed.playlistId) {
+      return {
+        playlistId: String(parsed.playlistId || playlistId),
+        channels: [],
+        visibility
+      };
+    }
+
+    if (channels.length === 0 && !visibility) return null;
 
     return {
       playlistId: String(parsed.playlistId || playlistId),
@@ -243,7 +256,25 @@ async function readRoleCacheFromDb(kind: "adult" | "child", playlistId: string):
       const request = tx.objectStore(ROLE_CHANNELS_STORE).get(roleCacheDbKey(kind));
       request.onsuccess = () => {
         const value = request.result as RoleCachePayload | undefined;
-        if (!value || !Array.isArray(value.channels)) {
+        if (!value) {
+          resolve(null);
+          return;
+        }
+
+        if (isCapacitorRuntime()) {
+          if (!value.visibility) {
+            resolve(null);
+            return;
+          }
+          resolve({
+            playlistId: String(value.playlistId || playlistId),
+            channels: [],
+            visibility: value.visibility
+          });
+          return;
+        }
+
+        if (!Array.isArray(value.channels)) {
           resolve(null);
           return;
         }
@@ -273,7 +304,6 @@ async function readRoleCacheFromDb(kind: "adult" | "child", playlistId: string):
 }
 
 async function writeRoleCache(kind: "adult" | "child", payload: RoleCachePayload): Promise<void> {
-  // Store a lightweight version in localStorage (exclude channels)
   const metaOnly = {
     playlistId: payload.playlistId,
     visibility: payload.visibility
@@ -283,10 +313,18 @@ async function writeRoleCache(kind: "adult" | "child", payload: RoleCachePayload
   const db = await openRoleCacheDb();
   if (!db) return;
 
+  const storedPayload: RoleCachePayload = isCapacitorRuntime()
+    ? {
+        playlistId: payload.playlistId,
+        channels: [],
+        visibility: payload.visibility
+      }
+    : payload;
+
   await new Promise<void>((resolve) => {
     try {
       const tx = db.transaction(ROLE_CHANNELS_STORE, "readwrite");
-      tx.objectStore(ROLE_CHANNELS_STORE).put(payload, roleCacheDbKey(kind));
+      tx.objectStore(ROLE_CHANNELS_STORE).put(storedPayload, roleCacheDbKey(kind));
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
       tx.onabort = () => resolve();
@@ -300,7 +338,7 @@ async function writeRoleCache(kind: "adult" | "child", payload: RoleCachePayload
 
 async function readRoleCache(kind: "adult" | "child", playlistId: string): Promise<RoleCachePayload | null> {
   const fromLocal = parseRoleCache(readStorageItem(roleCacheStorageKey(kind)), playlistId);
-  if (fromLocal && fromLocal.channels.length > 0) return fromLocal;
+  if (fromLocal && (fromLocal.channels.length > 0 || fromLocal.visibility)) return fromLocal;
   return readRoleCacheFromDb(kind, playlistId);
 }
 
@@ -553,22 +591,25 @@ export default function PlaylistManager({
     setAdultPlaylistId(id);
     setSelectedPlaylistId(id);
     writeStorageItem(ADULT_PLAYLIST_ID_KEY, id);
+    writeStorageItem(SHARED_PLAYLIST_ID_KEY, id);
   }
 
   function setChildPlaylist(id: string) {
     setChildPlaylistId(id);
     setSelectedPlaylistId(id);
     writeStorageItem(CHILD_PLAYLIST_ID_KEY, id);
+    writeStorageItem(SHARED_PLAYLIST_ID_KEY, id);
   }
 
   async function persistRoleSnapshot(kind: "adult" | "child", playlistId: string) {
-    const currentChannels = getAllChannels();
-    if (currentChannels.length === 0) return;
+    const visibility = isCapacitorRuntime()
+      ? getVisibilitySnapshot()
+      : getVisibilitySnapshotForChannelIds(getAllChannels().map((channel) => channel.id));
+    if (!visibility) return;
 
-    const visibility = getVisibilitySnapshotForChannelIds(currentChannels.map((channel) => channel.id));
     await writeRoleCache(kind, {
       playlistId,
-      channels: currentChannels,
+      channels: isCapacitorRuntime() ? [] : getAllChannels(),
       visibility
     });
   }
@@ -655,7 +696,7 @@ export default function PlaylistManager({
         return Array.from(byId.values());
       };
 
-      let channels = await loadChannelsForPlaylist(p);
+      let channels = await loadChannelsForPlaylist(p, isCapacitorRuntime() ? "live" : "all");
       const initialMovieCount = channels.filter(
         (channel) => String(channel?.contentType || "").toLowerCase() === "movie"
       ).length;
@@ -667,6 +708,7 @@ export default function PlaylistManager({
       let finalSeriesStatus = `all=${initialSeriesCount.toLocaleString()}`;
       let finalSeriesError = "";
 
+      if (!isCapacitorRuntime()) {
       const hasMovies = channels.some((channel) => String(channel?.contentType || "").toLowerCase() === "movie");
       if (!hasMovies && p.type === "xtream") {
         try {
@@ -720,6 +762,11 @@ export default function PlaylistManager({
           setStatusMessage(`Series backfill failed after all-load=${initialSeriesCount.toLocaleString()}: ${seriesMessage}`);
         }
       }
+      } else {
+        setStatusMessage(
+          `Loaded ${channels.length.toLocaleString()} live channels on Fire TV/Android (movies/series load on demand).`
+        );
+      }
 
       if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
 
@@ -731,17 +778,36 @@ export default function PlaylistManager({
       setCurrentPlaylistId(p.id);
       setSelectedPlaylistId(p.id);
       writeStorageItem(SHARED_PLAYLIST_ID_KEY, p.id);
-      setChannels(channels, roleToPersist ? "playlist-manager-role-load" : "playlist-manager-generic-load");
+
+      let loadedForUi = channels;
+      if (isCapacitorRuntime()) {
+        const defaultGroup =
+          channels.find((channel) => String(channel?.contentType || "").toLowerCase() === "live")?.group ||
+          channels[0]?.group ||
+          "Uncategorized";
+        await ingestCapacitorLiveChannelCatalogAsync(channels, String(defaultGroup));
+        loadedForUi = getAllChannels();
+        channels.length = 0;
+      } else {
+        setChannels(channels, roleToPersist ? "playlist-manager-role-load" : "playlist-manager-generic-load");
+      }
+
       saveChannelsCacheMeta({
         playlistId: p.id,
-        scopes: inferLoadedScopes(channels),
+        scopes: isCapacitorRuntime() ? ["live"] : inferLoadedScopes(loadedForUi),
         updatedAt: Date.now()
       });
-      onPlaylistLoadedWithId(channels, p.id);
-      setStatusMessage(`Loaded ${channels.length.toLocaleString()} entries from "${p.name}". Fetching EPG…`);
+      onPlaylistLoadedWithId(loadedForUi, p.id);
+      setStatusMessage(`Loaded ${loadedForUi.length.toLocaleString()} entries from "${p.name}". Fetching EPG…`);
 
       try {
-        await loadEPGForPlaylist(p);
+        if (isCapacitorRuntime() && channels.length > 3000) {
+          void loadEPGForPlaylist(p).catch((epgErr) => {
+            console.warn("EPG load failed:", epgErr);
+          });
+        } else {
+          await loadEPGForPlaylist(p);
+        }
       } catch (epgErr) {
         console.warn("EPG load failed:", epgErr);
       }
@@ -760,7 +826,7 @@ export default function PlaylistManager({
       if (persistAdult) {
         await writeRoleCache("adult", {
           playlistId: p.id,
-          channels,
+          channels: isCapacitorRuntime() ? [] : loadedForUi,
           visibility
         });
       }
@@ -768,19 +834,25 @@ export default function PlaylistManager({
       if (persistChild) {
         await writeRoleCache("child", {
           playlistId: p.id,
-          channels,
+          channels: isCapacitorRuntime() ? [] : loadedForUi,
           visibility
         });
       }
 
-      const finalMovieCount = channels.filter(
+      const finalMovieCount = isCapacitorRuntime()
+        ? 0
+        : loadedForUi.filter(
         (channel) => String(channel?.contentType || "").toLowerCase() === "movie"
       ).length;
-      const finalSeriesCount = channels.filter(
+      const finalSeriesCount = isCapacitorRuntime()
+        ? 0
+        : loadedForUi.filter(
         (channel) => String(channel?.contentType || "").toLowerCase() === "series"
       ).length;
       setStatusMessage(
-        `${finalMovieError ? `Movie error=${finalMovieError} | ` : ""}${finalSeriesError ? `Series error=${finalSeriesError} | ` : ""}✓ Loaded ${channels.length.toLocaleString()} entries from "${p.name}". Movies: ${finalMovieStatus} final=${finalMovieCount.toLocaleString()} | Series: ${finalSeriesStatus} final=${finalSeriesCount.toLocaleString()}`
+        isCapacitorRuntime()
+          ? `✓ Loaded live catalog (${getAllChannels().length.toLocaleString()} channels in active group) from "${p.name}".`
+          : `${finalMovieError ? `Movie error=${finalMovieError} | ` : ""}${finalSeriesError ? `Series error=${finalSeriesError} | ` : ""}✓ Loaded ${loadedForUi.length.toLocaleString()} entries from "${p.name}". Movies: ${finalMovieStatus} final=${finalMovieCount.toLocaleString()} | Series: ${finalSeriesStatus} final=${finalSeriesCount.toLocaleString()}`
       );
     } catch (err) {
       if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;

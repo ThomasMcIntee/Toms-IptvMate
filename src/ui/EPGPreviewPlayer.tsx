@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import Hls from "hls.js";
+import type Hls from "hls.js";
 
 export default function EPGPreviewPlayer({
   channel,
@@ -9,7 +9,6 @@ export default function EPGPreviewPlayer({
   visible: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  let hls: Hls | null = null;
 
   useEffect(() => {
     if (!visible || !channel) return;
@@ -17,24 +16,26 @@ export default function EPGPreviewPlayer({
     const video = videoRef.current;
     if (!video) return;
 
-    // Destroy previous instance
-    if (hls) {
-      hls.destroy();
-      hls = null;
-    }
+    let cancelled = false;
+    let hls: Hls | null = null;
 
-    // Load stream
-    if (Hls.isSupported()) {
-      hls = new Hls();
-      hls.loadSource(channel.url);
-      hls.attachMedia(video);
-    } else {
-      video.src = channel.url;
-    }
+    void (async () => {
+      const HlsRuntime = (await import("hls.js")).default;
+      if (cancelled) return;
 
-    video.play();
+      if (HlsRuntime.isSupported()) {
+        hls = new HlsRuntime();
+        hls.loadSource(channel.url);
+        hls.attachMedia(video);
+      } else {
+        video.src = channel.url;
+      }
+
+      void video.play();
+    })();
 
     return () => {
+      cancelled = true;
       if (hls) hls.destroy();
     };
   }, [channel, visible]);

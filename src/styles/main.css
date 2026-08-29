@@ -14,6 +14,46 @@ body.is-capacitor .app-root video.player-main {
   z-index: 0;
 }
 
+body.is-capacitor.native-exo-active .app-root video.player-main {
+  opacity: 0 !important;
+  pointer-events: none;
+}
+
+body.is-capacitor.native-exo-active .app-root {
+  background: transparent !important;
+}
+
+body.is-capacitor.native-exo-active .live-preview-shell {
+  background: transparent !important;
+  box-shadow: none;
+}
+
+body.is-capacitor.native-exo-active .live-preview-shell .player-main-shell-video {
+  background: transparent !important;
+}
+
+body.is-capacitor.native-exo-active .live-preview-shell-fullscreen {
+  background: transparent !important;
+  box-shadow: none;
+}
+
+.live-preview-shell-fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  top: 0 !important;
+  right: 0 !important;
+  left: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  border-radius: 0 !important;
+  z-index: 20 !important;
+}
+
 
 
 

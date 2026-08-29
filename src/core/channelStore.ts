@@ -16,6 +16,7 @@ export type Channel = {
   };
 };
 
+import { isCapacitorRuntime } from "./player/platformDetection";
 import { isWebOsDbAvailable, webosDbGetLarge, webosDbSetLarge } from "./webosStorage";
 
 let channels: Channel[] = [];
@@ -33,6 +34,25 @@ const CHANNELS_CACHE_DB = "iptvmate_cache";
 const CHANNELS_CACHE_STORE = "channels";
 const VISIBILITY_STORE = "visibility";
 const CHANNELS_CACHE_RECORD_KEY = "latest";
+const CHANNELS_CACHE_LIVE_RECORD_KEY = "latest-live";
+// Fire TV / Capacitor cannot keep or serialize 100k+ channel records without ANR/OOM.
+const CAPACITOR_MAX_IDB_CACHE_CHANNELS = 12000;
+const CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD = 8000;
+const CAPACITOR_MAX_GROUP_CHANNELS = 2500;
+const CAPACITOR_BULK_GROUP_THRESHOLD = 150;
+const CAPACITOR_IDB_PERSIST_BATCH_SIZE = 6;
+const CAPACITOR_INGEST_CHUNK_SIZE = 350;
+const CAPACITOR_LIVE_GROUPS_KEY = "iptvmate_capacitor_live_groups";
+const CAPACITOR_LIVE_GROUP_COUNTS_KEY = "iptvmate_capacitor_live_group_counts";
+const CAPACITOR_TRANSIENT_SOURCES = new Set<string>([
+  "capacitor-live-trim",
+  "capacitor-playback-trim",
+  "capacitor-live-ingest",
+  "capacitor-group-load"
+]);
+let capacitorLiveGroupNames: string[] = [];
+let capacitorLiveGroupCounts: Record<string, number> = {};
+let restoreChannelsCacheInFlight: Promise<Channel[]> | null = null;
 // webOS TV flash storage can take several seconds to open IndexedDB and read a
 // multi-megabyte channel record at cold boot. Aggressive (~1.2s) timeouts made
 // startup treat the cache as missing, so content never auto-loaded on TVs.
@@ -51,6 +71,8 @@ export type ChannelCacheMeta = {
 type VisibilityState = {
   groups: Record<string, boolean>;
   channels: Record<string, boolean>;
+  /** Capacitor/Fire TV: compact hide-all without storing 900+ group keys. */
+  allGroupsHidden?: boolean;
 };
 
 type FavoriteEntry = {
@@ -63,6 +85,7 @@ type FavoriteEntry = {
 export type ChannelVisibilitySnapshot = {
   groups: Record<string, boolean>;
   channels: Record<string, boolean>;
+  allGroupsHidden?: boolean;
 };
 
 export type ChannelWriteTrace = {
@@ -105,6 +128,7 @@ export function getLastChannelWriteTrace(): ChannelWriteTrace {
 }
 
 let visibilityState: VisibilityState = loadVisibilityState();
+let saveVisibilityStateTimer: number | null = null;
 let favoriteEntries = loadFavoriteEntries();
 let favoriteChannelIds = buildFavoriteIdSet(favoriteEntries);
 
@@ -353,6 +377,19 @@ function applyCachedChannels(list: Channel[]) {
   activeGroup = firstGroup || "All";
 }
 
+function applyRestoredChannels(list: Channel[]) {
+  if (
+    isCapacitorRuntime() &&
+    list.length > CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD &&
+    list.some(isLiveChannel)
+  ) {
+    ingestCapacitorLiveChannelCatalog(list);
+    return;
+  }
+
+  applyCachedChannels(list);
+}
+
 export function clearCurrentChannels(source: string = "unknown") {
   channels = [];
   activeGroup = "All";
@@ -492,6 +529,94 @@ async function openChannelsCacheDb(): Promise<IDBDatabase | null> {
   });
 }
 
+function isLiveChannel(channel: Channel): boolean {
+  const contentType = String(channel.contentType || "").trim().toLowerCase();
+  if (contentType === "live") return true;
+  if (contentType === "movie" || contentType === "series") return false;
+  return !channel.parentGroup && !channel.episodeInfo;
+}
+
+function shouldSkipCapacitorFullIdbPersist(list: Channel[]): boolean {
+  return isCapacitorRuntime() && list.length > CAPACITOR_MAX_IDB_CACHE_CHANNELS;
+}
+
+async function deleteCachedChannelsFromIndexedDb(
+  db: IDBDatabase,
+  recordKey: string
+): Promise<void> {
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(CHANNELS_CACHE_STORE, "readwrite");
+      tx.objectStore(CHANNELS_CACHE_STORE).delete(recordKey);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+async function readCachedChannelsFromIndexedDb(
+  db: IDBDatabase,
+  recordKey: string
+): Promise<Channel[]> {
+  return new Promise<Channel[]>((resolve) => {
+    try {
+      const tx = db.transaction(CHANNELS_CACHE_STORE, "readonly");
+      const request = tx.objectStore(CHANNELS_CACHE_STORE).get(recordKey);
+      request.onsuccess = () => {
+        const value = request.result as unknown;
+        if (!Array.isArray(value)) {
+          resolve([]);
+          return;
+        }
+
+        resolve(value.map(toValidChannel).filter((item): item is Channel => !!item));
+      };
+      request.onerror = () => resolve([]);
+      tx.onerror = () => resolve([]);
+      tx.onabort = () => resolve([]);
+    } catch {
+      resolve([]);
+    }
+  });
+}
+
+async function writeCachedChannelsToIndexedDb(
+  db: IDBDatabase,
+  recordKey: string,
+  list: Channel[],
+  options?: { quiet?: boolean }
+): Promise<boolean> {
+  const debugLog = (window as any).webosDebugLog;
+  const quiet = options?.quiet === true;
+
+  return new Promise<boolean>((resolve) => {
+    try {
+      const tx = db.transaction(CHANNELS_CACHE_STORE, "readwrite");
+      tx.objectStore(CHANNELS_CACHE_STORE).put(list.map(toCacheChannel), recordKey);
+      tx.oncomplete = () => {
+        if (debugLog && !quiet) {
+          debugLog(`cache-save: idb persisted ${list.length} channels (${recordKey})`);
+        }
+        resolve(true);
+      };
+      tx.onerror = () => {
+        if (debugLog) debugLog(`cache-save: idb tx error (${recordKey})`);
+        resolve(false);
+      };
+      tx.onabort = () => {
+        if (debugLog) debugLog(`cache-save: idb tx abort (${recordKey})`);
+        resolve(false);
+      };
+    } catch {
+      if (debugLog) debugLog(`cache-save: idb tx exception (${recordKey})`);
+      resolve(false);
+    }
+  });
+}
+
 async function saveCachedChannelsIndexedDb(list: Channel[]) {
   const debugLog = (window as any).webosDebugLog;
   const db = await openChannelsCacheDb();
@@ -500,27 +625,26 @@ async function saveCachedChannelsIndexedDb(list: Channel[]) {
     return;
   }
 
-  await new Promise<void>((resolve) => {
-    try {
-      const tx = db.transaction(CHANNELS_CACHE_STORE, "readwrite");
-      tx.objectStore(CHANNELS_CACHE_STORE).put(list.map(toCacheChannel), CHANNELS_CACHE_RECORD_KEY);
-      tx.oncomplete = () => {
-        if (debugLog) debugLog(`cache-save: idb persisted ${list.length} channels`);
-        resolve();
-      };
-      tx.onerror = () => {
-        if (debugLog) debugLog("cache-save: idb tx error");
-        resolve();
-      };
-      tx.onabort = () => {
-        if (debugLog) debugLog("cache-save: idb tx abort");
-        resolve();
-      };
-    } catch {
-      if (debugLog) debugLog("cache-save: idb tx exception");
-      resolve();
+  if (shouldSkipCapacitorFullIdbPersist(list)) {
+    if (debugLog) {
+      debugLog(`cache-save: Capacitor skip idb full persist (${list.length} channels)`);
     }
-  });
+
+    const liveOnly = list.filter(isLiveChannel);
+    if (liveOnly.length > 0 && liveOnly.length <= CAPACITOR_MAX_IDB_CACHE_CHANNELS) {
+      await writeCachedChannelsToIndexedDb(db, CHANNELS_CACHE_LIVE_RECORD_KEY, liveOnly);
+    }
+    db.close();
+    return;
+  }
+
+  await writeCachedChannelsToIndexedDb(db, CHANNELS_CACHE_RECORD_KEY, list);
+  if (isCapacitorRuntime()) {
+    const liveOnly = list.filter(isLiveChannel);
+    if (liveOnly.length > 0 && liveOnly.length <= CAPACITOR_MAX_IDB_CACHE_CHANNELS) {
+      await writeCachedChannelsToIndexedDb(db, CHANNELS_CACHE_LIVE_RECORD_KEY, liveOnly);
+    }
+  }
 
   db.close();
 }
@@ -577,32 +701,57 @@ async function loadCachedChannelsWebosDb(): Promise<Channel[]> {
   }
 }
 
+async function loadCapacitorGroupChannelsFromIndexedDb(db: IDBDatabase): Promise<Channel[]> {
+  const debugLog = (window as any).webosDebugLog;
+  const groupNames = getCapacitorLiveGroupNames();
+  if (groupNames.length === 0) {
+    if (debugLog) debugLog("cache-load: Capacitor skip monolithic idb (no split groups yet)");
+    return [];
+  }
+
+  for (const groupName of groupNames) {
+    const normalized = normalizeGroupName(groupName);
+    const groupChannels = await readCachedChannelsFromIndexedDb(db, idbLiveGroupRecordKey(normalized));
+    if (groupChannels.length > 0) {
+      if (debugLog) debugLog(`cache-load: idb group ${normalized} ${groupChannels.length} channels`);
+      return groupChannels;
+    }
+  }
+
+  if (debugLog) debugLog("cache-load: Capacitor group catalog present but no idb group records");
+  return [];
+}
+
 async function loadCachedChannelsIndexedDb(): Promise<Channel[]> {
+  const debugLog = (window as any).webosDebugLog;
   const db = await openChannelsCacheDb();
   if (!db) return [];
 
-  const result = await Promise.race([
-    new Promise<Channel[]>((resolve) => {
-      try {
-        const tx = db.transaction(CHANNELS_CACHE_STORE, "readonly");
-        const request = tx.objectStore(CHANNELS_CACHE_STORE).get(CHANNELS_CACHE_RECORD_KEY);
-        request.onsuccess = () => {
-          const value = request.result as unknown;
-          if (!Array.isArray(value)) {
-            resolve([]);
-            return;
-          }
+  const loadPromise = (async () => {
+    if (isCapacitorRuntime()) {
+      return loadCapacitorGroupChannelsFromIndexedDb(db);
+    }
 
-          const channels = value.map(toValidChannel).filter((item): item is Channel => !!item);
-          resolve(channels);
-        };
-        request.onerror = () => resolve([]);
-        tx.onerror = () => resolve([]);
-        tx.onabort = () => resolve([]);
-      } catch {
-        resolve([]);
+    const liveOnly = await readCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_LIVE_RECORD_KEY);
+    if (liveOnly.length > 0) {
+      if (debugLog) debugLog(`cache-load: idb live-only ${liveOnly.length} channels`);
+      return liveOnly;
+    }
+
+    const full = await readCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
+    if (full.length > CAPACITOR_MAX_IDB_CACHE_CHANNELS) {
+      const trimmedLive = full.filter(isLiveChannel);
+      if (debugLog) {
+        debugLog(`cache-load: trim idb ${full.length} -> ${trimmedLive.length} live channels`);
       }
-    }),
+      return trimmedLive;
+    }
+
+    return full;
+  })();
+
+  const result = await Promise.race([
+    loadPromise,
     new Promise<Channel[]>((resolve) => {
       window.setTimeout(() => resolve([]), CHANNELS_CACHE_DB_TIMEOUT_MS);
     })
@@ -624,10 +773,19 @@ function loadVisibilityState(): VisibilityState {
     const parsed = JSON.parse(raw) as Partial<VisibilityState>;
     return {
       groups: parsed.groups ?? {},
-      channels: parsed.channels ?? {}
+      channels: parsed.channels ?? {},
+      allGroupsHidden: parsed.allGroupsHidden === true
     };
   } catch {
     return { groups: {}, channels: {} };
+  }
+}
+
+function saveVisibilityStateNow() {
+  try {
+    localStorage.setItem(VISIBILITY_KEY, JSON.stringify(visibilityState));
+  } catch {
+    // Ignore persistence errors.
   }
 }
 
@@ -635,11 +793,18 @@ function saveVisibilityState() {
   // Always write to the live/runtime key. Saved role keys are only written
   // by saveRoleVisibility() so that resetVisibilityForCurrentChannels() can
   // never overwrite the admin's configured hide/show settings.
-  try {
-    localStorage.setItem(VISIBILITY_KEY, JSON.stringify(visibilityState));
-  } catch {
-    // Ignore persistence errors.
+  if (isCapacitorRuntime()) {
+    if (saveVisibilityStateTimer !== null) {
+      window.clearTimeout(saveVisibilityStateTimer);
+    }
+    saveVisibilityStateTimer = window.setTimeout(() => {
+      saveVisibilityStateTimer = null;
+      saveVisibilityStateNow();
+    }, 300);
+    return;
   }
+
+  saveVisibilityStateNow();
 }
 
 /** Persist the current visibility state as the saved settings for the given role.
@@ -723,26 +888,391 @@ export function setRoleChannelWriteLock(role: "adult" | "child" | null) {
   roleChannelWriteLock = role;
 }
 
-export function setChannels(list: Channel[], source: string = "unknown") {
-  if (roleChannelWriteLock && !ROLE_LOCK_ALLOWED_SOURCES.has(source)) {
-    recordChannelWriteTrace(source, false, channels.length);
-    return;
+function groupLiveChannelsByName(list: Channel[]): Map<string, Channel[]> {
+  const map = new Map<string, Channel[]>();
+  for (const channel of list) {
+    if (!isLiveChannel(channel)) continue;
+    const group = normalizeGroupName(channel.group);
+    const bucket = map.get(group) || [];
+    bucket.push(channel);
+    map.set(group, bucket);
+  }
+  return map;
+}
+
+function idbLiveGroupRecordKey(groupName: string): string {
+  return `live-group:${groupName}`;
+}
+
+function readCapacitorLiveGroupNamesFromStorage(): string[] {
+  try {
+    const raw = localStorage.getItem(CAPACITOR_LIVE_GROUPS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((group): group is string => typeof group === "string" && group.trim().length > 0);
+  } catch {
+    return [];
+  }
+}
+
+function readCapacitorLiveGroupCountsFromStorage(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(CAPACITOR_LIVE_GROUP_COUNTS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const counts: Record<string, number> = {};
+    Object.entries(parsed || {}).forEach(([group, count]) => {
+      const numeric = Number(count);
+      if (group && Number.isFinite(numeric) && numeric > 0) {
+        counts[group] = numeric;
+      }
+    });
+    return counts;
+  } catch {
+    return {};
+  }
+}
+
+function saveCapacitorLiveGroupCatalog(groupNames: string[], counts: Record<string, number>) {
+  capacitorLiveGroupNames = groupNames;
+  capacitorLiveGroupCounts = counts;
+  try {
+    localStorage.setItem(CAPACITOR_LIVE_GROUPS_KEY, JSON.stringify(groupNames));
+    localStorage.setItem(CAPACITOR_LIVE_GROUP_COUNTS_KEY, JSON.stringify(counts));
+  } catch {
+    // Ignore quota errors on TV storage.
+  }
+}
+
+export function getCapacitorLiveGroupNames(): string[] {
+  if (capacitorLiveGroupNames.length > 0) {
+    return capacitorLiveGroupNames;
+  }
+  return readCapacitorLiveGroupNamesFromStorage();
+}
+
+export function getCapacitorLiveGroupCounts(): Record<string, number> {
+  if (Object.keys(capacitorLiveGroupCounts).length > 0) {
+    return capacitorLiveGroupCounts;
+  }
+  return readCapacitorLiveGroupCountsFromStorage();
+}
+
+/** Drop bloated per-channel visibility maps from pre-split-cache sessions (57k+ keys). */
+export function pruneCapacitorVisibilityIfBloated(): void {
+  if (!isCapacitorRuntime()) return;
+
+  const channelKeyCount = Object.keys(visibilityState.channels).length;
+  const groupKeyCount = Object.keys(visibilityState.groups).length;
+  if (channelKeyCount <= 500 && groupKeyCount <= 2500) return;
+
+  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
+  debugLog(
+    `capacitor-visibility-trim: channels=${channelKeyCount} groups=${groupKeyCount} -> group-only`
+  );
+
+  const catalogGroups = new Set(getCapacitorLiveGroupNames());
+  const nextGroups: Record<string, boolean> = {};
+  Object.entries(visibilityState.groups).forEach(([group, visible]) => {
+    if (visible === false || catalogGroups.has(group)) {
+      nextGroups[group] = visible;
+    }
+  });
+
+  visibilityState = {
+    groups: nextGroups,
+    channels: {}
+  };
+  saveVisibilityState();
+  dispatchVisibilityChanged();
+}
+
+/** Drop legacy monolithic IDB blobs that OOM Fire TV when parsed (100k+ live rows). */
+export function scheduleCapacitorLegacyCachePurge(): void {
+  if (!isCapacitorRuntime()) return;
+  pruneCapacitorVisibilityIfBloated();
+  if (getCapacitorLiveGroupNames().length > 0) return;
+
+  window.setTimeout(() => {
+    void (async () => {
+      const debugLog = (window as any).webosDebugLog;
+      const db = await openChannelsCacheDb();
+      if (!db) return;
+      await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_LIVE_RECORD_KEY);
+      await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
+      db.close();
+      if (debugLog) debugLog("cache-load: purged legacy monolithic idb on Capacitor");
+    })();
+  }, 1500);
+}
+
+async function persistCapacitorLiveGroupsToIdb(list: Channel[], groupNames: string[]): Promise<void> {
+  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
+  const db = await openChannelsCacheDb();
+  if (!db) return;
+
+  const grouped = groupLiveChannelsByName(list);
+  const writeOptions = { quiet: groupNames.length > CAPACITOR_BULK_GROUP_THRESHOLD };
+
+  for (let index = 0; index < groupNames.length; index += CAPACITOR_IDB_PERSIST_BATCH_SIZE) {
+    const batch = groupNames.slice(index, index + CAPACITOR_IDB_PERSIST_BATCH_SIZE);
+    for (const groupName of batch) {
+      const members = (grouped.get(groupName) || []).slice(0, CAPACITOR_MAX_GROUP_CHANNELS);
+      if (members.length > 0) {
+        await writeCachedChannelsToIndexedDb(db, idbLiveGroupRecordKey(groupName), members, writeOptions);
+      }
+    }
+
+    // Yield the main thread between IDB batches — 900+ writes otherwise ANR Fire TV.
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
   }
 
-  applyCachedChannels(list);
-  migrateLegacyFavoritesForCurrentChannels();
-  recordChannelWriteTrace(source, true, channels.length);
+  await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_LIVE_RECORD_KEY);
+  await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
 
-  // Preserve the last generic cache when role-clear intentionally empties runtime
-  // channels (e.g., missing assigned role playlist). This avoids startup falling
-  // back to an empty cached channel set.
-  const shouldPersistCache = !(source === "role-clear" && channels.length === 0);
-  if (shouldPersistCache) {
-    saveCachedChannels(channels);
-    void saveCachedChannelsIndexedDb(channels);
-    saveCachedChannelsWebosDb(channels);
+  db.close();
+  if (debugLog) debugLog(`capacitor-ingest: persisted ${groupNames.length} live groups to idb`);
+}
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+export async function ingestCapacitorLiveChannelCatalogAsync(
+  list: Channel[],
+  preferredGroup?: string
+): Promise<{ groupName: string; channelCount: number; totalLive: number }> {
+  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
+  const groupCounts = new Map<string, number>();
+  const groupBuckets = new Map<string, Channel[]>();
+  let totalLive = 0;
+
+  for (let offset = 0; offset < list.length; offset += CAPACITOR_INGEST_CHUNK_SIZE) {
+    const end = Math.min(offset + CAPACITOR_INGEST_CHUNK_SIZE, list.length);
+    for (let index = offset; index < end; index += 1) {
+      const channel = list[index];
+      if (!isLiveChannel(channel)) continue;
+      totalLive += 1;
+      const group = normalizeGroupName(channel.group);
+      groupCounts.set(group, (groupCounts.get(group) || 0) + 1);
+      let bucket = groupBuckets.get(group);
+      if (!bucket) {
+        bucket = [];
+        groupBuckets.set(group, bucket);
+      }
+      if (bucket.length < CAPACITOR_MAX_GROUP_CHANNELS) {
+        bucket.push(channel);
+      }
+    }
+    await yieldToMain();
   }
 
+  const groupNames = Array.from(groupCounts.keys()).sort((a, b) => a.localeCompare(b));
+  const counts: Record<string, number> = {};
+  groupCounts.forEach((count, group) => {
+    counts[group] = count;
+  });
+  saveCapacitorLiveGroupCatalog(groupNames, counts);
+
+  const normalizedPreferred = preferredGroup ? normalizeGroupName(preferredGroup) : "";
+  const targetGroup =
+    (normalizedPreferred && groupCounts.has(normalizedPreferred) ? normalizedPreferred : "") ||
+    groupNames[0] ||
+    "Uncategorized";
+
+  const memoryChannels = (groupBuckets.get(targetGroup) || []).slice(0, CAPACITOR_MAX_GROUP_CHANNELS);
+  debugLog(
+    `capacitor-ingest: ${list.length} total -> ${memoryChannels.length} in memory (${targetGroup}), ${groupNames.length} groups`
+  );
+  setChannelsWithoutSideEffects(memoryChannels, "capacitor-live-ingest");
+
+  const db = await openChannelsCacheDb();
+  if (db) {
+    const writeOptions = { quiet: groupNames.length > CAPACITOR_BULK_GROUP_THRESHOLD };
+    for (let index = 0; index < groupNames.length; index += CAPACITOR_IDB_PERSIST_BATCH_SIZE) {
+      const batch = groupNames.slice(index, index + CAPACITOR_IDB_PERSIST_BATCH_SIZE);
+      for (const groupName of batch) {
+        const members = groupBuckets.get(groupName) || [];
+        if (members.length > 0) {
+          await writeCachedChannelsToIndexedDb(db, idbLiveGroupRecordKey(groupName), members, writeOptions);
+        }
+        groupBuckets.delete(groupName);
+      }
+      await yieldToMain();
+    }
+
+    await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_LIVE_RECORD_KEY);
+    await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
+    db.close();
+    if (debugLog) debugLog(`capacitor-ingest: persisted ${groupNames.length} live groups to idb`);
+  }
+
+  groupBuckets.clear();
+  dispatchStoreEvent("channelsUpdated");
+
+  return {
+    groupName: targetGroup,
+    channelCount: memoryChannels.length,
+    totalLive
+  };
+}
+
+export function ingestCapacitorLiveChannelCatalog(
+  list: Channel[],
+  preferredGroup?: string
+): { groupName: string; channelCount: number; totalLive: number } {
+  if (isCapacitorRuntime() && list.length > CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD) {
+    void ingestCapacitorLiveChannelCatalogAsync(list, preferredGroup);
+    const preferred = preferredGroup ? normalizeGroupName(preferredGroup) : "";
+    return {
+      groupName: preferred || "Uncategorized",
+      channelCount: channels.length,
+      totalLive: list.filter(isLiveChannel).length
+    };
+  }
+
+  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
+  const groupCounts = new Map<string, number>();
+  let totalLive = 0;
+
+  for (const channel of list) {
+    if (!isLiveChannel(channel)) continue;
+    totalLive += 1;
+    const group = normalizeGroupName(channel.group);
+    groupCounts.set(group, (groupCounts.get(group) || 0) + 1);
+  }
+
+  const groupNames = Array.from(groupCounts.keys()).sort((a, b) => a.localeCompare(b));
+  const counts: Record<string, number> = {};
+  groupCounts.forEach((count, group) => {
+    counts[group] = count;
+  });
+  saveCapacitorLiveGroupCatalog(groupNames, counts);
+
+  const normalizedPreferred = preferredGroup ? normalizeGroupName(preferredGroup) : "";
+  const targetGroup =
+    (normalizedPreferred && groupCounts.has(normalizedPreferred) ? normalizedPreferred : "") ||
+    groupNames[0] ||
+    "Uncategorized";
+
+  const memoryChannels: Channel[] = [];
+  for (const channel of list) {
+    if (!isLiveChannel(channel)) continue;
+    if (normalizeGroupName(channel.group) !== targetGroup) continue;
+    memoryChannels.push(channel);
+    if (memoryChannels.length >= CAPACITOR_MAX_GROUP_CHANNELS) break;
+  }
+
+  debugLog(
+    `capacitor-ingest: ${list.length} total -> ${memoryChannels.length} in memory (${targetGroup}), ${groupNames.length} groups`
+  );
+  setChannelsWithoutSideEffects(memoryChannels, "capacitor-live-ingest");
+
+  window.setTimeout(() => {
+    void persistCapacitorLiveGroupsToIdb(list, groupNames);
+  }, 300);
+
+  return {
+    groupName: targetGroup,
+    channelCount: memoryChannels.length,
+    totalLive
+  };
+}
+
+export async function loadCapacitorLiveGroupChannels(groupName: string): Promise<Channel[]> {
+  if (!isCapacitorRuntime()) return channels;
+
+  const normalized = normalizeGroupName(groupName);
+  const alreadyLoaded =
+    channels.length > 0 &&
+    channels.length <= CAPACITOR_MAX_GROUP_CHANNELS + 16 &&
+    channels.every(
+      (channel) => !isLiveChannel(channel) || normalizeGroupName(channel.group) === normalized
+    );
+  if (alreadyLoaded) {
+    return channels;
+  }
+
+  const db = await openChannelsCacheDb();
+  if (!db) return [];
+
+  const loaded = await readCachedChannelsFromIndexedDb(db, idbLiveGroupRecordKey(normalized));
+  db.close();
+
+  if (loaded.length > 0) {
+    setChannelsWithoutSideEffects(loaded, "capacitor-group-load");
+  }
+
+  return loaded.length > 0 ? loaded : channels;
+}
+
+export function trimCapacitorChannelMemoryForLive(): number {
+  if (!isCapacitorRuntime()) return channels.length;
+  if (channels.length <= CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD) return channels.length;
+
+  const liveOnly = channels.filter(isLiveChannel);
+  if (liveOnly.length === 0) {
+    return channels.length;
+  }
+
+  if (liveOnly.length < channels.length) {
+    setChannelsWithoutSideEffects(liveOnly, "capacitor-live-trim");
+    return liveOnly.length;
+  }
+
+  return channels.length;
+}
+
+export function releaseCapacitorMemoryForLivePlayback(
+  activeGroupName: string,
+  activeChannelId?: string
+): number {
+  if (!isCapacitorRuntime()) return channels.length;
+
+  const normalizedActive = normalizeGroupName(activeGroupName);
+  let trimmed = channels.filter((channel) => {
+    if (!isLiveChannel(channel)) return false;
+    if (activeChannelId && String(channel.id || "") === activeChannelId) return true;
+    return normalizeGroupName(channel.group) === normalizedActive;
+  });
+
+  if (activeChannelId && !trimmed.some((channel) => String(channel.id || "") === activeChannelId)) {
+    const activeChannel = channels.find((channel) => String(channel.id || "") === activeChannelId);
+    if (activeChannel) {
+      trimmed = [activeChannel, ...trimmed];
+    }
+  }
+
+  if (trimmed.length > CAPACITOR_MAX_GROUP_CHANNELS) {
+    const head = trimmed.slice(0, CAPACITOR_MAX_GROUP_CHANNELS);
+    if (activeChannelId && !head.some((channel) => String(channel.id || "") === activeChannelId)) {
+      const activeChannel = trimmed.find((channel) => String(channel.id || "") === activeChannelId);
+      if (activeChannel) {
+        trimmed = [activeChannel, ...head.slice(0, CAPACITOR_MAX_GROUP_CHANNELS - 1)];
+      } else {
+        trimmed = head;
+      }
+    } else {
+      trimmed = head;
+    }
+  }
+
+  if (trimmed.length === 0) {
+    return channels.length;
+  }
+
+  if (trimmed.length >= channels.length && channels.length <= CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD) {
+    return channels.length;
+  }
+
+  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
+  debugLog(`capacitor-playback-trim: ${channels.length} -> ${trimmed.length} (${normalizedActive})`);
+  setChannelsWithoutSideEffects(trimmed, "capacitor-playback-trim");
+  return trimmed.length;
+}
+
+function pruneVisibilityForCurrentChannels() {
   const currentIds = new Set(channels.map((c) => c.id));
   const nextChannelVisibility: Record<string, boolean> = {};
 
@@ -757,10 +1287,96 @@ export function setChannels(list: Channel[], source: string = "unknown") {
     channels: nextChannelVisibility
   };
   saveVisibilityState();
+}
 
+function setChannelsWithoutSideEffects(list: Channel[], source: string) {
+  if (roleChannelWriteLock && !ROLE_LOCK_ALLOWED_SOURCES.has(source)) {
+    recordChannelWriteTrace(source, false, channels.length);
+    return;
+  }
+
+  if (
+    isCapacitorRuntime() &&
+    list.length > CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD &&
+    list.some(isLiveChannel)
+  ) {
+    ingestCapacitorLiveChannelCatalog(list);
+    recordChannelWriteTrace(source, true, channels.length);
+    return;
+  }
+
+  applyCachedChannels(list);
+  recordChannelWriteTrace(source, true, channels.length);
+
+  const isLargeCapacitorUpdate = isCapacitorRuntime() && list.length > 3000;
+  const finishHeavyWork = () => {
+    migrateLegacyFavoritesForCurrentChannels();
+    pruneVisibilityForCurrentChannels();
+  };
+
+  if (isLargeCapacitorUpdate) {
+    window.setTimeout(finishHeavyWork, 0);
+  } else {
+    finishHeavyWork();
+  }
+}
+
+export function setChannels(list: Channel[], source: string = "unknown") {
+  if (roleChannelWriteLock && !ROLE_LOCK_ALLOWED_SOURCES.has(source)) {
+    recordChannelWriteTrace(source, false, channels.length);
+    return;
+  }
+
+  if (
+    isCapacitorRuntime() &&
+    list.length > CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD &&
+    list.some(isLiveChannel)
+  ) {
+    ingestCapacitorLiveChannelCatalog(list);
+    recordChannelWriteTrace(source, true, channels.length);
+    return;
+  }
+
+  applyCachedChannels(list);
+  recordChannelWriteTrace(source, true, channels.length);
+
+  const isLargeCapacitorUpdate = isCapacitorRuntime() && list.length > 3000;
+  const finishHeavyWork = () => {
+    migrateLegacyFavoritesForCurrentChannels();
+    pruneVisibilityForCurrentChannels();
+  };
+
+  if (isLargeCapacitorUpdate) {
+    window.setTimeout(finishHeavyWork, 0);
+  } else {
+    finishHeavyWork();
+  }
+
+  // Preserve the last generic cache when role-clear intentionally empties runtime
+  // channels (e.g., missing assigned role playlist). This avoids startup falling
+  // back to an empty cached channel set.
+  const shouldPersistCache =
+    !(source === "role-clear" && channels.length === 0) &&
+    !CAPACITOR_TRANSIENT_SOURCES.has(source);
+  if (shouldPersistCache) {
+    saveCachedChannels(channels);
+    void saveCachedChannelsIndexedDb(channels);
+    saveCachedChannelsWebosDb(channels);
+  }
 }
 
 export async function restoreChannelsCache(): Promise<Channel[]> {
+  if (restoreChannelsCacheInFlight) {
+    return restoreChannelsCacheInFlight;
+  }
+
+  restoreChannelsCacheInFlight = restoreChannelsCacheInternal().finally(() => {
+    restoreChannelsCacheInFlight = null;
+  });
+  return restoreChannelsCacheInFlight;
+}
+
+async function restoreChannelsCacheInternal(): Promise<Channel[]> {
   if (roleChannelWriteLock) {
     // During role-locked sessions, never restore generic global cache.
     recordChannelWriteTrace("restore-cache-locked", false, channels.length);
@@ -774,6 +1390,14 @@ export async function restoreChannelsCache(): Promise<Channel[]> {
   const fromLocalStorage = loadCachedChannelsWithPresence();
   if (fromLocalStorage.hasValue) {
     if (fromLocalStorage.channels.length > 0) {
+      // Fire TV keeps only one live group in localStorage; skip a parallel IndexedDB
+      // scan across the full group catalog — that blocks the WebView and can ANR.
+      if (isCapacitorRuntime()) {
+        applyRestoredChannels(fromLocalStorage.channels);
+        recordChannelWriteTrace("restore-cache-local-capacitor", true, fromLocalStorage.channels.length);
+        return channels;
+      }
+
       const fromIndexedDb = await Promise.race([
         loadCachedChannelsIndexedDb(),
         new Promise<Channel[]>((resolve) => {
@@ -786,13 +1410,15 @@ export async function restoreChannelsCache(): Promise<Channel[]> {
       }
 
       if (fromIndexedDb.length > fromLocalStorage.channels.length) {
-        applyCachedChannels(fromIndexedDb);
+        applyRestoredChannels(fromIndexedDb);
         recordChannelWriteTrace("restore-cache-indexeddb-preferred", true, fromIndexedDb.length);
-        saveCachedChannels(fromIndexedDb);
+        if (!isCapacitorRuntime() || fromIndexedDb.length <= CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD) {
+          saveCachedChannels(fromIndexedDb);
+        }
         return channels;
       }
 
-      applyCachedChannels(fromLocalStorage.channels);
+      applyRestoredChannels(fromLocalStorage.channels);
       recordChannelWriteTrace("restore-cache-local", true, fromLocalStorage.channels.length);
       return channels;
     } else {
@@ -817,9 +1443,11 @@ export async function restoreChannelsCache(): Promise<Channel[]> {
   }
 
   if (fromIndexedDb.length > 0) {
-    applyCachedChannels(fromIndexedDb);
+    applyRestoredChannels(fromIndexedDb);
     recordChannelWriteTrace("restore-cache-indexeddb", true, fromIndexedDb.length);
-    saveCachedChannels(fromIndexedDb);
+    if (!isCapacitorRuntime() || fromIndexedDb.length <= CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD) {
+      saveCachedChannels(fromIndexedDb);
+    }
     return channels;
   }
 
@@ -831,7 +1459,7 @@ export async function restoreChannelsCache(): Promise<Channel[]> {
     return channels;
   }
   if (fromWebosDb.length > 0) {
-    applyCachedChannels(fromWebosDb);
+    applyRestoredChannels(fromWebosDb);
     recordChannelWriteTrace("restore-cache-webosdb", true, fromWebosDb.length);
     saveCachedChannels(fromWebosDb);
     void saveCachedChannelsIndexedDb(fromWebosDb);
@@ -865,33 +1493,63 @@ export function getGroups(): string[] {
 
 export function isGroupVisible(group: string): boolean {
   if (group === "All" || group === FAVORITES_GROUP) return true;
+  if (visibilityState.allGroupsHidden) {
+    return visibilityState.groups[group] === true;
+  }
   return visibilityState.groups[group] !== false;
 }
 
 export function setGroupVisible(group: string, visible: boolean) {
   if (group === "All" || group === FAVORITES_GROUP) return;
+
+  const nextGroups = { ...visibilityState.groups };
+  if (visibilityState.allGroupsHidden) {
+    if (visible) {
+      nextGroups[group] = true;
+    } else {
+      delete nextGroups[group];
+    }
+  } else if (visible) {
+    delete nextGroups[group];
+  } else {
+    nextGroups[group] = false;
+  }
+
   visibilityState = {
     ...visibilityState,
-    groups: {
-      ...visibilityState.groups,
-      [group]: visible
-    }
+    groups: nextGroups
   };
   saveVisibilityState();
   dispatchVisibilityChanged();
 }
 
 export function setGroupsVisible(groups: string[], visible: boolean) {
+  if (isCapacitorRuntime() && groups.length >= CAPACITOR_BULK_GROUP_THRESHOLD) {
+    visibilityState = {
+      ...visibilityState,
+      groups: {},
+      allGroupsHidden: !visible
+    };
+    saveVisibilityState();
+    dispatchVisibilityChanged();
+    return;
+  }
+
   const nextGroups = { ...visibilityState.groups };
 
   for (const group of groups) {
     if (group === "All" || group === FAVORITES_GROUP) continue;
-    nextGroups[group] = visible;
+    if (visible) {
+      delete nextGroups[group];
+    } else {
+      nextGroups[group] = false;
+    }
   }
 
   visibilityState = {
     ...visibilityState,
-    groups: nextGroups
+    groups: nextGroups,
+    allGroupsHidden: false
   };
   saveVisibilityState();
   dispatchVisibilityChanged();
@@ -1029,7 +1687,8 @@ export function resetVisibilityForCurrentChannels() {
 
   visibilityState = {
     groups: visibleGroups,
-    channels: visibleChannels
+    channels: visibleChannels,
+    allGroupsHidden: false
   };
   saveVisibilityState();
   dispatchVisibilityChanged();
@@ -1038,7 +1697,8 @@ export function resetVisibilityForCurrentChannels() {
 export function getVisibilitySnapshot(): ChannelVisibilitySnapshot {
   return {
     groups: { ...visibilityState.groups },
-    channels: { ...visibilityState.channels }
+    channels: { ...visibilityState.channels },
+    allGroupsHidden: visibilityState.allGroupsHidden
   };
 }
 
@@ -1068,7 +1728,8 @@ export function getVisibilitySnapshotForChannelIds(channelIds: string[]): Channe
 
   return {
     groups: nextGroups,
-    channels: nextChannels
+    channels: nextChannels,
+    allGroupsHidden: visibilityState.allGroupsHidden
   };
 }
 
@@ -1096,7 +1757,8 @@ export function applyVisibilitySnapshotForCurrentChannels(snapshot: ChannelVisib
 
   visibilityState = {
     groups: nextGroups,
-    channels: nextChannels
+    channels: nextChannels,
+    allGroupsHidden: snapshot.allGroupsHidden === true
   };
   saveVisibilityState();
   dispatchVisibilityChanged();

@@ -1,0 +1,83 @@
+import React, { Suspense } from "react";
+import ReactDOM from "react-dom/client";
+import { ProfileProvider } from "./profiles/ProfileContext";
+
+const App = React.lazy(() => import("./App").then((module) => ({ default: module.App })));
+
+class RootErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; message: string }
+> {
+  state = { hasError: false, message: "Unexpected error" };
+
+  static getDerivedStateFromError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error || "Unexpected error");
+    return { hasError: true, message };
+  }
+
+  componentDidCatch(error: unknown, errorInfo: React.ErrorInfo) {
+    console.error("[root-error-boundary]", error, errorInfo);
+  }
+
+  private handleReload = () => {
+    window.location.reload();
+  };
+
+  render() {
+    if (!this.state.hasError) {
+      return this.props.children;
+    }
+
+    return (
+      <div className="root-crash-shell">
+        <div className="root-crash-card">
+          <h1 className="root-crash-title">Playback app crashed</h1>
+          <p className="root-crash-text">
+            A runtime error occurred. Use reload to recover, then share the error details for a permanent fix.
+          </p>
+          <pre className="root-crash-message">{this.state.message}</pre>
+          <button onClick={this.handleReload} className="root-crash-reload-btn">
+            Reload App
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
+function BootFallback() {
+  return (
+    <div
+      className="boot-shell"
+      style={{
+        alignItems: "center",
+        background: "#000",
+        color: "#fff",
+        display: "flex",
+        height: "100vh",
+        justifyContent: "center"
+      }}
+    >
+      Loading Toms IPTVmate...
+    </div>
+  );
+}
+
+export function mountApp(rootElement: HTMLElement) {
+  window.setTimeout(() => {
+    void import("./runtimeSetup").then(({ initRuntimeSetup }) => initRuntimeSetup());
+  }, 0);
+
+  const root = ReactDOM.createRoot(rootElement);
+  const app = (
+    <RootErrorBoundary>
+      <ProfileProvider>
+        <Suspense fallback={<BootFallback />}>
+          <App />
+        </Suspense>
+      </ProfileProvider>
+    </RootErrorBoundary>
+  );
+
+  root.render(import.meta.env.DEV ? <React.StrictMode>{app}</React.StrictMode> : app);
+}

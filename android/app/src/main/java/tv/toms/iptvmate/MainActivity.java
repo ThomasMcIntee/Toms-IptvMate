@@ -1,5 +1,9 @@
 package tv.toms.iptvmate;
 
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Color;
 import android.net.Uri;
 import android.net.http.SslError;
@@ -33,8 +37,14 @@ public class MainActivity extends BridgeActivity {
     // Universal TiviMate identity - The absolute most trusted identity for IPTV providers.
     private static final String APP_USER_AGENT = "TiviMate/4.7.0 (Linux; Android 9; AFTKM Build/PS7279)";
 
+    private ExoPlayerManager exoPlayerManager;
+    private boolean webViewConfigured = false;
+    private BroadcastReceiver nativePlayerReceiver;
+    private boolean nativePlayerReceiverRegistered = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        registerPlugin(NativePlayerPlugin.class);
         super.onCreate(savedInstanceState);
         
         // Force the entire system to use the TiviMate identity.
@@ -44,6 +54,17 @@ public class MainActivity extends BridgeActivity {
         
         WebView.setWebContentsDebuggingEnabled(true);
         disableSSLVerification();
+    }
+
+    @Override
+    public void onDestroy() {
+        unregisterNativePlayerReceiver();
+        if (exoPlayerManager != null) {
+            exoPlayerManager.release();
+            exoPlayerManager = null;
+        }
+        webViewConfigured = false;
+        super.onDestroy();
     }
 
     private void disableSSLVerification() {
@@ -69,43 +90,92 @@ public class MainActivity extends BridgeActivity {
     public void onStart() {
         super.onStart();
         setupWebViewFocus();
+        registerNativePlayerReceiver();
     }
 
     @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
-        super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) {
-            setupWebViewFocus();
+    public void onStop() {
+        unregisterNativePlayerReceiver();
+        super.onStop();
+    }
+
+    private void registerNativePlayerReceiver() {
+        if (nativePlayerReceiverRegistered) return;
+
+        nativePlayerReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null || exoPlayerManager == null) return;
+
+                String action = intent.getAction();
+                if (NativePlayerEvents.ACTION_READY.equals(action)) {
+                    exoPlayerManager.handleNativePlaybackReady();
+                } else if (NativePlayerEvents.ACTION_ERROR.equals(action)) {
+                    exoPlayerManager.handleNativePlaybackError(
+                        intent.getStringExtra(NativePlayerEvents.EXTRA_MESSAGE)
+                    );
+                } else if (NativePlayerEvents.ACTION_STOPPED.equals(action)) {
+                    exoPlayerManager.handleNativePlaybackStopped();
+                }
+            }
+        };
+
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(NativePlayerEvents.ACTION_READY);
+        filter.addAction(NativePlayerEvents.ACTION_ERROR);
+        filter.addAction(NativePlayerEvents.ACTION_STOPPED);
+        registerReceiver(nativePlayerReceiver, filter);
+        nativePlayerReceiverRegistered = true;
+    }
+
+    private void unregisterNativePlayerReceiver() {
+        if (!nativePlayerReceiverRegistered || nativePlayerReceiver == null) return;
+        try {
+            unregisterReceiver(nativePlayerReceiver);
+        } catch (Exception ignored) {
+            // Receiver may already be unregistered.
         }
+        nativePlayerReceiver = null;
+        nativePlayerReceiverRegistered = false;
     }
 
     private void setupWebViewFocus() {
         WebView webView = getBridge().getWebView();
-        if (webView != null) {
-            webView.setFocusable(true);
-            webView.setFocusableInTouchMode(true);
-            webView.setClickable(true);
-            webView.setDescendantFocusability(WebView.FOCUS_AFTER_DESCENDANTS);
-            
-            // Required for 4K video hardware layering
-            webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
-            webView.setBackgroundColor(Color.TRANSPARENT);
+        if (webView == null) return;
 
-            WebSettings settings = webView.getSettings();
-            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-            settings.setJavaScriptEnabled(true);
-            settings.setDomStorageEnabled(true);
-            settings.setDatabaseEnabled(true);
-            settings.setAllowUniversalAccessFromFileURLs(true);
-            settings.setAllowFileAccessFromFileURLs(true);
-            settings.setMediaPlaybackRequiresUserGesture(false);
-            
-            settings.setUserAgentString(APP_USER_AGENT);
+        webView.setFocusable(true);
+        webView.setFocusableInTouchMode(true);
+        webView.setClickable(true);
+        webView.setDescendantFocusability(WebView.FOCUS_AFTER_DESCENDANTS);
+        // NONE during boot uses less GPU memory on Fire TV; ExoPlayerManager switches
+        // to hardware when native playback starts.
+        webView.setLayerType(View.LAYER_TYPE_NONE, null);
+        webView.setBackgroundColor(Color.TRANSPARENT);
 
-            // Setup the Native Proxy Relay
-            webView.setWebViewClient(new BridgeWebViewClient(getBridge()) {
-                @Override
-                public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+        WebSettings settings = webView.getSettings();
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+        settings.setAllowUniversalAccessFromFileURLs(true);
+        settings.setAllowFileAccessFromFileURLs(true);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setUserAgentString(APP_USER_AGENT);
+
+        if (webViewConfigured) {
+            return;
+        }
+        webViewConfigured = true;
+
+        // Setup the Native Proxy Relay once — re-attaching on every focus change leaks memory.
+        webView.setWebViewClient(new BridgeWebViewClient(getBridge()) {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+            }
+
+            @Override
+            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
                     handler.proceed();
                 }
 
@@ -123,13 +193,19 @@ public class MainActivity extends BridgeActivity {
                                 Log.i(TAG, "Relay: Virtual HLS for: " + targetUrl);
                                 // Stay on the 'app' hostname to avoid cross-origin protocol blocks
                                 String segmentUrl = "http://app/__stream?url=" + Uri.encode(targetUrl);
+                                boolean isLiveTs = targetUrl.toLowerCase().contains(".ts");
                                 String manifest = "#EXTM3U\n" +
                                                  "#EXT-X-VERSION:3\n" +
                                                  "#EXT-X-TARGETDURATION:60\n" +
-                                                 "#EXT-X-MEDIA-SEQUENCE:0\n" +
-                                                 "#EXTINF:60.0,\n" +
-                                                 segmentUrl + "\n" +
-                                                 "#EXT-X-ENDLIST";
+                                                 "#EXT-X-MEDIA-SEQUENCE:0\n";
+                                if (isLiveTs) {
+                                    manifest += "#EXT-X-PLAYLIST-TYPE:EVENT\n";
+                                }
+                                manifest += "#EXTINF:60.0,\n" +
+                                            segmentUrl + "\n";
+                                if (!isLiveTs) {
+                                    manifest += "#EXT-X-ENDLIST";
+                                }
                                 
                                 InputStream is = new ByteArrayInputStream(manifest.getBytes("UTF-8"));
                                 WebResourceResponse resp = new WebResourceResponse("application/vnd.apple.mpegurl", "UTF-8", is);
@@ -207,21 +283,55 @@ public class MainActivity extends BridgeActivity {
                     return super.shouldInterceptRequest(view, request);
                 }
             });
+    }
+
+    public ExoPlayerManager getOrCreateExoPlayerManager() {
+        if (exoPlayerManager == null) {
+            WebView webView = getBridge().getWebView();
+            exoPlayerManager = new ExoPlayerManager(
+                this,
+                APP_USER_AGENT,
+                script -> {
+                    if (webView != null) {
+                        webView.post(() -> webView.evaluateJavascript(script, null));
+                    }
+                }
+            );
         }
+        return exoPlayerManager;
+    }
+
+    private long lastBackDispatchMs = 0;
+
+    private void dispatchBackKeyToWebApp() {
+        long now = System.currentTimeMillis();
+        if (now - lastBackDispatchMs < 250) return;
+        lastBackDispatchMs = now;
+
+        WebView webView = getBridge().getWebView();
+        if (webView == null) return;
+
+        webView.post(() -> webView.evaluateJavascript(
+            "(function(){" +
+            "var e=new KeyboardEvent('keydown',{" +
+            "key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true" +
+            "});" +
+            "window.dispatchEvent(e);" +
+            "})();",
+            null
+        ));
+    }
+
+    @Override
+    public void onBackPressed() {
+        dispatchBackKeyToWebApp();
     }
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-            WebView webView = getBridge().getWebView();
-            if (webView != null) {
-                String url = webView.getUrl();
-                // Standard Exit: If we are on the main menu, close the app immediately.
-                if (url != null && (url.endsWith("/") || url.contains("index.html") || url.contains("/#"))) {
-                    finish();
-                    return true;
-                }
-            }
+            dispatchBackKeyToWebApp();
+            return true;
         }
         return super.dispatchKeyEvent(event);
     }
