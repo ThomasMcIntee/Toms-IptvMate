@@ -33,15 +33,12 @@ public class NativePlayerPlugin extends Plugin {
             call.reject("Missing url");
             return;
         }
-
-        manager().play(url);
-        call.resolve();
+        manager().play(url, call::resolve);
     }
 
     @PluginMethod
     public void stop(PluginCall call) {
-        manager().stop();
-        call.resolve();
+        manager().stop(call::resolve);
     }
 
     @PluginMethod

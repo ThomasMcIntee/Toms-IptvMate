@@ -1672,6 +1672,11 @@ export function App() {
     // Helper to handle Back navigation (shared by webosBackKey and keydown)
     const handleBackNavigation = () => {
       const debugLog = (window as any).webosDebugLog;
+
+      if (document.body.classList.contains("native-exo-active")) {
+        if (debugLog) debugLog("APP: Back -> stop native ExoPlayer");
+        stopNativePlayback();
+      }
       
       // Handle Back navigation
       if (isSeriesPickerVisible) {

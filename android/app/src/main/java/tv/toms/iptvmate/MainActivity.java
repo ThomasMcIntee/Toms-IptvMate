@@ -114,8 +114,6 @@ public class MainActivity extends BridgeActivity {
                     exoPlayerManager.handleNativePlaybackError(
                         intent.getStringExtra(NativePlayerEvents.EXTRA_MESSAGE)
                     );
-                } else if (NativePlayerEvents.ACTION_STOPPED.equals(action)) {
-                    exoPlayerManager.handleNativePlaybackStopped();
                 }
             }
         };
@@ -123,7 +121,6 @@ public class MainActivity extends BridgeActivity {
         IntentFilter filter = new IntentFilter();
         filter.addAction(NativePlayerEvents.ACTION_READY);
         filter.addAction(NativePlayerEvents.ACTION_ERROR);
-        filter.addAction(NativePlayerEvents.ACTION_STOPPED);
         registerReceiver(nativePlayerReceiver, filter);
         nativePlayerReceiverRegistered = true;
     }
@@ -297,6 +294,7 @@ public class MainActivity extends BridgeActivity {
                     }
                 }
             );
+            exoPlayerManager.warmUp();
         }
         return exoPlayerManager;
     }
@@ -313,6 +311,8 @@ public class MainActivity extends BridgeActivity {
 
         webView.post(() -> webView.evaluateJavascript(
             "(function(){" +
+            "if(typeof window.__iptvmateHandleBack==='function'){window.__iptvmateHandleBack();return;}" +
+            "window.dispatchEvent(new CustomEvent('webosBackKey'));" +
             "var e=new KeyboardEvent('keydown',{" +
             "key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true" +
             "});" +

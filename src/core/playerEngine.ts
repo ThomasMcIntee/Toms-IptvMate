@@ -888,16 +888,15 @@ export function playUrl(
       }
     }
 
-    stopNativePlayback();
     const nativeUrl = normalizeStreamUrl(rootSourceUrlEarly);
     console.log(`[playUrl-native-exo] url=${nativeUrl.slice(0, 100)}...`);
-    if (playNativeUrl(nativeUrl)) {
-      const onNativeExoError = (event: Event) => {
-        if (token !== playRequestToken) return;
-        const detail = (event as CustomEvent<{ source?: string; message?: string }>).detail;
-        if (detail?.source !== "native-exo") return;
-        window.removeEventListener("playerError", onNativeExoError as EventListener);
-        console.warn("[playUrl-native-exo] Native ExoPlayer failed, falling back to WebView relay");
+    const onNativeExoError = (event: Event) => {
+      if (token !== playRequestToken) return;
+      const detail = (event as CustomEvent<{ source?: string; message?: string }>).detail;
+      if (detail?.source !== "native-exo") return;
+      window.removeEventListener("playerError", onNativeExoError as EventListener);
+      console.warn("[playUrl-native-exo] Native ExoPlayer failed:", detail?.message || "unknown");
+      if (!isCapacitorRuntime()) {
         emitPlayerTranscoding("Native player failed, trying relay playback...");
         playUrl(
           url,
@@ -909,18 +908,22 @@ export function playUrl(
           hasRetriedTranscodeBootstrap,
           contentType
         );
-      };
-      window.addEventListener("playerError", onNativeExoError as EventListener);
-      window.addEventListener(
-        "playerPlaying",
-        () => window.removeEventListener("playerError", onNativeExoError as EventListener),
-        { once: true }
-      );
-      return;
-    }
-    if (!isCapacitorRuntime()) {
-      console.warn("[playUrl-native-exo] Native bridge unavailable, falling back to WebView player");
-    }
+      }
+    };
+    window.addEventListener("playerError", onNativeExoError as EventListener);
+    window.addEventListener(
+      "playerPlaying",
+      () => window.removeEventListener("playerError", onNativeExoError as EventListener),
+      { once: true }
+    );
+    void playNativeUrl(nativeUrl).then((started) => {
+      if (token !== playRequestToken) return;
+      if (!started) {
+        window.removeEventListener("playerError", onNativeExoError as EventListener);
+        console.warn("[playUrl-native-exo] Native bridge unavailable, falling back to WebView player");
+      }
+    });
+    return;
   }
 
   const allowLiveVideoOnlyFallback = true;

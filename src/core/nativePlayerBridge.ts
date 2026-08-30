@@ -167,44 +167,36 @@ export function warmNativePlayer(): void {
 }
 
 export function resolveNativeLiveUrl(url: string): string {
-  const trimmed = String(url || "").trim();
-  if (!trimmed) return trimmed;
-  const lower = trimmed.toLowerCase();
-  if (lower.includes(".m3u8")) return trimmed;
-  if (/\.ts(?:\?|$)/i.test(trimmed)) {
-    return trimmed.replace(/\.ts(\?.*)?$/i, ".m3u8$1");
-  }
-  return trimmed;
+  return String(url || "").trim();
 }
 
-export function playNativeUrl(url: string): boolean {
+function pauseWebViewMediaElements(): void {
+  document.body.classList.add("native-exo-active");
+  document.querySelectorAll("video").forEach((element) => {
+    const video = element as HTMLVideoElement;
+    try {
+      video.pause();
+      video.muted = true;
+      video.removeAttribute("src");
+      video.load();
+    } catch {
+      // Ignore stale media element cleanup errors.
+    }
+  });
+}
+
+export async function playNativeUrl(url: string): Promise<boolean> {
   if (!url || !isNativePlayerAvailable()) return false;
 
   const nativeUrl = resolveNativeLiveUrl(url);
 
   try {
     if (isCapacitorRuntime()) {
-      document.body.classList.add("native-exo-active");
-      document.querySelectorAll("video").forEach((element) => {
-        const video = element as HTMLVideoElement;
-        try {
-          video.pause();
-          video.muted = true;
-          video.removeAttribute("src");
-          video.load();
-        } catch {
-          // Ignore stale media element cleanup errors.
-        }
+      pauseWebViewMediaElements();
+      await NativePlayerCap.stop().catch(() => {
+        // Ignore teardown errors before starting a new stream.
       });
-      void NativePlayerCap.play({ url: nativeUrl }).catch((err) => {
-        console.error("[native-player] Capacitor play failed", err);
-        document.body.classList.remove("native-exo-active");
-        window.dispatchEvent(
-          new CustomEvent("playerError", {
-            detail: { source: "native-exo", message: String(err || "Native playback failed") }
-          })
-        );
-      });
+      await NativePlayerCap.play({ url: nativeUrl });
       return true;
     }
 
@@ -214,6 +206,12 @@ export function playNativeUrl(url: string): boolean {
     return true;
   } catch (err) {
     console.error("[native-player] play failed", err);
+    document.body.classList.remove("native-exo-active");
+    window.dispatchEvent(
+      new CustomEvent("playerError", {
+        detail: { source: "native-exo", message: String(err || "Native playback failed") }
+      })
+    );
     return false;
   }
 }

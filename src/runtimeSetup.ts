@@ -568,12 +568,20 @@ function enableLocalPlaylistBridgeResponder() {
 
 let runtimeInitialized = false;
 
+function enableNativeBackBridge() {
+  const dispatchBack = () => {
+    window.dispatchEvent(new CustomEvent("webosBackKey"));
+  };
+  (window as Window & { __iptvmateHandleBack?: () => void }).__iptvmateHandleBack = dispatchBack;
+}
+
 export function initRuntimeSetup() {
   if (runtimeInitialized) return;
   runtimeInitialized = true;
 
   initHiddenDiagnostics();
   normalizeRemoteKeyEvents();
+  enableNativeBackBridge();
   enablePopupPlaylistExporter();
   enableLocalPlaylistBridgeResponder();
 }
