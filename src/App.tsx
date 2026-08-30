@@ -34,6 +34,7 @@ import {
   getCapacitorLiveGroupNames,
   getCapacitorLiveGroupCounts,
   loadCapacitorLiveGroupChannels,
+  loadCapacitorFavoriteChannels,
   ingestCapacitorLiveChannelCatalog,
   ingestCapacitorLiveChannelCatalogAsync,
   scheduleCapacitorLegacyCachePurge,
@@ -334,12 +335,22 @@ export function App() {
 
   useEffect(() => {
     if (!isCapacitorRuntime() || contentPage !== "live") return;
-    if (!activeGroup || activeGroup === ROOT_GROUP) return;
+    if (!activeGroup) return;
+    // During native playback the channel/group lists are hidden; defer
+    // (re)loading until the menu is visible again so Back navigation returns
+    // to a fully populated list.
+    if (!showLiveMenu && hasSelectedLiveChannel) return;
 
     let cancelled = false;
     void (async () => {
-      const loaded = await loadCapacitorLiveGroupChannels(activeGroup);
-      if (!cancelled && loaded.length > 0) {
+      if (activeGroup === ROOT_GROUP) {
+        // Favorites spans every catalog group: aggregate starred channels
+        // from the per-group IndexedDB records instead of loading one group.
+        await loadCapacitorFavoriteChannels();
+      } else {
+        await loadCapacitorLiveGroupChannels(activeGroup);
+      }
+      if (!cancelled) {
         setChannelUpdateTick((tick) => tick + 1);
       }
     })();
@@ -347,7 +358,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeGroup, contentPage]);
+  }, [activeGroup, contentPage, showLiveMenu, hasSelectedLiveChannel]);
 
   const allChannels = useMemo(() => {
     return getAllChannels().filter((channel) => isChannelRecord(channel));
@@ -3457,6 +3468,7 @@ export function App() {
             isFavoriteChannel={(channel) => isFavoriteChannelRecord(channel)}
             onToggleFavorite={(channel) => {
               setChannelFavoriteRecord(channel, !isFavoriteChannelRecord(channel));
+              setCategoryRefreshTick((tick) => tick + 1);
             }}
             showVisibilityControls={isPlaylistManagerPage && contentMode === "tv"}
             showFavoriteControls={isContentIconsView}

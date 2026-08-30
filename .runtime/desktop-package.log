@@ -1,0 +1,25 @@
+
+> toms-iptvmate@1.4.5 desktop:package
+> node scripts/repair-electron-install.cjs && electron-builder --win nsis --config.electronDist=node_modules/electron/dist
+
+[electron-repair] repaired electron 44.0.0 (win32-x64)
+  ΓÇó electron-builder  version=26.15.7 os=10.0.26340
+  ΓÇó loaded configuration  file=package.json ("build" field)
+  ΓÇó description is missed in the package.json  appPackageFile=C:\prgtm\Toms-IPTVmate\Toms-IPTVmate\package.json
+  ΓÇó author is missed in the package.json  appPackageFile=C:\prgtm\Toms-IPTVmate\Toms-IPTVmate\package.json
+  ΓÇó executing @electron/rebuild  electronVersion=44.0.0 arch=x64 buildFromSource=false workspaceRoot=C:\prgtm\Toms-IPTVmate\Toms-IPTVmate projectDir=./ appDir=./
+  ΓÇó installing native dependencies  arch=x64
+  ΓÇó completed installing native dependencies
+  ΓÇó packaging       platform=win32 arch=x64 electron=44.0.0 appOutDir=release\win-unpacked
+  ΓÇó using custom unpacked Electron distribution  electronDist=node_modules\electron\dist
+  ΓÇó copying unpacked Electron  source=C:\prgtm\Toms-IPTVmate\Toms-IPTVmate\node_modules\electron\dist destination=C:\prgtm\Toms-IPTVmate\Toms-IPTVmate\release\win-unpacked
+  ΓÇó searching for node modules  pm=npm searchDir=C:\prgtm\Toms-IPTVmate\Toms-IPTVmate
+  ΓÇó duplicate dependency references  dependencies=["@capacitor/core@8.5.0","@capacitor/core@8.5.0"]
+  ΓÇó updating asar integrity executable resource  executablePath=release\win-unpacked\Toms IPTVmate.exe
+  ΓÇó default Electron icon is used  reason=application icon is not set
+  ΓÇó signing with signtool.exe  path=release\win-unpacked\Toms IPTVmate.exe
+  ΓÇó building        target=nsis file=release\Toms-IPTVmate-1.4.5-Setup.exe archs=x64 oneClick=true perMachine=false
+  ΓÇó signing with signtool.exe  path=release\win-unpacked\resources\elevate.exe
+  ΓÇó signing with signtool.exe  path=release\Toms-IPTVmate-1.4.5-Setup.__uninstaller.exe
+  ΓÇó signing with signtool.exe  path=release\Toms-IPTVmate-1.4.5-Setup.exe
+  ΓÇó building block map  blockMapFile=release\Toms-IPTVmate-1.4.5-Setup.exe.blockmap

@@ -44,14 +44,31 @@ const CAPACITOR_IDB_PERSIST_BATCH_SIZE = 6;
 const CAPACITOR_INGEST_CHUNK_SIZE = 350;
 const CAPACITOR_LIVE_GROUPS_KEY = "iptvmate_capacitor_live_groups";
 const CAPACITOR_LIVE_GROUP_COUNTS_KEY = "iptvmate_capacitor_live_group_counts";
+// Tracks which catalog group each favorited live channel lives in, so the
+// Favorites view can aggregate starred channels across the hundreds of split
+// catalog groups without loading the whole catalog into memory.
+const CAPACITOR_FAVORITES_INDEX_KEY = "iptvmate_capacitor_favorites_index";
 const CAPACITOR_TRANSIENT_SOURCES = new Set<string>([
   "capacitor-live-trim",
   "capacitor-playback-trim",
   "capacitor-live-ingest",
-  "capacitor-group-load"
+  "capacitor-group-load",
+  "capacitor-favorites-load"
 ]);
 let capacitorLiveGroupNames: string[] = [];
 let capacitorLiveGroupCounts: Record<string, number> = {};
+type CapacitorFavoriteIndexEntry = {
+  group: string;
+  url: string;
+  name?: string;
+};
+type CapacitorFavoriteIndex = Record<string, CapacitorFavoriteIndexEntry>;
+let capacitorFavoriteIndex: CapacitorFavoriteIndex = loadCapacitorFavoriteIndex();
+let capacitorFavoriteIndexScanStarted = false;
+// Signature of the favorite id set currently held in memory by
+// loadCapacitorFavoriteChannels(). Cleared whenever another source writes the
+// channel list, so the Favorites view knows it must re-aggregate from IDB.
+let capacitorFavoritesViewSignature = "";
 let restoreChannelsCacheInFlight: Promise<Channel[]> | null = null;
 // webOS TV flash storage can take several seconds to open IndexedDB and read a
 // multi-megabyte channel record at cold boot. Aggressive (~1.2s) timeouts made
@@ -238,6 +255,17 @@ function hasFavoriteEntryWithId(id: string): boolean {
   return false;
 }
 
+function hasFavoriteEntryWithUrl(url: string): boolean {
+  const normalizedUrl = normalizeFavoriteUrl(url);
+  if (!normalizedUrl) return false;
+  for (const entry of favoriteEntries.values()) {
+    if (normalizeFavoriteUrl(entry.url || "") === normalizedUrl) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isSeriesLikeFavoriteChannel(channel: Partial<Channel> | null | undefined): boolean {
   if (!channel) return false;
 
@@ -373,6 +401,8 @@ function normalizeChannels(list: Channel[]): Channel[] {
 
 function applyCachedChannels(list: Channel[]) {
   channels = normalizeChannels(list);
+  // Any channel-list write invalidates the aggregated Favorites memory view.
+  capacitorFavoritesViewSignature = "";
   const firstGroup = channels.find((c) => c.group && c.group !== "All")?.group;
   activeGroup = firstGroup || "All";
 }
@@ -392,6 +422,7 @@ function applyRestoredChannels(list: Channel[]) {
 
 export function clearCurrentChannels(source: string = "unknown") {
   channels = [];
+  capacitorFavoritesViewSignature = "";
   activeGroup = "All";
   recordChannelWriteTrace(source, false, 0);
 }
@@ -934,6 +965,95 @@ function readCapacitorLiveGroupCountsFromStorage(): Record<string, number> {
   }
 }
 
+function loadCapacitorFavoriteIndex(): CapacitorFavoriteIndex {
+  const result: CapacitorFavoriteIndex = {};
+  try {
+    const raw = localStorage.getItem(CAPACITOR_FAVORITES_INDEX_KEY);
+    if (!raw) return result;
+    const parsed = JSON.parse(raw) as Record<string, Partial<CapacitorFavoriteIndexEntry>>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return result;
+    for (const [id, entry] of Object.entries(parsed)) {
+      const group = String(entry?.group || "").trim();
+      if (!group) continue;
+      result[id] = {
+        group,
+        url: String(entry?.url || "").trim(),
+        name: typeof entry?.name === "string" ? (entry.name as string) : undefined
+      };
+    }
+  } catch {
+    // Ignore corruption.
+  }
+  return result;
+}
+
+function saveCapacitorFavoriteIndex() {
+  try {
+    localStorage.setItem(CAPACITOR_FAVORITES_INDEX_KEY, JSON.stringify(capacitorFavoriteIndex));
+  } catch {
+    // Ignore quota errors on TV storage.
+  }
+}
+
+function getFavoriteIdSet(): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of favoriteEntries.values()) {
+    const id = String(entry?.id || "").trim();
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
+function buildCapacitorFavoritesSignature(favoriteIds: Set<string>): string {
+  return Array.from(favoriteIds).sort().join("|");
+}
+
+/**
+ * While ingesting the full live catalog, record which split group each
+ * favorited channel lives in. This lets the Favorites group aggregate
+ * starred channels from all 900+ groups without a full catalog load.
+ */
+function rebuildCapacitorFavoriteIndexFromCatalog(list: Channel[]): void {
+  if (!isCapacitorRuntime() || favoriteEntries.size === 0) return;
+  const ids = getFavoriteIdSet();
+  if (ids.size === 0) return;
+
+  let added = 0;
+  for (const channel of list) {
+    if (!isLiveChannel(channel)) continue;
+    const id = String(channel?.id || "").trim();
+    if (!ids.has(id)) continue;
+    if (capacitorFavoriteIndex[id]) continue;
+    capacitorFavoriteIndex[id] = {
+      group: normalizeGroupName(channel.group),
+      url: String(channel?.url || "").trim(),
+      name: typeof channel?.name === "string" ? channel.name : undefined
+    };
+    added += 1;
+  }
+  if (added > 0) saveCapacitorFavoriteIndex();
+}
+
+function syncCapacitorFavoriteIndexForChannel(
+  channel: Partial<Channel> | null | undefined,
+  isFavorite: boolean
+): void {
+  if (!isCapacitorRuntime()) return;
+  const id = String(channel?.id || "").trim();
+  if (!id) return;
+
+  if (isFavorite) {
+    capacitorFavoriteIndex[id] = {
+      group: normalizeGroupName(channel?.group),
+      url: String(channel?.url || "").trim(),
+      name: typeof channel?.name === "string" ? (channel?.name as string) : undefined
+    };
+  } else {
+    delete capacitorFavoriteIndex[id];
+  }
+  saveCapacitorFavoriteIndex();
+}
+
 function saveCapacitorLiveGroupCatalog(groupNames: string[], counts: Record<string, number>) {
   capacitorLiveGroupNames = groupNames;
   capacitorLiveGroupCounts = counts;
@@ -1074,6 +1194,9 @@ export async function ingestCapacitorLiveChannelCatalogAsync(
     counts[group] = count;
   });
   saveCapacitorLiveGroupCatalog(groupNames, counts);
+  // Record which split group each favorited channel lives in so the Favorites
+  // view can aggregate them from IndexedDB without a full catalog load.
+  rebuildCapacitorFavoriteIndexFromCatalog(list);
 
   const normalizedPreferred = preferredGroup ? normalizeGroupName(preferredGroup) : "";
   const targetGroup =
@@ -1149,6 +1272,9 @@ export function ingestCapacitorLiveChannelCatalog(
     counts[group] = count;
   });
   saveCapacitorLiveGroupCatalog(groupNames, counts);
+  // Record which split group each favorited channel lives in so the Favorites
+  // view can aggregate them from IndexedDB without a full catalog load.
+  rebuildCapacitorFavoriteIndexFromCatalog(list);
 
   const normalizedPreferred = preferredGroup ? normalizeGroupName(preferredGroup) : "";
   const targetGroup =
@@ -1205,6 +1331,127 @@ export async function loadCapacitorLiveGroupChannels(groupName: string): Promise
   }
 
   return loaded.length > 0 ? loaded : channels;
+}
+
+/**
+ * Aggregates every favorited live channel into memory on Capacitor. The live
+ * catalog is split into per-group IndexedDB records (only one group is kept in
+ * memory at a time), so the Favorites group cannot be rendered from memory
+ * alone — starred channels may live in any of the catalog's groups. The
+ * persisted favorites index tells us exactly which group records to read, and
+ * a one-time-per-session full scan re-indexes legacy favorites that were saved
+ * before the index existed (or whose group assignment went stale).
+ */
+export async function loadCapacitorFavoriteChannels(): Promise<Channel[]> {
+  const favoriteIds = getFavoriteIdSet();
+
+  if (!isCapacitorRuntime()) {
+    return channels.filter((channel) => isFavoriteChannelRecord(channel));
+  }
+
+  if (favoriteIds.size === 0) {
+    return [];
+  }
+
+  // Skip the IndexedDB aggregation when memory already holds exactly this
+  // favorites set (e.g. the menu is re-opened without any favorite changes).
+  const signature = buildCapacitorFavoritesSignature(favoriteIds);
+  if (signature && capacitorFavoritesViewSignature === signature) {
+    return channels;
+  }
+
+  // Bucket favorite ids by their catalog group so we only read the group
+  // records that actually contain starred channels.
+  const idsByGroup = new Map<string, Set<string>>();
+  for (const id of favoriteIds) {
+    const indexedGroup = String(capacitorFavoriteIndex[id]?.group || "").trim();
+    if (!indexedGroup) continue;
+    let bucket = idsByGroup.get(indexedGroup);
+    if (!bucket) {
+      bucket = new Set<string>();
+      idsByGroup.set(indexedGroup, bucket);
+    }
+    bucket.add(id);
+  }
+
+  const favorites: Channel[] = [];
+  const foundIds = new Set<string>();
+  const seenKeys = new Set<string>();
+  let indexChanged = false;
+
+  const collect = (list: Channel[]) => {
+    for (const channel of list) {
+      if (favorites.length >= CAPACITOR_MAX_GROUP_CHANNELS) return;
+      const id = String(channel?.id || "").trim();
+      if (!id || foundIds.has(id) || !favoriteIds.has(id)) continue;
+      if (!isFavoriteChannelRecord(channel)) continue;
+      const dedupeKey = `${id}|${normalizeFavoriteUrl(String(channel?.url || ""))}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+      foundIds.add(id);
+      favorites.push(channel);
+      // Keep the index fresh: fill gaps and correct stale group assignments.
+      const group = normalizeGroupName(channel.group);
+      const existing = capacitorFavoriteIndex[id];
+      if (!existing || existing.group !== group) {
+        capacitorFavoriteIndex[id] = {
+          group,
+          url: String(channel?.url || "").trim(),
+          name: typeof channel?.name === "string" ? channel.name : undefined
+        };
+        indexChanged = true;
+      }
+    }
+  };
+
+  // Favorites already in memory (the currently loaded group, plus movies /
+  // series favorites which are not split into per-group IDB records).
+  collect(channels);
+
+  const db = await openChannelsCacheDb();
+  if (db) {
+    try {
+      // Fast path: read only the groups the favorites index points to.
+      for (const groupName of idsByGroup.keys()) {
+        if (favorites.length >= CAPACITOR_MAX_GROUP_CHANNELS) break;
+        const members = await readCachedChannelsFromIndexedDb(db, idbLiveGroupRecordKey(groupName));
+        collect(members);
+        await yieldToMain();
+      }
+
+      // Slow path: some favorites are not indexed yet — scan the remaining
+      // catalog groups once per session to locate and index them.
+      const hasMissing = [...favoriteIds].some((id) => !foundIds.has(id));
+      if (hasMissing && !capacitorFavoriteIndexScanStarted) {
+        capacitorFavoriteIndexScanStarted = true;
+        for (const groupName of getCapacitorLiveGroupNames()) {
+          if (idsByGroup.has(groupName)) continue;
+          if (favorites.length >= CAPACITOR_MAX_GROUP_CHANNELS) break;
+          const members = await readCachedChannelsFromIndexedDb(db, idbLiveGroupRecordKey(groupName));
+          collect(members);
+          await yieldToMain();
+          if ([...favoriteIds].every((id) => foundIds.has(id))) break;
+        }
+      }
+    } finally {
+      db.close();
+    }
+  }
+
+  if (indexChanged) {
+    saveCapacitorFavoriteIndex();
+  }
+
+  if (favorites.length === 0) {
+    // Nothing resolvable yet (e.g. catalog not ingested). Keep the current
+    // in-memory list rather than wiping it; the view will simply show the
+    // favorites subset of whatever is loaded.
+    return [];
+  }
+
+  setChannelsWithoutSideEffects(favorites, "capacitor-favorites-load");
+  capacitorFavoritesViewSignature = signature;
+  return favorites;
 }
 
 export function trimCapacitorChannelMemoryForLive(): number {
@@ -1613,9 +1860,28 @@ export function isFavoriteChannelRecord(channel: Partial<Channel> | null | undef
     return true;
   }
 
-  // Legacy compatibility: only trust id-only favorites when that id maps to
-  // exactly one current channel, otherwise it is ambiguous across providers.
-  return hasLegacyIdOnlyFavorite(id) && hasUniqueCurrentChannelId(id);
+  // Legacy favorites were saved as bare ids (pre url-keyed entries). Providers
+  // often repeat a stream id across categories, so uniqueness must NOT be
+  // required here — otherwise these favorites silently vanish from the
+  // Favorites list until the entry gets re-favorited or migrated.
+  if (hasLegacyIdOnlyFavorite(id)) {
+    return true;
+  }
+
+  // Match when the id has a favorite entry and the current channel url also
+  // appears in a stored entry. This covers playlists where multiple channels
+  // share the same id (e.g. different quality variants / groups) and the
+  // composite key didn't match above due to object-reference differences
+  // (cache restore, etc.) but the id+url still identify the same stream.
+  const url = normalizeFavoriteUrl(channel.url || "");
+  if (id && url && hasFavoriteEntryWithId(id) && hasFavoriteEntryWithUrl(url)) {
+    return true;
+  }
+
+  // URL drift (rotating stream tokens / proxies / CDN hosts): if the favorited
+  // id maps to exactly one current channel, the bookmark is unambiguous, so
+  // match on id even when the saved url differs from the channel's current url.
+  return hasFavoriteEntryWithId(id) && hasUniqueCurrentChannelId(id);
 }
 
 export function setChannelFavoriteRecord(channel: Partial<Channel> | null | undefined, isFavorite: boolean) {
@@ -1669,6 +1935,7 @@ export function setChannelFavoriteRecord(channel: Partial<Channel> | null | unde
 
   favoriteChannelIds = buildFavoriteIdSet(favoriteEntries);
   saveFavoriteEntries();
+  syncCapacitorFavoriteIndexForChannel(channel, isFavorite);
   dispatchFavoritesChanged();
 }
 
