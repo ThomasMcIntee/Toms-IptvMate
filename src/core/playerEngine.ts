@@ -844,14 +844,22 @@ export function playUrl(
   const rootSourceUrlEarly = resolveRootSourceUrl(normalizedUrl);
 
   const nativeBridgeReady = isNativePlayerAvailable();
-  if (isCapacitorRuntime() && isLiveContent && !hasTriedNativeFallback) {
-    console.log(`[playUrl-native-exo-check] bridge=${nativeBridgeReady} cap=${isCapacitorRuntime()}`);
+  const isVodContent = contentType === "movie" || contentType === "series";
+  // ExoPlayer has no AVI/WMV extractor — keep the WebView fallback chain for those.
+  const isExoUnsupportedVodContainer = isVodContent && /\.(avi|wmv)(?:[?#]|$)/i.test(rootSourceUrlEarly);
+  const isNativeContent = isLiveContent || (isVodContent && !isExoUnsupportedVodContainer);
+
+  if (isCapacitorRuntime() && isNativeContent && !hasTriedNativeFallback) {
+    console.log(`[playUrl-native-exo-check] bridge=${nativeBridgeReady} cap=${isCapacitorRuntime()} type=${contentType}`);
   }
 
-  // Fire TV / Android live IPTV: ExoPlayer handles continuous MPEG-TS + hardware codecs.
+  // Fire TV / Android: ExoPlayer handles continuous MPEG-TS + hardware codecs
+  // for live, and starts movies/series far faster than WebView progressive
+  // probing (which also cannot play MKV at all). Live native failure must not
+  // fall back to WebView — that path ANRs Fire TV. VOD may still fall back.
   if (
     isCapacitorRuntime() &&
-    isLiveContent &&
+    isNativeContent &&
     nativeBridgeReady &&
     !hasTriedNativeFallback &&
     !isTranscodeBootstrapUrl(normalizedUrl) &&
@@ -890,13 +898,20 @@ export function playUrl(
 
     stopNativePlayback();
     const nativeUrl = normalizeStreamUrl(rootSourceUrlEarly);
-    console.log(`[playUrl-native-exo] url=${nativeUrl.slice(0, 100)}...`);
-    if (playNativeUrl(nativeUrl)) {
+    console.log(`[playUrl-native-exo] url=${nativeUrl.slice(0, 100)}... type=${contentType}`);
+    if (playNativeUrl(nativeUrl, contentType)) {
       const onNativeExoError = (event: Event) => {
         if (token !== playRequestToken) return;
         const detail = (event as CustomEvent<{ source?: string; message?: string }>).detail;
         if (detail?.source !== "native-exo") return;
         window.removeEventListener("playerError", onNativeExoError as EventListener);
+        // Live MPEG-TS in WebView is what ANRs Fire TV (unbounded buffer + main-thread GC).
+        // Do not fall back to the HTML player for live; surface the native error instead.
+        if (isLiveContent) {
+          console.error("[playUrl-native-exo] Native ExoPlayer failed; not falling back to WebView for live");
+          emitPlayerError(detail?.message || "Native playback failed");
+          return;
+        }
         console.warn("[playUrl-native-exo] Native ExoPlayer failed, falling back to WebView relay");
         emitPlayerTranscoding("Native player failed, trying relay playback...");
         playUrl(

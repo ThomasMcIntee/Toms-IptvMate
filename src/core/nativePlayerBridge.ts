@@ -4,9 +4,19 @@ import { isCapacitorRuntime } from "./player/platformDetection";
 type NativePlayerCapPlugin = {
   isAvailable(): Promise<{ available: boolean }>;
   warmUp(): Promise<void>;
-  play(options: { url: string }): Promise<void>;
+  play(options: { url: string; contentType?: string }): Promise<void>;
   stop(): Promise<void>;
-  setBounds(options: { left: number; top: number; width: number; height: number }): Promise<void>;
+  pause(): Promise<void>;
+  resume(): Promise<void>;
+  setMuted(options: { muted: boolean }): Promise<void>;
+  setBounds(options: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    viewportWidth?: number;
+    viewportHeight?: number;
+  }): Promise<void>;
 };
 
 declare global {
@@ -21,6 +31,11 @@ declare global {
 }
 
 const NativePlayerCap = registerPlugin<NativePlayerCapPlugin>("NativePlayer");
+
+// Local view of the native player control state so UI hotkeys (space/m) keep
+// working while the native ExoPlayer overlay renders video outside the WebView.
+let nativePaused = false;
+let nativeMuted = false;
 
 let boundsSyncTimer: number | null = null;
 let lastBoundsPayload: { left: number; top: number; width: number; height: number } | null = null;
@@ -65,7 +80,14 @@ function resolveNativePlayerTarget(): HTMLElement | null {
 
 function sendNativePlayerBounds(left: number, top: number, width: number, height: number): void {
   if (isCapacitorRuntime()) {
-    void NativePlayerCap.setBounds({ left, top, width, height }).catch((err) => {
+    void NativePlayerCap.setBounds({
+      left,
+      top,
+      width,
+      height,
+      viewportWidth: Math.round(window.innerWidth || 0),
+      viewportHeight: Math.round(window.innerHeight || 0)
+    }).catch((err) => {
       console.warn("[native-player] setBounds failed", err);
     });
     return;
@@ -101,8 +123,9 @@ function resolveNativePlayerBounds(rect: DOMRect): {
   const offsetTop = viewport?.offsetTop ?? 0;
   const scale = viewport?.scale ?? 1;
 
-  // Capacitor Android overlay is laid out in WebView CSS pixels — applying DPR
-  // pushes the native surface off-screen on Fire TV (black video, audio OK).
+  // CSS pixels. Native ExoPlayerManager maps them onto the WebView's pixel
+  // size using viewportWidth/viewportHeight. Do not multiply by DPR here —
+  // that previously pushed the overlay off-screen on Fire TV.
   if (isCapacitorRuntime()) {
     return {
       left: Math.round((rect.left + offsetLeft) * scale),
@@ -156,7 +179,8 @@ export function syncNativePlayerBounds(force = false): void {
 }
 
 function scheduleNativePlayerBoundsSync(): void {
-  // Bounds are applied after play() when the native surface exists.
+  syncNativePlayerBounds(true);
+  window.requestAnimationFrame(() => syncNativePlayerBounds(true));
 }
 
 export function warmNativePlayer(): void {
@@ -177,14 +201,22 @@ export function resolveNativeLiveUrl(url: string): string {
   return trimmed;
 }
 
-export function playNativeUrl(url: string): boolean {
+export function playNativeUrl(url: string, contentType: "live" | "movie" | "series" = "live"): boolean {
   if (!url || !isNativePlayerAvailable()) return false;
 
-  const nativeUrl = resolveNativeLiveUrl(url);
+  // The .ts -> .m3u8 rewrite is a live-stream compatibility trick only. VOD
+  // files must keep their original progressive URL.
+  const nativeUrl = contentType === "live" ? resolveNativeLiveUrl(url) : String(url).trim();
 
   try {
     if (isCapacitorRuntime()) {
+      nativePaused = false;
       document.body.classList.add("native-exo-active");
+      if (contentType === "movie" || contentType === "series") {
+        document.body.classList.add("native-exo-vod");
+      } else {
+        document.body.classList.remove("native-exo-vod");
+      }
       document.querySelectorAll("video").forEach((element) => {
         const video = element as HTMLVideoElement;
         try {
@@ -192,13 +224,18 @@ export function playNativeUrl(url: string): boolean {
           video.muted = true;
           video.removeAttribute("src");
           video.load();
+          video.blur();
         } catch {
           // Ignore stale media element cleanup errors.
         }
       });
-      void NativePlayerCap.play({ url: nativeUrl }).catch((err) => {
+      scheduleNativePlayerBoundsSync();
+      void NativePlayerCap.play({ url: nativeUrl, contentType }).then(() => {
+        scheduleNativePlayerBoundsSync();
+      }).catch((err) => {
         console.error("[native-player] Capacitor play failed", err);
         document.body.classList.remove("native-exo-active");
+        document.body.classList.remove("native-exo-vod");
         window.dispatchEvent(
           new CustomEvent("playerError", {
             detail: { source: "native-exo", message: String(err || "Native playback failed") }
@@ -218,7 +255,41 @@ export function playNativeUrl(url: string): boolean {
   }
 }
 
+export function isNativePlaybackPaused(): boolean {
+  return nativePaused;
+}
+
+export function isNativePlaybackMuted(): boolean {
+  return nativeMuted;
+}
+
+export function pauseNativePlayback(): void {
+  if (!isCapacitorRuntime() || !isNativePlayerAvailable()) return;
+  nativePaused = true;
+  void NativePlayerCap.pause().catch(() => {
+    nativePaused = false;
+  });
+}
+
+export function resumeNativePlayback(): void {
+  if (!isCapacitorRuntime() || !isNativePlayerAvailable()) return;
+  nativePaused = false;
+  void NativePlayerCap.resume().catch(() => {
+    nativePaused = true;
+  });
+}
+
+export function setNativeMuted(muted: boolean): void {
+  nativeMuted = muted;
+  if (!isCapacitorRuntime() || !isNativePlayerAvailable()) return;
+  void NativePlayerCap.setMuted({ muted }).catch(() => {
+    nativeMuted = !muted;
+  });
+}
+
 export function stopNativePlayback(): void {
+  nativePaused = false;
+  nativeMuted = false;
   try {
     if (isCapacitorRuntime()) {
       void NativePlayerCap.stop().catch(() => {
@@ -231,9 +302,12 @@ export function stopNativePlayback(): void {
     // Ignore bridge teardown errors.
   }
   document.body.classList.remove("native-exo-active");
+  document.body.classList.remove("native-exo-vod");
 }
 
 if (typeof window !== "undefined") {
   (window as Window & { syncNativePlayerBoundsFromNative?: () => void }).syncNativePlayerBoundsFromNative =
     () => syncNativePlayerBounds(true);
+  window.addEventListener("resize", () => syncNativePlayerBounds(false));
+  window.visualViewport?.addEventListener("resize", () => syncNativePlayerBounds(false));
 }

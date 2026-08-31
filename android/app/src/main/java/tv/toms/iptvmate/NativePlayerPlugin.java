@@ -1,5 +1,7 @@
 package tv.toms.iptvmate;
 
+import android.util.Log;
+
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -34,7 +36,29 @@ public class NativePlayerPlugin extends Plugin {
             return;
         }
 
-        manager().play(url);
+        // "movie"/"series" play as progressive VOD; anything else is live.
+        String contentType = call.getString("contentType", "live");
+        boolean isLive = !"movie".equals(contentType) && !"series".equals(contentType);
+        Log.i("IPTVMate_NativePlayer", "plugin play isLive=" + isLive + " url=" + url);
+        manager().play(url, isLive);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void pause(PluginCall call) {
+        manager().pause();
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void resume(PluginCall call) {
+        manager().resume();
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void setMuted(PluginCall call) {
+        manager().setMuted(Boolean.TRUE.equals(call.getBoolean("muted", false)));
         call.resolve();
     }
 
@@ -50,7 +74,9 @@ public class NativePlayerPlugin extends Plugin {
             call.getInt("left", 0),
             call.getInt("top", 0),
             call.getInt("width", 0),
-            call.getInt("height", 0)
+            call.getInt("height", 0),
+            call.getInt("viewportWidth", 0),
+            call.getInt("viewportHeight", 0)
         );
         call.resolve();
     }

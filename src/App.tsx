@@ -10,8 +10,14 @@ import { normalizeRemoteNavKey } from "./core/remoteKeys";
 import { initPlayerEngine, playUrl, stopPlayback } from "./core/playerEngine";
 import {
   isNativePlayerAvailable,
+  isNativePlaybackMuted,
+  isNativePlaybackPaused,
+  pauseNativePlayback,
   playNativeUrl,
-  stopNativePlayback
+  resumeNativePlayback,
+  setNativeMuted,
+  stopNativePlayback,
+  syncNativePlayerBounds
 } from "./core/nativePlayerBridge";
 import { isCapacitorRuntime } from "./core/player/platformDetection";
 import { GroupList } from "./ui/GroupList";
@@ -38,6 +44,9 @@ import {
   ingestCapacitorLiveChannelCatalog,
   ingestCapacitorLiveChannelCatalogAsync,
   scheduleCapacitorLegacyCachePurge,
+  loadCapacitorVodScopeCache,
+  saveCapacitorVodScopeCache,
+  capCapacitorCatalogList,
   pruneCapacitorVisibilityIfBloated,
   setRoleChannelWriteLock,
   setGroupVisible,
@@ -104,12 +113,6 @@ function writeStoredItem(key: string, value: string): void {
   } catch {
     // Ignore sessionStorage access errors.
   }
-}
-
-function isWebOsRuntime(): boolean {
-  const agent = String(navigator?.userAgent || "");
-  const runtime = (window as Window & { webOS?: unknown; PalmServiceBridge?: unknown }).webOS;
-  return /WebOSTV|webOS|LG WebOS/i.test(agent) || Boolean(runtime) || Boolean((window as Window & { PalmServiceBridge?: unknown }).PalmServiceBridge);
 }
 
 function isBackKeyEvent(event: KeyboardEvent): boolean {
@@ -243,6 +246,7 @@ export function App() {
   const guidePrefetchCursorRef = useRef(0);
   const startupAutoLoadInFlightRef = useRef(false);
   const startupCacheHydrationCompletedRef = useRef(false);
+  const startupVodPrefetchTimerRef = useRef<number | null>(null);
   const setupSecurity = readSetupSecurity();
   const isLoginOverlayVisible = setupSecurity.loginRequired && accessLevel === null;
   const shouldShowOpeningMenu = showOpeningScreen;
@@ -334,7 +338,12 @@ export function App() {
   }, [accessLevel]);
 
   useEffect(() => {
-    if (!isCapacitorRuntime() || contentPage !== "live") return;
+    if (!isCapacitorRuntime()) return;
+    // Live groups hydrate from per-group IndexedDB records on the Live TV page
+    // and in the Playlist Manager's TV mode (which manages the same catalog).
+    const isLiveGroupContext =
+      contentPage === "live" || (contentPage === "playlistManager" && contentMode === "tv");
+    if (!isLiveGroupContext) return;
     if (!activeGroup) return;
     // During native playback the channel/group lists are hidden; defer
     // (re)loading until the menu is visible again so Back navigation returns
@@ -358,7 +367,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeGroup, contentPage, showLiveMenu, hasSelectedLiveChannel]);
+  }, [activeGroup, contentPage, contentMode, showLiveMenu, hasSelectedLiveChannel]);
 
   const allChannels = useMemo(() => {
     return getAllChannels().filter((channel) => isChannelRecord(channel));
@@ -538,17 +547,22 @@ export function App() {
       return filteredChannels;
     }
 
-    const visibleSeriesChannels = filteredChannels.filter((channel) => {
-      if (!isChannelRecord(channel)) return false;
-      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
-      return isGroupVisible(groupName);
-    });
+    // The playlist manager must keep hidden groups' channels listed so their
+    // visibility can be toggled back on; the public series view hides them.
+    const visibleSeriesChannels = isPlaylistManagerPage
+      ? filteredChannels.filter((channel) => isChannelRecord(channel))
+      : filteredChannels.filter((channel) => {
+          if (!isChannelRecord(channel)) return false;
+          const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+          return isGroupVisible(groupName);
+        });
     const term = String(seriesMainSearchDebouncedTerm || "").trim().toLowerCase();
     if (!term) return visibleSeriesChannels;
     if (term.length < SERIES_SEARCH_MIN_TERM_LENGTH) return [];
 
     return (seriesMainSearchResults ?? []).filter((channel) => {
       if (!isChannelRecord(channel)) return false;
+      if (isPlaylistManagerPage) return true;
       const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
       return isGroupVisible(groupName);
     });
@@ -559,6 +573,7 @@ export function App() {
     activeGroup,
     categoryRefreshTick,
     isMainSeriesScreen,
+    isPlaylistManagerPage,
     filteredChannels,
     seriesMainSearchDebouncedTerm,
     seriesMainSearchResults,
@@ -1119,6 +1134,13 @@ export function App() {
     // stopPlayback also cancels in-flight retry/transcode chains even if channel state
     // is already null.
     stopPlayback();
+    document.querySelectorAll("video").forEach((element) => {
+      try {
+        (element as HTMLVideoElement).blur();
+      } catch {
+        // Ignore.
+      }
+    });
     if (currentChannel) {
       setCurrentChannel(null);
     }
@@ -1214,9 +1236,32 @@ export function App() {
     if (showOpeningScreen || contentPage !== "live") return;
 
     const applyPinnedPreviewPosition = () => {
-      const margin = 20;
-      const compactWidth = window.innerWidth <= 1280 ? 560 : 720;
-      const compactHeight = window.innerWidth <= 1280 ? 315 : 405;
+      const shell = document.querySelector(".live-preview-shell") as HTMLElement | null;
+      const placeholder = document.querySelector(".live-preview-placeholder") as HTMLElement | null;
+
+      if (isLivePreviewFullscreen) {
+        if (shell) {
+          shell.style.position = "fixed";
+          shell.style.top = "0px";
+          shell.style.right = "0px";
+          shell.style.left = "0px";
+          shell.style.bottom = "0px";
+          shell.style.width = "100%";
+          shell.style.height = "100%";
+          shell.style.transform = "none";
+        }
+        if (isCapacitorRuntime()) {
+          syncNativePlayerBounds(true);
+        }
+        return;
+      }
+
+      const tvLayout = isCapacitorRuntime();
+      const margin = tvLayout ? 16 : 20;
+      const compactWidth = tvLayout
+        ? Math.max(280, Math.round(window.innerWidth * 0.38))
+        : window.innerWidth <= 1280 ? 560 : 720;
+      const compactHeight = Math.round((compactWidth * 9) / 16);
       document.documentElement.style.setProperty("--live-preview-top", `${margin}px`);
       document.documentElement.style.setProperty("--live-preview-right", `${margin}px`);
 
@@ -1224,9 +1269,6 @@ export function App() {
       // leak viewport-sized values back into compact preview mode.
       document.documentElement.style.setProperty("--live-preview-width", `${compactWidth}px`);
       document.documentElement.style.setProperty("--live-preview-height", `${compactHeight}px`);
-
-      const shell = document.querySelector(".live-preview-shell") as HTMLElement | null;
-      const placeholder = document.querySelector(".live-preview-placeholder") as HTMLElement | null;
 
       [shell, placeholder].forEach((el) => {
         if (!el) return;
@@ -1236,13 +1278,20 @@ export function App() {
         el.style.left = "auto";
         el.style.bottom = "auto";
         el.style.transform = "none";
+        el.style.width = `${compactWidth}px`;
+        el.style.height = `${compactHeight}px`;
       });
+
+      if (isCapacitorRuntime()) {
+        syncNativePlayerBounds(false);
+      }
     };
 
     applyPinnedPreviewPosition();
     window.addEventListener("resize", applyPinnedPreviewPosition);
 
     if (isCapacitorRuntime()) {
+      window.requestAnimationFrame(() => syncNativePlayerBounds(true));
       return () => window.removeEventListener("resize", applyPinnedPreviewPosition);
     }
 
@@ -1259,7 +1308,13 @@ export function App() {
       window.clearInterval(intervalId);
       window.removeEventListener("resize", applyPinnedPreviewPosition);
     };
-  }, [showOpeningScreen, contentPage, currentChannel?.id]);
+  }, [showOpeningScreen, contentPage, currentChannel?.id, isLivePreviewFullscreen]);
+
+  useEffect(() => {
+    if (!isCapacitorRuntime()) return;
+    const frame = window.requestAnimationFrame(() => syncNativePlayerBounds(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [showLiveMenu, isLivePreviewFullscreen, contentPage, hasSelectedLiveChannel, currentChannel?.id]);
 
   useEffect(() => {
     // Re-bind to the current video element after major UI mode changes.
@@ -1326,6 +1381,9 @@ export function App() {
         }
       }, 400);
 
+      // Fire TV/Android: do not prefetch the full movies/series catalog.
+      // Persisting ~180k VOD rows OOMs the Stick. Movies/Series load on
+      // entry and are capped before they touch memory or IndexedDB.
       return;
     }
 
@@ -1423,6 +1481,12 @@ export function App() {
         setChannelUpdateTick((tick) => tick + 1);
         setCategoryRefreshTick((tick) => tick + 1);
         debugLog('startup: cache applied successfully');
+
+        // The restored cache can hold only the live scope (e.g. saved before
+        // Movies/Series were loaded, or live-only on Fire TV). Top up the
+        // missing VOD scopes from the saved playlist in the background so
+        // Movies and Series open instantly. No-op when already present.
+        prefetchVodScopesInBackground({ delayMs: 6000 });
         return;
       }
 
@@ -1433,10 +1497,13 @@ export function App() {
       setActivePanel(null);
       setShowOpeningScreen(true);
 
-      // On webOS the TV may have purged every cache layer while the playlists
-      // survived (DB8). Fetch live channels in the background so content is
-      // ready by the time the user leaves the menu — "loads by itself".
-      if (isWebOsRuntime()) {
+      // No channel cache exists but saved playlists survived (on webOS the TV
+      // may have purged every cache layer while playlists survived in DB8).
+      // Fetch live channels in the background so content is ready by the time
+      // the user leaves the menu — "loads by itself". Capacitor never reaches
+      // this branch (fast boot above) and warms VOD scopes via its own
+      // IndexedDB prefetch instead.
+      if (!isCapacitorRuntime()) {
         const savedPlaylists = loadPlaylists();
         if (savedPlaylists.length > 0) {
           debugLog('startup: auto-fetching live channels from saved playlist');
@@ -1467,28 +1534,7 @@ export function App() {
               // Continue with the VOD catalogs in the background so Movies and
               // Series open instantly instead of fetching on first entry.
               // Delayed to let the UI settle; aborts if a manual load starts.
-              window.setTimeout(() => {
-                void (async () => {
-                  for (const scope of ["movies", "series"] as const) {
-                    if (cancelled || autoLoadTokenRef.current !== requestToken) return;
-                    try {
-                      const scopedChannels = await loadChannelsForPlaylist(playlist, scope);
-                      if (cancelled || autoLoadTokenRef.current !== requestToken) return;
-                      if (!Array.isArray(scopedChannels) || scopedChannels.length === 0) continue;
-
-                      const byId = new Map<string, any>();
-                      getAllChannels().forEach((channel) => byId.set(String(channel?.id || ""), channel));
-                      scopedChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
-                      setChannels(Array.from(byId.values()) as any[], "startup-auto-fetch");
-                      setChannelUpdateTick((tick) => tick + 1);
-                      setCategoryRefreshTick((tick) => tick + 1);
-                      debugLog(`startup: prefetched ${scopedChannels.length} ${scope}`);
-                    } catch {
-                      // Skip this scope; the lazy loader still covers it on entry.
-                    }
-                  }
-                })();
-              }, 4000);
+              prefetchVodScopesInBackground({ token: requestToken, delayMs: 4000 });
               return;
             } catch {
               // Try the next saved playlist.
@@ -1506,6 +1552,10 @@ export function App() {
     return () => {
       cancelled = true;
       startupAutoLoadInFlightRef.current = false;
+      if (startupVodPrefetchTimerRef.current !== null) {
+        window.clearTimeout(startupVodPrefetchTimerRef.current);
+        startupVodPrefetchTimerRef.current = null;
+      }
     };
   }, [showOpeningScreen, accessLevel, hasPlaylists, playlistsRevision]);
 
@@ -1747,6 +1797,9 @@ export function App() {
           setActivePanel(null);
         } else {
           setActivePanel(null);
+          // Reset the page state so a stale "playlistManager"/"movies"/"series"
+          // page cannot leak onto the next screen opened from the main menu.
+          setContentPage("live");
           setShowOpeningScreen(true);
         }
         return true;
@@ -1756,8 +1809,10 @@ export function App() {
         } else if (currentChannel && (contentPage === "movies" || contentPage === "series" || contentPage === "playlistManager")) {
           stopCurrentVodPlaybackIfNeeded();
           setCurrentChannel(null);
+          setContentPage("live");
           setShowOpeningScreen(true);
         } else {
+          setContentPage("live");
           setShowOpeningScreen(true);
         }
         return true;
@@ -2317,8 +2372,7 @@ export function App() {
     setActivePanel(null);
     if (isLiveSelection) {
       setHasSelectedLiveChannel(true);
-      // Fire TV: hide the channel/group lists during playback to avoid GC thrash.
-      setShowLiveMenu(!isCapacitorRuntime());
+      setShowLiveMenu(true);
     }
 
     const player = document.getElementById("player-main") as HTMLVideoElement | null;
@@ -2403,6 +2457,17 @@ export function App() {
   }
 
   function togglePlayPause() {
+    // While the native ExoPlayer overlay renders video (Fire TV/Android), the
+    // WebView video element is empty — route play/pause to the native bridge.
+    if (document.body.classList.contains("native-exo-active")) {
+      if (isNativePlaybackPaused()) {
+        resumeNativePlayback();
+      } else {
+        pauseNativePlayback();
+      }
+      return;
+    }
+
     const player = document.getElementById("player-main") as HTMLVideoElement | null;
     if (!player) return;
 
@@ -2415,6 +2480,11 @@ export function App() {
   }
 
   function toggleMute() {
+    if (document.body.classList.contains("native-exo-active")) {
+      setNativeMuted(!isNativePlaybackMuted());
+      return;
+    }
+
     const player = document.getElementById("player-main") as HTMLVideoElement | null;
     if (!player) return;
 
@@ -2526,6 +2596,93 @@ export function App() {
     setShowOpeningScreen(false);
   }
 
+  /**
+   * Background preload of the movies/series catalogs from the saved playlist,
+   * so Movies and Series open instantly instead of fetching on first entry.
+   *
+   * - Fire TV/Android (Capacitor): lazy VOD loads are never persisted and the
+   *   in-memory list is live-only, so the scopes are downloaded into the
+   *   persistent IndexedDB VOD scope cache without touching in-memory channels.
+   * - Desktop/webOS/browser: scopes missing from the in-memory catalog are
+   *   merged in and persisted through the normal channel cache.
+   *
+   * Any user-initiated load bumps autoLoadTokenRef and supersedes this prefetch.
+   */
+  function prefetchVodScopesInBackground(options?: {
+    force?: boolean;
+    token?: number;
+    delayMs?: number;
+  }) {
+    if (startupVodPrefetchTimerRef.current !== null) {
+      window.clearTimeout(startupVodPrefetchTimerRef.current);
+      startupVodPrefetchTimerRef.current = null;
+    }
+
+    const delayMs = options?.delayMs ?? 6000;
+
+    startupVodPrefetchTimerRef.current = window.setTimeout(() => {
+      startupVodPrefetchTimerRef.current = null;
+      void (async () => {
+        const debugLog = (window as any).webosDebugLog || console.log.bind(console);
+        // Role-logged-in sessions load their assigned playlists through the
+        // role flow; never let a background prefetch overwrite that content.
+        if (accessLevelRef.current === "adult" || accessLevelRef.current === "child") return;
+
+        // A user-initiated load supersedes this prefetch (token bumped).
+        const requestToken = options?.token ?? autoLoadTokenRef.current;
+        const playlists = loadPlaylists();
+        if (playlists.length === 0) return;
+
+        const preferredPlaylistId =
+          (readStoredItem(SHARED_PLAYLIST_ID_KEY) || readStoredItem(ADULT_PLAYLIST_ID_KEY) || playlists[0]?.id || "").trim();
+        const orderedPlaylists = [
+          ...playlists.filter((playlist) => String(playlist.id) === preferredPlaylistId),
+          ...playlists.filter((playlist) => String(playlist.id) !== preferredPlaylistId)
+        ];
+        if (orderedPlaylists.length === 0) return;
+
+        if (isCapacitorRuntime()) {
+          // Fire TV cannot download and persist the full VOD catalog in the
+          // background (Reload of 180k movies OOM'd the Stick). Movies/Series
+          // load on demand with a capped in-memory list.
+          debugLog("vod-prefetch: skipped on Capacitor (load on Movies/Series entry)");
+          return;
+        }
+
+        // Desktop/webOS/browser: merge missing scopes into the in-memory
+        // catalog and persist the completed channel cache.
+        for (const scope of ["movies", "series"] as const) {
+          if (autoLoadTokenRef.current !== requestToken) return;
+          const expectedType = scope === "movies" ? "movie" : "series";
+          const alreadyLoaded = getAllChannels().some(
+            (channel) => String(channel?.contentType || "").toLowerCase() === expectedType
+          );
+          if (alreadyLoaded && !options?.force) continue;
+
+          for (const playlist of orderedPlaylists) {
+            if (autoLoadTokenRef.current !== requestToken) return;
+            try {
+              const scopedChannels = await loadChannelsForPlaylist(playlist, scope);
+              if (autoLoadTokenRef.current !== requestToken) return;
+              if (!Array.isArray(scopedChannels) || scopedChannels.length === 0) continue;
+
+              const byId = new Map<string, any>();
+              getAllChannels().forEach((channel) => byId.set(String(channel?.id || ""), channel));
+              scopedChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
+              setChannels(Array.from(byId.values()) as any[], "startup-auto-fetch");
+              setChannelUpdateTick((tick) => tick + 1);
+              setCategoryRefreshTick((tick) => tick + 1);
+              debugLog(`vod-prefetch: merged ${scopedChannels.length} ${scope} from "${playlist.name}"`);
+              break;
+            } catch {
+              // Try the next saved playlist.
+            }
+          }
+        }
+      })();
+    }, delayMs);
+  }
+
   function selectContent(content: "tv" | "movies" | "series") {
     if (!canAccessContentByLevel(content)) {
       alert("This profile level cannot open that screen.");
@@ -2548,7 +2705,10 @@ export function App() {
           return;
         }
 
-        const keepPlaylistManagerPage = contentPage === "playlistManager";
+        // Only stay on the manager page when it is actually on screen; a stale
+        // contentPage left over after returning to the main menu must not trap
+        // Movies/Series navigation inside the Playlist Manager.
+        const keepPlaylistManagerPage = isPlaylistManagerPage;
         const roleChannels = getAllChannels();
         const roleModeChannels = roleChannels.filter((channel) => matchesContentMode(channel, content));
 
@@ -2582,7 +2742,8 @@ export function App() {
       return;
     }
 
-    const keepPlaylistManagerPage = contentPage === "playlistManager";
+    // Only stay on the manager page when it is actually on screen (see above).
+    const keepPlaylistManagerPage = isPlaylistManagerPage;
     const latestChannels = getAllChannels();
     const modeChannels = latestChannels.filter((channel) => matchesContentMode(channel, content));
 
@@ -2652,6 +2813,15 @@ export function App() {
             if (requestToken !== autoLoadTokenRef.current) return;
             if (accessLevelRef.current === "adult" || accessLevelRef.current === "child") return;
 
+            if (isCapacitorRuntime()) {
+              // The Capacitor ingest in setChannels trims this full catalog to
+              // a single live group in memory — persist the movies/series
+              // scopes to the IndexedDB VOD cache first so Movies and Series
+              // can restore from cache instead of re-downloading.
+              void saveCapacitorVodScopeCache("movies", String(playlist.id), channels);
+              void saveCapacitorVodScopeCache("series", String(playlist.id), channels);
+            }
+
             setActivePlaylistId(playlist.id);
             writeStoredItem(SHARED_PLAYLIST_ID_KEY, playlist.id);
             setChannels(channels);
@@ -2715,19 +2885,110 @@ export function App() {
 
         const scope = content === "tv" ? "live" : content;
 
+        if (isCapacitorRuntime() && (scope === "movies" || scope === "series")) {
+          setShowOpeningScreen(false);
+          setActivePanel(null);
+          setContentMode(content);
+          if (!keepPlaylistManagerPage) {
+            setContentPage(content === "movies" ? "movies" : "series");
+          }
+          setPlayerStatus(`Loading ${content}…`);
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+          if (requestToken !== autoLoadTokenRef.current) return;
+        }
+
+        // Fire TV/Android: the live catalog persists as per-group IndexedDB
+        // records. When switching back to TV after a VOD scope replaced the
+        // in-memory list, restore a group from IndexedDB instead of
+        // re-downloading the whole catalog from the provider.
+        if (scope === "live" && isCapacitorRuntime()) {
+          const catalogGroups = getCapacitorLiveGroupNames();
+          if (catalogGroups.length > 0) {
+            setPlayerStatus("Restoring live TV channels…");
+            const targetGroup = catalogGroups[0] || "Uncategorized";
+            await loadCapacitorLiveGroupChannels(targetGroup);
+            if (requestToken !== autoLoadTokenRef.current) return;
+
+            const restoredLive = getAllChannels().filter((channel) => matchesContentMode(channel, "tv"));
+            if (restoredLive.length === 0) {
+              // Movies/series in memory used to look like a successful live
+              // restore (no live rows to mismatch). Fall through to a fetch.
+              setPlayerStatus(`Loading live TV from the playlist…`);
+            } else {
+              setPlayerStatus(null);
+              setShowOpeningScreen(false);
+              setActivePanel(null);
+              setContentMode("tv");
+              if (!keepPlaylistManagerPage) {
+                setContentPage("live");
+              }
+              setActiveGroup(targetGroup);
+              setChannelUpdateTick((tick) => tick + 1);
+              setCategoryRefreshTick((tick) => tick + 1);
+              return;
+            }
+          }
+        }
+
+        // Fire TV/Android: serve the VOD scope from the persistent IndexedDB
+        // cache (warmed by the startup prefetch or a previous load) instead of
+        // re-downloading the whole catalog from the provider on every entry.
+        if (isCapacitorRuntime() && (scope === "movies" || scope === "series")) {
+          setPlayerStatus(`Loading ${content} from the cache…`);
+          const cachedScopeChannels = await loadCapacitorVodScopeCache(
+            scope,
+            orderedPlaylists.map((playlist) => String(playlist.id))
+          );
+          if (requestToken !== autoLoadTokenRef.current) return;
+
+          if (cachedScopeChannels.length > 0) {
+            const cachedRecords = capCapacitorCatalogList(
+              cachedScopeChannels.filter((channel) => isChannelRecord(channel))
+            );
+            setChannels(cachedRecords as any[], "capacitor-vod-cache-load");
+            setChannelUpdateTick((tick) => tick + 1);
+            setCategoryRefreshTick((tick) => tick + 1);
+
+            setPlayerStatus(null);
+            setShowOpeningScreen(false);
+            setActivePanel(null);
+            setContentMode(content);
+            if (!keepPlaylistManagerPage) {
+              if (content === "movies") setContentPage("movies");
+              if (content === "series") setContentPage("series");
+            }
+            setActiveGroup(pickDefaultContentGroup(cachedRecords, content));
+            return;
+          }
+        }
+
+        setPlayerStatus(`Loading ${content === "tv" ? "live TV" : content} from the playlist…`);
+
         for (const playlist of orderedPlaylists) {
           try {
             const scopedChannels = await loadChannelsForPlaylist(playlist, scope);
             if (requestToken !== autoLoadTokenRef.current) return;
             if (!Array.isArray(scopedChannels) || scopedChannels.length === 0) continue;
 
-            const byId = new Map<string, any>();
-            latestChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
-            scopedChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
-            let mergedChannels = Array.from(byId.values()).filter((channel) => isChannelRecord(channel));
+            if (isCapacitorRuntime() && (scope === "movies" || scope === "series")) {
+              // Warm a capped VOD cache so the next entry opens from IndexedDB.
+              void saveCapacitorVodScopeCache(scope, String(playlist.id), capCapacitorCatalogList(scopedChannels));
+            }
 
-            if (isCapacitorRuntime() && mergedChannels.length > 15000) {
-              mergedChannels = scopedChannels.filter((channel) => isChannelRecord(channel));
+            let mergedChannels: any[];
+            if (isCapacitorRuntime() && scope !== "live") {
+              // Fire TV/Android: keep only the requested VOD scope in memory.
+              // The live catalog stays persisted per-group in IndexedDB —
+              // merging it here would route setChannels through the live-only
+              // catalog ingest and evict the scope we just loaded.
+              mergedChannels = capCapacitorCatalogList(
+                scopedChannels.filter((channel) => isChannelRecord(channel))
+              );
+            } else {
+              const byId = new Map<string, any>();
+              latestChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
+              scopedChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
+              mergedChannels = Array.from(byId.values()).filter((channel) => isChannelRecord(channel));
             }
 
             setActivePlaylistId(playlist.id);
@@ -2739,6 +3000,7 @@ export function App() {
             const refreshedModeChannels = mergedChannels.filter((channel) => matchesContentMode(channel, content));
             if (refreshedModeChannels.length === 0) continue;
 
+            setPlayerStatus(null);
             setShowOpeningScreen(false);
             setActivePanel(null);
             setContentMode(content);
@@ -2762,6 +3024,7 @@ export function App() {
           }
         }
 
+        setPlayerStatus(null);
         alert(`No ${content} entries found in the loaded playlist.`);
       })();
       return;
@@ -2789,13 +3052,21 @@ export function App() {
   }
 
   function handlePlaylistLoaded(channels: any[]) {
+    // A manual playlist load supersedes any in-flight startup auto-fetch or
+    // background VOD prefetch immediately.
+    autoLoadTokenRef.current += 1;
+
     resetVisibilityForCurrentChannels();
     const preferredMode = pickPreferredContentMode(channels);
-    const keepPlaylistManagerPage = contentPage === "playlistManager";
+    // Only stay on the manager page when it is actually on screen (see above).
+    const keepPlaylistManagerPage = isPlaylistManagerPage;
 
     // PlaylistManager writes channels directly to the shared store; bump the
     // local tick so App recomputes memoized channel/group views immediately.
     setChannelUpdateTick((tick) => tick + 1);
+
+    // Fire TV/Android: never prefetch the full movies/series catalog after
+    // Reload — persisting ~180k VOD rows OOMs the Stick.
     setContentMode(preferredMode);
     if (!keepPlaylistManagerPage) {
       setContentPage(preferredMode === "tv" ? "live" : preferredMode);
@@ -3219,7 +3490,7 @@ export function App() {
               controls={!!currentChannel}
               disablePictureInPicture={true}
               disableRemotePlayback={true}
-              tabIndex={0}
+              tabIndex={isCapacitorRuntime() ? -1 : 0}
               style={{ background: 'transparent', zIndex: 0 }}
             />
 
@@ -3237,7 +3508,7 @@ export function App() {
           controls={!!currentChannel && !forceLivePreviewLayout}
           disablePictureInPicture={contentPage === "live"}
           disableRemotePlayback={contentPage === "live"}
-          tabIndex={0}
+          tabIndex={isCapacitorRuntime() ? -1 : 0}
           style={{ background: 'transparent', zIndex: 0 }}
         />
 
@@ -3259,7 +3530,7 @@ export function App() {
           {allChannels.length > 0 ? "No channels available in this view." : "Add a playlist to load channels."}
         </div>
       )}
-      {currentChannel && playerStatus && <div className="player-status player-status-info">{playerStatus}</div>}
+      {(currentChannel || (isPlaylistManagerPage && !showIdlePlayerStatus)) && playerStatus && <div className="player-status player-status-info">{playerStatus}</div>}
       {currentChannel && !playerStatus && playerWarning && <div className="player-status player-status-info">{playerWarning}</div>}
       {currentChannel && playerError && <div className="player-status player-status-error">{playerError}</div>}
       {isVodPlaybackFullscreen && (
@@ -3470,17 +3741,19 @@ export function App() {
               setChannelFavoriteRecord(channel, !isFavoriteChannelRecord(channel));
               setCategoryRefreshTick((tick) => tick + 1);
             }}
-            showVisibilityControls={isPlaylistManagerPage && contentMode === "tv"}
+            showVisibilityControls={isPlaylistManagerPage}
             showFavoriteControls={isContentIconsView}
             showAsIcons={isContentIconsView}
             batchSize={
               isCapacitorRuntime() && isLiveContentPage
                 ? 40
-                : isMainSeriesScreen && isContentIconsView
-                  ? 16
-                  : isMainMoviesScreen && isContentIconsView
-                    ? 32
-                    : undefined
+                : isCapacitorRuntime() && isContentIconsView
+                  ? 12
+                  : isMainSeriesScreen && isContentIconsView
+                    ? 16
+                    : isMainMoviesScreen && isContentIconsView
+                      ? 32
+                      : undefined
             }
             suppressLogos={false}
             autoLoadOnScroll={

@@ -53,7 +53,8 @@ const CAPACITOR_TRANSIENT_SOURCES = new Set<string>([
   "capacitor-playback-trim",
   "capacitor-live-ingest",
   "capacitor-group-load",
-  "capacitor-favorites-load"
+  "capacitor-favorites-load",
+  "capacitor-vod-cache-load"
 ]);
 let capacitorLiveGroupNames: string[] = [];
 let capacitorLiveGroupCounts: Record<string, number> = {};
@@ -1241,12 +1242,27 @@ export async function ingestCapacitorLiveChannelCatalogAsync(
   };
 }
 
+let capacitorLiveIngestInFlight = false;
+
 export function ingestCapacitorLiveChannelCatalog(
   list: Channel[],
   preferredGroup?: string
 ): { groupName: string; channelCount: number; totalLive: number } {
   if (isCapacitorRuntime() && list.length > CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD) {
-    void ingestCapacitorLiveChannelCatalogAsync(list, preferredGroup);
+    if (capacitorLiveIngestInFlight) {
+      const debugLog = (window as any).webosDebugLog || console.log.bind(console);
+      debugLog("capacitor-ingest: skipped duplicate while a catalog ingest is already running");
+      const preferred = preferredGroup ? normalizeGroupName(preferredGroup) : "";
+      return {
+        groupName: preferred || "Uncategorized",
+        channelCount: channels.length,
+        totalLive: list.filter(isLiveChannel).length
+      };
+    }
+    capacitorLiveIngestInFlight = true;
+    void ingestCapacitorLiveChannelCatalogAsync(list, preferredGroup).finally(() => {
+      capacitorLiveIngestInFlight = false;
+    });
     const preferred = preferredGroup ? normalizeGroupName(preferredGroup) : "";
     return {
       groupName: preferred || "Uncategorized",
@@ -1310,12 +1326,11 @@ export async function loadCapacitorLiveGroupChannels(groupName: string): Promise
   if (!isCapacitorRuntime()) return channels;
 
   const normalized = normalizeGroupName(groupName);
+  const liveInMemory = channels.filter(isLiveChannel);
   const alreadyLoaded =
-    channels.length > 0 &&
-    channels.length <= CAPACITOR_MAX_GROUP_CHANNELS + 16 &&
-    channels.every(
-      (channel) => !isLiveChannel(channel) || normalizeGroupName(channel.group) === normalized
-    );
+    liveInMemory.length > 0 &&
+    liveInMemory.length <= CAPACITOR_MAX_GROUP_CHANNELS + 16 &&
+    liveInMemory.every((channel) => normalizeGroupName(channel.group) === normalized);
   if (alreadyLoaded) {
     return channels;
   }
@@ -1331,6 +1346,207 @@ export async function loadCapacitorLiveGroupChannels(groupName: string): Promise
   }
 
   return loaded.length > 0 ? loaded : channels;
+}
+
+// ---------------------------------------------------------------------------
+// Capacitor VOD scope cache (movies/series)
+//
+// Fire TV/Android keeps only one live group in memory and never persists the
+// lazy VOD loads (see setChannels), so every cold start used to require a full
+// provider re-download on first entry into Movies/Series. This cache stores
+// each VOD scope as chunked IndexedDB records keyed by playlist id, letting a
+// background startup prefetch warm Movies/Series without touching the
+// live-only in-memory catalog.
+// ---------------------------------------------------------------------------
+export type CapacitorVodCacheScope = "movies" | "series";
+
+/** VOD catalogs change often; re-warm scopes older than this at startup. */
+export const CAPACITOR_VOD_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+const CAPACITOR_VOD_CACHE_META_KEY = "iptvmate_capacitor_vod_cache_meta";
+const CAPACITOR_VOD_RECORD_PREFIX = "capacitor-vod";
+const CAPACITOR_VOD_PERSIST_BATCH_SIZE = 4000;
+
+type CapacitorVodScopeMeta = {
+  playlistId: string;
+  count: number;
+  chunks: number;
+  updatedAt: number;
+};
+
+type CapacitorVodCacheMeta = Partial<Record<CapacitorVodCacheScope, CapacitorVodScopeMeta>>;
+
+function idbVodScopeRecordKey(scope: CapacitorVodCacheScope, chunkIndex: number): string {
+  return `${CAPACITOR_VOD_RECORD_PREFIX}-${scope}-chunk-${chunkIndex}`;
+}
+
+function loadCapacitorVodCacheMeta(): CapacitorVodCacheMeta {
+  try {
+    const raw = localStorage.getItem(CAPACITOR_VOD_CACHE_META_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as CapacitorVodCacheMeta;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCapacitorVodCacheMeta(meta: CapacitorVodCacheMeta): void {
+  try {
+    localStorage.setItem(CAPACITOR_VOD_CACHE_META_KEY, JSON.stringify(meta));
+  } catch {
+    // Ignore persistence errors.
+  }
+}
+
+function normalizeVodScopePlaylistIds(acceptablePlaylistIds: string[]): Set<string> {
+  return new Set(
+    (Array.isArray(acceptablePlaylistIds) ? acceptablePlaylistIds : [])
+      .map((id) => String(id || "").trim())
+      .filter((id) => id.length > 0)
+  );
+}
+
+function getCapacitorVodScopeMetaIfUsable(
+  scope: CapacitorVodCacheScope,
+  acceptablePlaylistIds: Set<string>
+): CapacitorVodScopeMeta | null {
+  const meta = loadCapacitorVodCacheMeta()[scope];
+  if (!meta) return null;
+  const playlistId = String(meta.playlistId || "").trim();
+  if (!playlistId || (acceptablePlaylistIds.size > 0 && !acceptablePlaylistIds.has(playlistId))) {
+    return null;
+  }
+  if (!Number.isFinite(meta.count) || meta.count <= 0 || !Number.isFinite(meta.chunks) || meta.chunks <= 0) {
+    return null;
+  }
+  // A pre-cap Fire TV cache can be 40+ chunks / 100k+ titles. Reading it ANRs.
+  if (meta.count > CAPACITOR_MAX_GROUP_CHANNELS || meta.chunks > 2) {
+    return null;
+  }
+  return { ...meta, playlistId };
+}
+
+/** Fire TV cannot hold a 100k+ VOD catalog in RAM or IndexedDB. */
+export function capCapacitorCatalogList<T>(list: T[]): T[] {
+  if (!Array.isArray(list)) return [];
+  if (!isCapacitorRuntime() || list.length <= CAPACITOR_MAX_GROUP_CHANNELS) return list;
+  return list.slice(0, CAPACITOR_MAX_GROUP_CHANNELS);
+}
+
+/** True when a usable, non-stale VOD scope cache exists for one of the playlists. */
+export function isCapacitorVodScopeCacheFresh(
+  scope: CapacitorVodCacheScope,
+  acceptablePlaylistIds: string[],
+  maxAgeMs: number = CAPACITOR_VOD_CACHE_MAX_AGE_MS
+): boolean {
+  if (!isCapacitorRuntime()) return false;
+  const meta = getCapacitorVodScopeMetaIfUsable(scope, normalizeVodScopePlaylistIds(acceptablePlaylistIds));
+  if (!meta) return false;
+  return Date.now() - Number(meta.updatedAt || 0) < maxAgeMs;
+}
+
+// Single-flight per scope: a second save request while one is still writing
+// reuses the in-flight write — the catalogs come from the same playlist.
+const capacitorVodScopeSaveInFlight: Partial<Record<CapacitorVodCacheScope, Promise<void>>> = {};
+
+export async function saveCapacitorVodScopeCache(
+  scope: CapacitorVodCacheScope,
+  playlistId: string,
+  list: Channel[]
+): Promise<void> {
+  if (!isCapacitorRuntime()) return;
+  const normalizedPlaylistId = String(playlistId || "").trim();
+  if (!normalizedPlaylistId || !Array.isArray(list) || list.length === 0) return;
+  if (capacitorVodScopeSaveInFlight[scope]) return capacitorVodScopeSaveInFlight[scope];
+
+  capacitorVodScopeSaveInFlight[scope] = (async () => {
+    const debugLog = (window as any).webosDebugLog || console.log.bind(console);
+    const expectedType = scope === "movies" ? "movie" : "series";
+    const scopedChannels = capCapacitorCatalogList(
+      list.filter((channel) => String(channel?.contentType || "").trim().toLowerCase() === expectedType)
+    );
+    if (scopedChannels.length === 0) return;
+
+    const db = await openChannelsCacheDb();
+    if (!db) return;
+
+    try {
+      const chunkCount = Math.ceil(scopedChannels.length / CAPACITOR_VOD_PERSIST_BATCH_SIZE);
+      for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+        const chunk = scopedChannels.slice(
+          chunkIndex * CAPACITOR_VOD_PERSIST_BATCH_SIZE,
+          (chunkIndex + 1) * CAPACITOR_VOD_PERSIST_BATCH_SIZE
+        );
+        await writeCachedChannelsToIndexedDb(db, idbVodScopeRecordKey(scope, chunkIndex), chunk, { quiet: true });
+        // Yield the main thread between chunks — large VOD catalogs otherwise ANR Fire TV.
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      }
+
+      // Drop stale chunk records left over from a previously larger catalog.
+      const previousMeta = loadCapacitorVodCacheMeta()[scope];
+      const previousChunks = Number(previousMeta?.chunks || 0);
+      for (let chunkIndex = chunkCount; chunkIndex < previousChunks; chunkIndex += 1) {
+        await deleteCachedChannelsFromIndexedDb(db, idbVodScopeRecordKey(scope, chunkIndex));
+      }
+
+      // Write meta last: a crash mid-write leaves the previous meta pointing at
+      // still-valid previous chunk records instead of a partial new catalog.
+      const meta = loadCapacitorVodCacheMeta();
+      meta[scope] = {
+        playlistId: normalizedPlaylistId,
+        count: scopedChannels.length,
+        chunks: chunkCount,
+        updatedAt: Date.now()
+      };
+      saveCapacitorVodCacheMeta(meta);
+      debugLog(`vod-cache: persisted ${scopedChannels.length} ${scope} in ${chunkCount} chunks`);
+    } finally {
+      db.close();
+    }
+  })().finally(() => {
+    capacitorVodScopeSaveInFlight[scope] = undefined;
+  });
+
+  return capacitorVodScopeSaveInFlight[scope];
+}
+
+/**
+ * Loads a persisted VOD scope (movies or series) without touching the in-memory
+ * channel list — the caller decides whether to apply it. Returns [] when no
+ * usable cache exists for any of the acceptable playlist ids.
+ */
+export async function loadCapacitorVodScopeCache(
+  scope: CapacitorVodCacheScope,
+  acceptablePlaylistIds: string[]
+): Promise<Channel[]> {
+  if (!isCapacitorRuntime()) return [];
+  const meta = getCapacitorVodScopeMetaIfUsable(scope, normalizeVodScopePlaylistIds(acceptablePlaylistIds));
+  if (!meta) return [];
+
+  const db = await openChannelsCacheDb();
+  if (!db) return [];
+
+  try {
+    const result: Channel[] = [];
+    for (let chunkIndex = 0; chunkIndex < meta.chunks; chunkIndex += 1) {
+      if (result.length >= CAPACITOR_MAX_GROUP_CHANNELS) break;
+      const chunk = await readCachedChannelsFromIndexedDb(db, idbVodScopeRecordKey(scope, chunkIndex));
+      if (chunk.length === 0) {
+        // A missing chunk means the cache is corrupt/partial — treat as no cache.
+        return [];
+      }
+      for (const channel of chunk) {
+        result.push(channel);
+        if (result.length >= CAPACITOR_MAX_GROUP_CHANNELS) break;
+      }
+      // Keep the UI responsive while deserializing large catalogs on Fire TV.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    }
+    return result;
+  } finally {
+    db.close();
+  }
 }
 
 /**
@@ -1602,9 +1818,16 @@ export function setChannels(list: Channel[], source: string = "unknown") {
   // Preserve the last generic cache when role-clear intentionally empties runtime
   // channels (e.g., missing assigned role playlist). This avoids startup falling
   // back to an empty cached channel set.
+  // On Capacitor, lazy VOD scope loads (movies/series) hold only a partial view
+  // of the catalog — the live catalog already persists as per-group IndexedDB
+  // records — so they must never overwrite the monolithic channel cache.
   const shouldPersistCache =
     !(source === "role-clear" && channels.length === 0) &&
-    !CAPACITOR_TRANSIENT_SOURCES.has(source);
+    !CAPACITOR_TRANSIENT_SOURCES.has(source) &&
+    !(
+      isCapacitorRuntime() &&
+      (source === "lazy-movies-load" || source === "lazy-series-load")
+    );
   if (shouldPersistCache) {
     saveCachedChannels(channels);
     void saveCachedChannelsIndexedDb(channels);

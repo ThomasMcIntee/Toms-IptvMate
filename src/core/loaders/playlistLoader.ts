@@ -1,4 +1,5 @@
 import { PlaylistEntry } from "../playlistStore";
+import { capCapacitorCatalogList } from "../channelStore";
 import { loadM3U } from "./m3uLoader";
 import { loadXtream } from "./xtreamLoader";
 import { loadStalker } from "./stalkerLoader";
@@ -9,7 +10,8 @@ function filterChannelsForScope(channels: any[], scope: PlaylistLoadScope) {
   if (scope === "all") return channels;
 
   const expectedType = scope === "live" ? "live" : scope === "movies" ? "movie" : "series";
-  return channels.filter((channel) => String(channel?.contentType || "").toLowerCase() === expectedType);
+  const scoped = channels.filter((channel) => String(channel?.contentType || "").toLowerCase() === expectedType);
+  return scope === "movies" || scope === "series" ? capCapacitorCatalogList(scoped) : scoped;
 }
 
 export async function loadChannelsForPlaylist(playlist: PlaylistEntry, scope: PlaylistLoadScope = "all") {
@@ -18,7 +20,8 @@ export async function loadChannelsForPlaylist(playlist: PlaylistEntry, scope: Pl
   }
 
   if (playlist.type === "xtream") {
-    return loadXtream(playlist.data.url, playlist.data.user, playlist.data.pass, scope);
+    const xtreamChannels = await loadXtream(playlist.data.url, playlist.data.user, playlist.data.pass, scope);
+    return scope === "movies" || scope === "series" ? capCapacitorCatalogList(xtreamChannels) : xtreamChannels;
   }
 
   return filterChannelsForScope(await loadStalker(playlist.data.portal, playlist.data.mac), scope);

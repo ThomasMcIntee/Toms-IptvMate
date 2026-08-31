@@ -35,6 +35,7 @@ public class NativeExoPlayerController {
         void onReady();
         void onError(String message);
         void onStopped();
+        void onEnded();
     }
 
     private static final String TAG = "IPTVMate_NativeExo";
@@ -53,6 +54,8 @@ public class NativeExoPlayerController {
     private String originalStreamUrl;
     private String activeStreamUrl;
     private boolean triedTsFallback = false;
+    private boolean isLiveContent = true;
+    private boolean muted = false;
 
     private final AudioManager.OnAudioFocusChangeListener audioFocusListener = focusChange ->
         Log.i(TAG, "audioFocusChange=" + focusChange + " (ignored — no duck/pause on Fire TV)");
@@ -66,42 +69,105 @@ public class NativeExoPlayerController {
     }
 
     public void attachPlayerView(@Nullable PlayerView view) {
-        playerView = view;
-        if (exoPlayer != null && playerView != null) {
-            playerView.setPlayer(exoPlayer);
-        }
+        runOnMain(() -> {
+            playerView = view;
+            if (exoPlayer != null && playerView != null) {
+                playerView.setPlayer(exoPlayer);
+            }
+        });
     }
 
     public void play(String url) {
+        // Legacy entry point — treated as live (matches original behavior).
+        play(url, true);
+    }
+
+    public void play(String url, boolean isLive) {
         if (url == null || url.trim().isEmpty()) return;
 
-        originalStreamUrl = url.trim();
-        activeStreamUrl = preferHlsUrl(originalStreamUrl);
-        triedTsFallback = false;
-        Log.i(TAG, "play original=" + originalStreamUrl + " active=" + activeStreamUrl);
-        preparePlayer();
+        final String trimmed = url.trim();
+        // Capacitor plugin methods run on the CapacitorPlugins thread. ExoPlayer is
+        // bound to the main looper, so every player call must hop to main first.
+        runOnMain(() -> {
+            isLiveContent = isLive;
+            muted = false;
+            originalStreamUrl = trimmed;
+            // Only live streams get the .ts -> .m3u8 HLS preference. Rewriting a VOD
+            // .ts movie/episode to .m3u8 targets a playlist that usually doesn't exist
+            // and breaks progressive playback.
+            activeStreamUrl = isLive ? preferHlsUrl(originalStreamUrl) : originalStreamUrl;
+            triedTsFallback = false;
+            Log.i(TAG, "play original=" + originalStreamUrl + " active=" + activeStreamUrl + " isLive=" + isLive);
+            preparePlayer();
+        });
+    }
+
+    public void pause() {
+        runOnMain(() -> {
+            if (exoPlayer != null) {
+                exoPlayer.pause();
+            }
+        });
+    }
+
+    public void resume() {
+        runOnMain(() -> {
+            if (exoPlayer != null) {
+                exoPlayer.play();
+            }
+        });
+    }
+
+    public void setMuted(boolean muted) {
+        runOnMain(() -> {
+            this.muted = muted;
+            if (exoPlayer != null) {
+                exoPlayer.setVolume(muted ? 0f : 1f);
+            }
+        });
     }
 
     public void stop() {
-        Log.i(TAG, "stopPlayback");
-        abandonAudioFocus();
-        if (exoPlayer != null) {
-            exoPlayer.stop();
-            exoPlayer.clearMediaItems();
-        }
-        if (playerView != null) {
-            playerView.setPlayer(null);
-        }
-        callback.onStopped();
+        runOnMain(() -> {
+            Log.i(TAG, "stopPlayback");
+            abandonAudioFocus();
+            if (playerView != null) {
+                playerView.setPlayer(null);
+            }
+            if (exoPlayer != null) {
+                exoPlayer.stop();
+                exoPlayer.clearMediaItems();
+                exoPlayer.release();
+                exoPlayer = null;
+            }
+            callback.onStopped();
+        });
     }
 
     public void release() {
-        stop();
-        if (exoPlayer != null) {
-            exoPlayer.release();
-            exoPlayer = null;
+        runOnMain(() -> {
+            Log.i(TAG, "stopPlayback");
+            abandonAudioFocus();
+            if (exoPlayer != null) {
+                exoPlayer.stop();
+                exoPlayer.clearMediaItems();
+                exoPlayer.release();
+                exoPlayer = null;
+            }
+            if (playerView != null) {
+                playerView.setPlayer(null);
+            }
+            playerView = null;
+            callback.onStopped();
+        });
+    }
+
+    private void runOnMain(Runnable action) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action.run();
+        } else {
+            mainHandler.post(action);
         }
-        playerView = null;
     }
 
     private void preparePlayer() {
@@ -126,8 +192,8 @@ public class NativeExoPlayerController {
             acquireAudioFocus();
             exoPlayer.stop();
             exoPlayer.clearMediaItems();
-            exoPlayer.setVolume(1f);
-            setMediaOnPlayer(exoPlayer, activeStreamUrl);
+            exoPlayer.setVolume(muted ? 0f : 1f);
+            setMediaOnPlayer(exoPlayer, activeStreamUrl, isLiveContent);
             exoPlayer.prepare();
             exoPlayer.setPlayWhenReady(true);
             logAudioDiagnostics("prepare");
@@ -166,34 +232,43 @@ public class NativeExoPlayerController {
             .setLoadControl(loadControl)
             .build();
 
-        androidx.media3.common.AudioAttributes attrs =
-            new androidx.media3.common.AudioAttributes.Builder()
-                .setUsage(C.USAGE_MEDIA)
-                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                .build();
-        player.setAudioAttributes(attrs, false);
-        player.setHandleAudioBecomingNoisy(false);
-        player.setWakeMode(C.WAKE_MODE_NETWORK);
-        player.setVolume(1f);
+        try {
+            androidx.media3.common.AudioAttributes attrs =
+                new androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build();
+            player.setAudioAttributes(attrs, false);
+            player.setHandleAudioBecomingNoisy(false);
+            player.setWakeMode(C.WAKE_MODE_NETWORK);
+            player.setVolume(1f);
+        } catch (RuntimeException e) {
+            player.release();
+            throw e;
+        }
 
         player.addListener(new Player.Listener() {
             @Override
             public void onPlaybackStateChanged(int playbackState) {
                 if (playbackState == Player.STATE_READY) {
                     ensureSystemAudible();
-                    player.setVolume(1f);
+                    player.setVolume(muted ? 0f : 1f);
                     player.setPlayWhenReady(true);
                     logAudioDiagnostics("ready");
                     Log.i(TAG, "Playback ready volume=" + player.getVolume()
                         + " playing=" + player.isPlaying());
                     callback.onReady();
+                } else if (playbackState == Player.STATE_ENDED) {
+                    Log.i(TAG, "Playback ended");
+                    callback.onEnded();
                 }
             }
 
             @Override
             public void onPlayerError(PlaybackException error) {
                 Log.e(TAG, "Playback error url=" + activeStreamUrl, error);
-                if (!triedTsFallback
+                if (isLiveContent
+                    && !triedTsFallback
                     && originalStreamUrl != null
                     && isProgressiveTsUrl(originalStreamUrl)
                     && !originalStreamUrl.equals(activeStreamUrl)) {
@@ -283,29 +358,31 @@ public class NativeExoPlayerController {
             + " playWhenReady=" + (exoPlayer != null ? exoPlayer.getPlayWhenReady() : false));
     }
 
-    private void setMediaOnPlayer(ExoPlayer player, String url) {
+    private void setMediaOnPlayer(ExoPlayer player, String url, boolean isLive) {
         if (isHlsUrl(url)) {
             MediaSource source = new HlsMediaSource.Factory(dataSourceFactory)
                 .setAllowChunklessPreparation(true)
-                .createMediaSource(buildMediaItem(url));
+                .createMediaSource(buildMediaItem(url, isLive));
             player.setMediaSource(source);
             return;
         }
-        player.setMediaItem(buildMediaItem(url));
+        player.setMediaItem(buildMediaItem(url, isLive));
     }
 
-    private MediaItem buildMediaItem(String url) {
+    private MediaItem buildMediaItem(String url, boolean isLive) {
         MediaItem.Builder builder = new MediaItem.Builder().setUri(url);
         String lower = url.toLowerCase();
         if (lower.contains(".m3u8")) {
             builder.setMimeType(MimeTypes.APPLICATION_M3U8);
-            builder.setLiveConfiguration(
-                new MediaItem.LiveConfiguration.Builder()
-                    .setTargetOffsetMs(3000)
-                    .setMinOffsetMs(1500)
-                    .setMaxOffsetMs(8000)
-                    .build()
-            );
+            if (isLive) {
+                builder.setLiveConfiguration(
+                    new MediaItem.LiveConfiguration.Builder()
+                        .setTargetOffsetMs(3000)
+                        .setMinOffsetMs(1500)
+                        .setMaxOffsetMs(8000)
+                        .build()
+                );
+            }
         } else if (lower.contains(".ts")) {
             builder.setMimeType(MimeTypes.VIDEO_MP2T);
         }

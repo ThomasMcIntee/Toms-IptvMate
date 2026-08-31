@@ -17,7 +17,14 @@ export function isWebOsRuntime(): boolean {
 }
 
 export function isCapacitorRuntime(): boolean {
-  const isCap = !!(window as any).Capacitor ||
+  // Importing @capacitor/core always defines the window.Capacitor JS global —
+  // even in plain browser/Electron/webOS bundles — so the bare global cannot
+  // be trusted. Only a native-platform report means the app is really running
+  // inside a Capacitor app shell (Fire TV/Android/iOS).
+  const cap = (window as any).Capacitor;
+  const isNativeCapacitor =
+    !!cap && typeof cap.isNativePlatform === "function" && cap.isNativePlatform() === true;
+  const isCap = isNativeCapacitor ||
                navigator.userAgent.includes("Capacitor") ||
                // Capacitor on Android typically runs on http://localhost (no port) or http://app
                // Desktop dev servers run on http://localhost:PORT (with port)
