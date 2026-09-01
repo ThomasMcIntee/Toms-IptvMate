@@ -3227,7 +3227,7 @@ export function App() {
         onOpenPanel={openPanelFromMenu}
       />
 
-      {!shouldShowOpeningMenu && !isVodPlaybackFullscreen && (!isLiveChannelPlaying || showLiveMenu) && (
+      {!shouldShowOpeningMenu && (!isVodPlaybackFullscreen || isPlaylistManagerPage) && (!isLiveChannelPlaying || showLiveMenu) && (
         <>
           {isMainSeriesScreen && (
             <div className="series-main-search-bar">
