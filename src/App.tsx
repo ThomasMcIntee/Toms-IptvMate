@@ -40,8 +40,9 @@ import { loadXtreamEPGForStream } from "./core/loaders/xtreamEPG";
 import SeriesEpisodePicker from "./ui/SeriesEpisodePicker";
 
 const ROOT_GROUP = "Favorites";
-const MAIN_CONTENT_ALL = "All Content";
+const MAIN_CONTENT_ALL = "All Languages";
 const MAIN_CONTENT_ALL_KEY = "__all__";
+const MAIN_CONTENT_OTHER_KEY = "__other__";
 const MAX_SERIES_SEARCH_RESULTS = 120;
 const MAX_SERIES_SEARCH_SCAN = 40000;
 const SERIES_SEARCH_MIN_TERM_LENGTH = 3;
@@ -119,6 +120,14 @@ function normalizeChannelGroupName(group?: string): string {
   return (group && String(group).trim()) || "Uncategorized";
 }
 
+function normalizeLanguageKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function formatLanguageLabel(value: string): string {
+  return value.trim().replace(/\s+/g, " ") || "Other";
+}
+
 function extractMainContentGroup(group: string): { key: string; label: string } {
   const normalized = normalizeChannelGroupName(group);
   if (normalized === ROOT_GROUP) {
@@ -127,35 +136,29 @@ function extractMainContentGroup(group: string): { key: string; label: string } 
 
   const typedPipeMatch = normalized.match(/^(TV|Movies|Series)\s*:\s*([^|]+)\|/i);
   if (typedPipeMatch) {
-    const contentLabel =
-      typedPipeMatch[1].toLowerCase() === "tv"
-        ? "TV"
-        : typedPipeMatch[1].toLowerCase() === "movies"
-          ? "Movies"
-          : "Series";
-    const segment = typedPipeMatch[2].trim().replace(/\s+/g, " ");
+    const segment = typedPipeMatch[2].trim();
     if (segment) {
       return {
-        key: `${contentLabel.toLowerCase()}:${segment.toLowerCase()}`,
-        label: `${contentLabel}: ${segment}|`
+        key: normalizeLanguageKey(segment),
+        label: formatLanguageLabel(segment)
       };
     }
   }
 
-  const pipeIndex = normalized.indexOf("|");
-  if (pipeIndex >= 0) {
-    const prefix = normalized.slice(0, pipeIndex).trim().replace(/\s+/g, " ");
-    if (prefix) {
+  const pipeMatch = normalized.match(/^([^|]+)\|/);
+  if (pipeMatch) {
+    const segment = pipeMatch[1].trim();
+    if (segment) {
       return {
-        key: prefix.toLowerCase(),
-        label: `${prefix}|`
+        key: normalizeLanguageKey(segment),
+        label: formatLanguageLabel(segment)
       };
     }
   }
 
   return {
-    key: normalized.toLowerCase(),
-    label: normalized
+    key: MAIN_CONTENT_OTHER_KEY,
+    label: "Other"
   };
 }
 
@@ -3342,7 +3345,7 @@ export function App() {
           {showPlaylistManagerMainContentColumn && (
             <div className="group-list group-list-main-content">
               <div className="list-header group-list-toolbar">
-                <span>Main Content</span>
+                <span>Language</span>
               </div>
               {mainContentGroups.map((group) => (
                 <div
