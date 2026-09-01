@@ -451,6 +451,7 @@ export function App() {
 
     return counts;
   }, [contentChannels, favoritesRefreshTick]);
+
   const mainContentGroups = useMemo(() => {
     const options = [{ key: MAIN_CONTENT_ALL_KEY, label: MAIN_CONTENT_ALL }];
     const seen = new Set<string>([MAIN_CONTENT_ALL_KEY]);
@@ -465,6 +466,7 @@ export function App() {
 
     return options;
   }, [groups]);
+
   const mainContentGroupCounts = useMemo(() => {
     const counts: Record<string, number> = { [MAIN_CONTENT_ALL_KEY]: 0 };
 
@@ -479,6 +481,7 @@ export function App() {
 
     return counts;
   }, [contentChannels]);
+
   const showPlaylistManagerMainContentColumn = isPlaylistManagerPage && contentMode === "tv" && mainContentGroups.length > 1;
   const channelsForScope = useMemo(() => {
     return isLiveContentPage ? visibleChannels : contentChannels;
@@ -2013,17 +2016,9 @@ export function App() {
       const channelIndex = findRowIndex(channelRows);
       const onLoadMore = !!active && active === loadMoreBtn;
 
-      const currentMainContentStop = () => {
-        const escapedKey = activeMainContentGroupKey.replace(/"/g, '\\"');
-        return (
-          rowStop(
-            document.querySelector<HTMLElement>(
-              `.group-list-main-content .group-item[data-main-content-key="${escapedKey}"]`
-            )
-          ) ||
-          rowStop(mainContentRows[0] || null)
-        );
-      };
+      const currentMainContentStop = () =>
+        rowStop(mainContentRows.find((row) => row.dataset.mainContentKey === activeMainContentGroupKey) || null) ||
+        rowStop(mainContentRows[0] || null);
       const currentGroupStop = () =>
         rowStop(document.querySelector<HTMLElement>(
           showPlaylistManagerMainContentColumn
@@ -3432,7 +3427,7 @@ export function App() {
             suppressLogos={false}
             autoLoadOnScroll={(isMainSeriesScreen || isMainMoviesScreen) && isContentIconsView}
             listClassName={
-              showPlaylistManagerMainContentColumn && !isContentIconsView
+              showPlaylistManagerMainContentColumn && !isContentIconsView && !isMainSeriesScreen && !isMainMoviesScreen
                 ? "channel-list-with-main-content"
                 : isMainSeriesScreen && isContentIconsView
                   ? "channel-list-series-grid"
