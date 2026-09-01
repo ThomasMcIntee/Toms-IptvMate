@@ -15,6 +15,11 @@ public class NativePlayerPlugin extends Plugin {
         return ((MainActivity) getActivity()).getOrCreateExoPlayerManager();
     }
 
+    private ExoPlayerManager existingManager() {
+        MainActivity activity = (MainActivity) getActivity();
+        return activity != null ? activity.peekExoPlayerManager() : null;
+    }
+
     @PluginMethod
     public void isAvailable(PluginCall call) {
         JSObject ret = new JSObject();
@@ -24,7 +29,11 @@ public class NativePlayerPlugin extends Plugin {
 
     @PluginMethod
     public void warmUp(PluginCall call) {
-        manager().warmUp();
+        // Do not instantiate Media3 on the opening menu — that ANRs Fire TV.
+        ExoPlayerManager existing = existingManager();
+        if (existing != null) {
+            existing.warmUp();
+        }
         call.resolve();
     }
 
@@ -46,31 +55,48 @@ public class NativePlayerPlugin extends Plugin {
 
     @PluginMethod
     public void pause(PluginCall call) {
-        manager().pause();
+        ExoPlayerManager existing = existingManager();
+        if (existing != null) {
+            existing.pause();
+        }
         call.resolve();
     }
 
     @PluginMethod
     public void resume(PluginCall call) {
-        manager().resume();
+        ExoPlayerManager existing = existingManager();
+        if (existing != null) {
+            existing.resume();
+        }
         call.resolve();
     }
 
     @PluginMethod
     public void setMuted(PluginCall call) {
-        manager().setMuted(Boolean.TRUE.equals(call.getBoolean("muted", false)));
+        ExoPlayerManager existing = existingManager();
+        if (existing != null) {
+            existing.setMuted(Boolean.TRUE.equals(call.getBoolean("muted", false)));
+        }
         call.resolve();
     }
 
     @PluginMethod
     public void stop(PluginCall call) {
-        manager().stop();
+        ExoPlayerManager existing = existingManager();
+        if (existing != null) {
+            existing.stop();
+        }
         call.resolve();
     }
 
     @PluginMethod
     public void setBounds(PluginCall call) {
-        manager().setBounds(
+        ExoPlayerManager existing = existingManager();
+        if (existing == null) {
+            call.resolve();
+            return;
+        }
+        existing.setBounds(
             call.getInt("left", 0),
             call.getInt("top", 0),
             call.getInt("width", 0),

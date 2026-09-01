@@ -16,6 +16,13 @@ export type Channel = {
   };
 };
 
+export type CatalogCategoryEntry = {
+  group: string;
+  contentType: ContentType;
+  categoryId: string;
+  count?: number;
+};
+
 import { isCapacitorRuntime } from "./player/platformDetection";
 import { isWebOsDbAvailable, webosDbGetLarge, webosDbSetLarge } from "./webosStorage";
 
@@ -54,7 +61,8 @@ const CAPACITOR_TRANSIENT_SOURCES = new Set<string>([
   "capacitor-live-ingest",
   "capacitor-group-load",
   "capacitor-favorites-load",
-  "capacitor-vod-cache-load"
+  "capacitor-vod-cache-load",
+  "capacitor-vod-group-load"
 ]);
 let capacitorLiveGroupNames: string[] = [];
 let capacitorLiveGroupCounts: Record<string, number> = {};
@@ -118,7 +126,10 @@ const ROLE_LOCK_ALLOWED_SOURCES = new Set<string>([
   "role-restore",
   "role-clear",
   "playlist-manager-role-load",
-  "playlist-manager-generic-load"
+  "playlist-manager-generic-load",
+  "capacitor-group-load",
+  "capacitor-vod-group-load",
+  "capacitor-favorites-load"
 ]);
 
 let lastChannelWriteTrace: ChannelWriteTrace = {
@@ -802,6 +813,16 @@ function loadVisibilityState(): VisibilityState {
       return { groups: {}, channels: {} };
     }
 
+    // A 57k-key visibility JSON stalls Fire TV during App chunk eval.
+    if (isCapacitorRuntime() && raw.length > 80_000) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        // Ignore quota/storage errors.
+      }
+      return { groups: {}, channels: {} };
+    }
+
     const parsed = JSON.parse(raw) as Partial<VisibilityState>;
     return {
       groups: parsed.groups ?? {},
@@ -843,8 +864,9 @@ function saveVisibilityState() {
  *  This is the ONLY function that writes to ADULT_SAVED_KEY / CHILD_SAVED_KEY. */
 export function saveRoleVisibility(role: "adult" | "child") {
   const key = role === "child" ? CHILD_SAVED_KEY : ADULT_SAVED_KEY;
+  const snapshot = isCapacitorRuntime() ? getCompactVisibilitySnapshot() : getVisibilitySnapshot();
   try {
-    localStorage.setItem(key, JSON.stringify(visibilityState));
+    localStorage.setItem(key, JSON.stringify(snapshot));
   } catch {
     // Large visibility maps can exceed localStorage quota.
   }
@@ -855,7 +877,7 @@ export function saveRoleVisibility(role: "adult" | "child") {
     if (!db) return;
     try {
       const tx = db.transaction(VISIBILITY_STORE, "readwrite");
-      tx.objectStore(VISIBILITY_STORE).put(visibilityState, key);
+      tx.objectStore(VISIBILITY_STORE).put(snapshot, key);
     } catch {
       // Ignore
     }
@@ -878,13 +900,19 @@ export function setActiveVisibilityRole(role: "adult" | "child") {
       const parsed = JSON.parse(raw) as Partial<VisibilityState>;
       nextState = {
         groups: parsed.groups ?? {},
-        channels: parsed.channels ?? {}
+        channels: parsed.channels ?? {},
+        allGroupsHidden: parsed.allGroupsHidden === true
       };
       visibilityState = nextState;
       dispatchVisibilityChanged();
     }
   } catch {
     // Fall through to IDB
+  }
+
+  // Fire TV: skip IDB refine — old role caches stored 57k channel keys and ANR on parse.
+  if (isCapacitorRuntime()) {
+    return;
   }
 
   // Always attempt to refine from IndexedDB in case localStorage was truncated
@@ -1080,6 +1108,245 @@ export function getCapacitorLiveGroupCounts(): Record<string, number> {
   return readCapacitorLiveGroupCountsFromStorage();
 }
 
+const CAPACITOR_CATALOG_KEY = "iptvmate_capacitor_category_catalog";
+
+export type CapacitorCategoryCatalog = {
+  playlistId?: string;
+  live: CatalogCategoryEntry[];
+  movies: CatalogCategoryEntry[];
+  series: CatalogCategoryEntry[];
+};
+
+function loadCapacitorCategoryCatalog(): CapacitorCategoryCatalog {
+  try {
+    const raw = localStorage.getItem(CAPACITOR_CATALOG_KEY);
+    if (!raw || raw.length > 400_000) return { live: [], movies: [], series: [] };
+    const parsed = JSON.parse(raw) as Partial<CapacitorCategoryCatalog>;
+    const asEntries = (value: unknown): CatalogCategoryEntry[] => {
+      if (!Array.isArray(value)) return [];
+      return value
+        .map((item) => {
+          if (!item || typeof item !== "object") return null;
+          const record = item as Partial<CatalogCategoryEntry>;
+          const group = String(record.group || "").trim();
+          const categoryId = String(record.categoryId || "").trim();
+          const contentType = record.contentType;
+          if (!group || !categoryId) return null;
+          if (contentType !== "live" && contentType !== "movie" && contentType !== "series") return null;
+          const count = Number(record.count);
+          const entry: CatalogCategoryEntry = {
+            group,
+            contentType,
+            categoryId
+          };
+          if (Number.isFinite(count) && count > 0) {
+            entry.count = count;
+          }
+          return entry;
+        })
+        .filter((item): item is CatalogCategoryEntry => item !== null);
+    };
+    return {
+      playlistId: typeof parsed.playlistId === "string" ? parsed.playlistId : undefined,
+      live: asEntries(parsed.live),
+      movies: asEntries(parsed.movies),
+      series: asEntries(parsed.series)
+    };
+  } catch {
+    return { live: [], movies: [], series: [] };
+  }
+}
+
+let capacitorCategoryCatalog: CapacitorCategoryCatalog = loadCapacitorCategoryCatalog();
+
+export function saveCapacitorCategoryCatalog(catalog: CapacitorCategoryCatalog): void {
+  const previous = capacitorCategoryCatalog;
+  const mergeCounts = (next: CatalogCategoryEntry[], prev: CatalogCategoryEntry[]): CatalogCategoryEntry[] => {
+    const prevByGroup = new Map(prev.map((entry) => [normalizeGroupName(entry.group), entry.count]));
+    return (Array.isArray(next) ? next : []).map((entry) => {
+      if (entry.count && entry.count > 0) return entry;
+      const previousCount = prevByGroup.get(normalizeGroupName(entry.group));
+      return previousCount && previousCount > 0 ? { ...entry, count: previousCount } : entry;
+    });
+  };
+
+  capacitorCategoryCatalog = {
+    playlistId: catalog.playlistId,
+    live: mergeCounts(catalog.live, previous.live),
+    movies: mergeCounts(catalog.movies, previous.movies),
+    series: mergeCounts(catalog.series, previous.series)
+  };
+
+  const liveCounts: Record<string, number> = {};
+  capacitorCategoryCatalog.live.forEach((entry) => {
+    if (entry.count && entry.count > 0) liveCounts[entry.group] = entry.count;
+  });
+  saveCapacitorLiveGroupCatalog(
+    capacitorCategoryCatalog.live.map((entry) => entry.group),
+    liveCounts
+  );
+
+  try {
+    localStorage.setItem(CAPACITOR_CATALOG_KEY, JSON.stringify(capacitorCategoryCatalog));
+  } catch {
+    // Ignore quota errors on TV storage.
+  }
+}
+
+export function getCapacitorCatalogGroupNames(contentType: ContentType): string[] {
+  if (contentType === "live") {
+    const fromCatalog = capacitorCategoryCatalog.live.map((entry) => entry.group);
+    return fromCatalog.length > 0 ? fromCatalog : getCapacitorLiveGroupNames();
+  }
+  const list = contentType === "movie" ? capacitorCategoryCatalog.movies : capacitorCategoryCatalog.series;
+  if (list.length > 0) return list.map((entry) => entry.group);
+  return [];
+}
+
+export function getCapacitorCatalogCounts(contentType: ContentType): Record<string, number> {
+  const list =
+    contentType === "live"
+      ? capacitorCategoryCatalog.live
+      : contentType === "movie"
+        ? capacitorCategoryCatalog.movies
+        : capacitorCategoryCatalog.series;
+  const counts: Record<string, number> = {};
+  if (list.length === 0 && contentType === "live") {
+    return getCapacitorLiveGroupCounts();
+  }
+  list.forEach((entry) => {
+    if (entry.count && entry.count > 0) counts[entry.group] = entry.count;
+  });
+  if (contentType === "live") {
+    Object.entries(getCapacitorLiveGroupCounts()).forEach(([group, count]) => {
+      if (!counts[group] && count > 0) counts[group] = count;
+    });
+  }
+  return counts;
+}
+
+export function updateCapacitorCatalogCount(groupName: string, contentType: ContentType, count: number): void {
+  if (!Number.isFinite(count) || count <= 0) return;
+  const catalog = getCapacitorCategoryCatalog();
+  const list =
+    contentType === "live" ? catalog.live : contentType === "movie" ? catalog.movies : catalog.series;
+  const normalized = normalizeGroupName(groupName);
+  const entry = list.find((item) => normalizeGroupName(item.group) === normalized);
+  if (!entry) return;
+  if (entry.count === count) return;
+  entry.count = count;
+  saveCapacitorCategoryCatalog(catalog);
+}
+
+export function getFavoriteCountForContentType(contentType: ContentType): number {
+  let total = 0;
+  for (const id of getFavoriteIdSet()) {
+    if (contentType === "movie") {
+      if (id.startsWith("movie_")) total += 1;
+    } else if (contentType === "series") {
+      if (id.startsWith("series_")) total += 1;
+    } else if (id.startsWith("live_") || (!id.startsWith("movie_") && !id.startsWith("series_"))) {
+      total += 1;
+    }
+  }
+  return total;
+}
+
+export function getCapacitorCatalogEntry(groupName: string): CatalogCategoryEntry | null {
+  const normalized = normalizeGroupName(groupName);
+  const pools = [
+    ...capacitorCategoryCatalog.live,
+    ...capacitorCategoryCatalog.movies,
+    ...capacitorCategoryCatalog.series
+  ];
+  return pools.find((entry) => normalizeGroupName(entry.group) === normalized) || null;
+}
+
+export function getCapacitorCategoryCatalog(): CapacitorCategoryCatalog {
+  return {
+    playlistId: capacitorCategoryCatalog.playlistId,
+    live: [...capacitorCategoryCatalog.live],
+    movies: [...capacitorCategoryCatalog.movies],
+    series: [...capacitorCategoryCatalog.series]
+  };
+}
+
+function idbNamedGroupRecordKey(contentType: ContentType, groupName: string): string {
+  const normalized = normalizeGroupName(groupName);
+  if (contentType === "live") return idbLiveGroupRecordKey(normalized);
+  if (contentType === "movie") return `movie-group:${normalized}`;
+  return `series-group:${normalized}`;
+}
+
+function contentTypeFromGroupName(group?: string): ContentType {
+  const name = normalizeGroupName(group);
+  if (name.startsWith("Movies:")) return "movie";
+  if (name.startsWith("Series:")) return "series";
+  return "live";
+}
+
+export async function persistCapacitorNamedGroupChannels(
+  groupName: string,
+  contentType: ContentType,
+  members: Channel[],
+  totalCount?: number
+): Promise<void> {
+  const capped = members.slice(0, CAPACITOR_MAX_GROUP_CHANNELS);
+  const db = await openChannelsCacheDb();
+  if (!db) return;
+  if (capped.length > 0) {
+    await writeCachedChannelsToIndexedDb(db, idbNamedGroupRecordKey(contentType, groupName), capped, {
+      quiet: true
+    });
+  }
+  db.close();
+  if (typeof totalCount === "number" && Number.isFinite(totalCount) && totalCount > 0) {
+    updateCapacitorCatalogCount(groupName, contentType, totalCount);
+  } else if (capped.length > 0) {
+    const existing = getCapacitorCatalogEntry(groupName)?.count || 0;
+    if (capped.length > existing) {
+      updateCapacitorCatalogCount(groupName, contentType, capped.length);
+    }
+  }
+}
+
+export async function loadCapacitorNamedGroupChannels(
+  groupName: string,
+  contentType: ContentType
+): Promise<Channel[]> {
+  if (!isCapacitorRuntime()) return channels;
+
+  const normalized = normalizeGroupName(groupName);
+  const matching = channels.filter((channel) => {
+    const type = String(channel.contentType || "").toLowerCase();
+    const expected = contentType === "live" ? "live" : contentType;
+    if (contentType === "live") {
+      if (!isLiveChannel(channel)) return false;
+    } else if (type !== expected) {
+      return false;
+    }
+    return normalizeGroupName(channel.group) === normalized;
+  });
+  if (
+    matching.length > 0 &&
+    matching.length <= CAPACITOR_MAX_GROUP_CHANNELS + 16 &&
+    matching.length === channels.length
+  ) {
+    return channels;
+  }
+
+  const db = await openChannelsCacheDb();
+  if (!db) return [];
+  const loaded = await readCachedChannelsFromIndexedDb(db, idbNamedGroupRecordKey(contentType, groupName));
+  db.close();
+
+  if (loaded.length > 0) {
+    const source = contentType === "live" ? "capacitor-group-load" : "capacitor-vod-group-load";
+    setChannelsWithoutSideEffects(loaded, source);
+  }
+  return loaded.length > 0 ? loaded : [];
+}
+
 /** Drop bloated per-channel visibility maps from pre-split-cache sessions (57k+ keys). */
 export function pruneCapacitorVisibilityIfBloated(): void {
   if (!isCapacitorRuntime()) return;
@@ -1093,7 +1360,11 @@ export function pruneCapacitorVisibilityIfBloated(): void {
     `capacitor-visibility-trim: channels=${channelKeyCount} groups=${groupKeyCount} -> group-only`
   );
 
-  const catalogGroups = new Set(getCapacitorLiveGroupNames());
+  const catalogGroups = new Set([
+    ...getCapacitorCatalogGroupNames("live"),
+    ...getCapacitorCatalogGroupNames("movie"),
+    ...getCapacitorCatalogGroupNames("series")
+  ]);
   const nextGroups: Record<string, boolean> = {};
   Object.entries(visibilityState.groups).forEach(([group, visible]) => {
     if (visible === false || catalogGroups.has(group)) {
@@ -1112,10 +1383,11 @@ export function pruneCapacitorVisibilityIfBloated(): void {
 /** Drop legacy monolithic IDB blobs that OOM Fire TV when parsed (100k+ live rows). */
 export function scheduleCapacitorLegacyCachePurge(): void {
   if (!isCapacitorRuntime()) return;
-  pruneCapacitorVisibilityIfBloated();
-  if (getCapacitorLiveGroupNames().length > 0) return;
 
   window.setTimeout(() => {
+    pruneCapacitorVisibilityIfBloated();
+    if (getCapacitorLiveGroupNames().length > 0) return;
+
     void (async () => {
       const debugLog = (window as any).webosDebugLog;
       const db = await openChannelsCacheDb();
@@ -1125,7 +1397,7 @@ export function scheduleCapacitorLegacyCachePurge(): void {
       db.close();
       if (debugLog) debugLog("cache-load: purged legacy monolithic idb on Capacitor");
     })();
-  }, 1500);
+  }, 8000);
 }
 
 async function persistCapacitorLiveGroupsToIdb(list: Channel[], groupNames: string[]): Promise<void> {
@@ -1185,6 +1457,8 @@ export async function ingestCapacitorLiveChannelCatalogAsync(
       if (bucket.length < CAPACITOR_MAX_GROUP_CHANNELS) {
         bucket.push(channel);
       }
+      // Drop the source slot so the 50k+ fetch array can GC during IDB persist.
+      list[index] = undefined as unknown as Channel;
     }
     await yieldToMain();
   }
@@ -1195,9 +1469,9 @@ export async function ingestCapacitorLiveChannelCatalogAsync(
     counts[group] = count;
   });
   saveCapacitorLiveGroupCatalog(groupNames, counts);
-  // Record which split group each favorited channel lives in so the Favorites
-  // view can aggregate them from IndexedDB without a full catalog load.
-  rebuildCapacitorFavoriteIndexFromCatalog(list);
+  for (const members of groupBuckets.values()) {
+    rebuildCapacitorFavoriteIndexFromCatalog(members);
+  }
 
   const normalizedPreferred = preferredGroup ? normalizeGroupName(preferredGroup) : "";
   const targetGroup =
@@ -1207,9 +1481,10 @@ export async function ingestCapacitorLiveChannelCatalogAsync(
 
   const memoryChannels = (groupBuckets.get(targetGroup) || []).slice(0, CAPACITOR_MAX_GROUP_CHANNELS);
   debugLog(
-    `capacitor-ingest: ${list.length} total -> ${memoryChannels.length} in memory (${targetGroup}), ${groupNames.length} groups`
+    `capacitor-ingest: ${totalLive} total -> ${memoryChannels.length} in memory (${targetGroup}), ${groupNames.length} groups`
   );
   setChannelsWithoutSideEffects(memoryChannels, "capacitor-live-ingest");
+  list.length = 0;
 
   const db = await openChannelsCacheDb();
   if (db) {
@@ -1630,22 +1905,36 @@ export async function loadCapacitorFavoriteChannels(): Promise<Channel[]> {
       // Fast path: read only the groups the favorites index points to.
       for (const groupName of idsByGroup.keys()) {
         if (favorites.length >= CAPACITOR_MAX_GROUP_CHANNELS) break;
-        const members = await readCachedChannelsFromIndexedDb(db, idbLiveGroupRecordKey(groupName));
+        const members = await readCachedChannelsFromIndexedDb(
+          db,
+          idbNamedGroupRecordKey(contentTypeFromGroupName(groupName), groupName)
+        );
         collect(members);
         await yieldToMain();
       }
 
-      // Slow path: some favorites are not indexed yet — scan the remaining
+      // Slow path: some favorites are not indexed yet — scan remaining
       // catalog groups once per session to locate and index them.
       const hasMissing = [...favoriteIds].some((id) => !foundIds.has(id));
       if (hasMissing && !capacitorFavoriteIndexScanStarted) {
         capacitorFavoriteIndexScanStarted = true;
-        for (const groupName of getCapacitorLiveGroupNames()) {
-          if (idsByGroup.has(groupName)) continue;
-          if (favorites.length >= CAPACITOR_MAX_GROUP_CHANNELS) break;
-          const members = await readCachedChannelsFromIndexedDb(db, idbLiveGroupRecordKey(groupName));
-          collect(members);
-          await yieldToMain();
+        const scanGroups: Array<{ contentType: ContentType; names: string[] }> = [
+          { contentType: "live", names: getCapacitorCatalogGroupNames("live") },
+          { contentType: "movie", names: getCapacitorCatalogGroupNames("movie") },
+          { contentType: "series", names: getCapacitorCatalogGroupNames("series") }
+        ];
+        for (const pool of scanGroups) {
+          for (const groupName of pool.names) {
+            if (idsByGroup.has(groupName)) continue;
+            if (favorites.length >= CAPACITOR_MAX_GROUP_CHANNELS) break;
+            const members = await readCachedChannelsFromIndexedDb(
+              db,
+              idbNamedGroupRecordKey(pool.contentType, groupName)
+            );
+            collect(members);
+            await yieldToMain();
+            if ([...favoriteIds].every((id) => foundIds.has(id))) break;
+          }
           if ([...favoriteIds].every((id) => foundIds.has(id))) break;
         }
       }
@@ -2030,12 +2319,15 @@ export function isChannelVisible(channelId: string): boolean {
 }
 
 export function setChannelVisible(channelId: string, visible: boolean) {
+  const nextChannels = { ...visibilityState.channels };
+  if (visible) {
+    delete nextChannels[channelId];
+  } else {
+    nextChannels[channelId] = false;
+  }
   visibilityState = {
     ...visibilityState,
-    channels: {
-      ...visibilityState.channels,
-      [channelId]: visible
-    }
+    channels: nextChannels
   };
   saveVisibilityState();
   dispatchVisibilityChanged();
@@ -2192,6 +2484,28 @@ export function getVisibilitySnapshot(): ChannelVisibilitySnapshot {
   };
 }
 
+/** Persist Play/Hide as category names plus hidden channel ids — not full channel objects. */
+export function getCompactVisibilitySnapshot(): ChannelVisibilitySnapshot {
+  const groups: Record<string, boolean> = {};
+  const allGroupsHidden = visibilityState.allGroupsHidden === true;
+  if (allGroupsHidden) {
+    for (const [group, visible] of Object.entries(visibilityState.groups)) {
+      if (visible === true) groups[group] = true;
+    }
+  } else {
+    for (const [group, visible] of Object.entries(visibilityState.groups)) {
+      if (visible === false) groups[group] = false;
+    }
+  }
+
+  const channels: Record<string, boolean> = {};
+  for (const [id, visible] of Object.entries(visibilityState.channels)) {
+    if (visible === false) channels[id] = false;
+  }
+
+  return { groups, channels, allGroupsHidden };
+}
+
 export function getVisibilitySnapshotForChannelIds(channelIds: string[]): ChannelVisibilitySnapshot {
   const ids = new Set(channelIds.map((id) => String(id || "")).filter((id) => id.length > 0));
 
@@ -2242,6 +2556,32 @@ export function applyVisibilitySnapshotForCurrentChannels(snapshot: ChannelVisib
     for (const [group, visible] of Object.entries(snapshot.groups)) {
       if (!allowedGroups.has(group)) continue;
       nextGroups[group] = visible !== false;
+    }
+  }
+
+  visibilityState = {
+    groups: nextGroups,
+    channels: nextChannels,
+    allGroupsHidden: snapshot.allGroupsHidden === true
+  };
+  saveVisibilityState();
+  dispatchVisibilityChanged();
+}
+
+export function applySavedVisibilitySnapshot(snapshot: ChannelVisibilitySnapshot | null | undefined) {
+  if (!snapshot || typeof snapshot !== "object") return;
+
+  const nextGroups: Record<string, boolean> = {};
+  if (snapshot.groups && typeof snapshot.groups === "object") {
+    for (const [group, visible] of Object.entries(snapshot.groups)) {
+      if (typeof visible === "boolean") nextGroups[group] = visible;
+    }
+  }
+
+  const nextChannels: Record<string, boolean> = {};
+  if (snapshot.channels && typeof snapshot.channels === "object") {
+    for (const [id, visible] of Object.entries(snapshot.channels)) {
+      if (visible === false) nextChannels[id] = false;
     }
   }
 

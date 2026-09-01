@@ -65,14 +65,17 @@ function ChannelItem({
       <div className={itemClass} onClick={handleClick}>
         <div className="channel-icon-wrap">
           {showVisibilityControls && (
-            <label className="channel-icon-toggle" onClick={(e) => e.stopPropagation()}>
-              <input
-                type="checkbox"
-                checked={visible}
-                aria-label={`Show or hide ${ch.name}`}
-                onChange={(e) => onToggleChannelVisible(ch.id, e.target.checked)}
-              />
-            </label>
+            <button
+              type="button"
+              className="list-play-hide-btn channel-icon-play-hide"
+              aria-label={`${visible ? "Hide" : "Play"} ${ch.name}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleChannelVisible(ch.id, !visible);
+              }}
+            >
+              {visible ? "Hide" : "Play"}
+            </button>
           )}
           {showFavoriteControls && onToggleFavorite && (
             <button
@@ -109,23 +112,63 @@ function ChannelItem({
     );
   }
 
+  const favoriteButton =
+    showFavoriteControls && onToggleFavorite ? (
+      <button
+        type="button"
+        className={`channel-row-favorite${isFavoriteChannel(ch) ? " active" : ""}`}
+        aria-label={`${isFavoriteChannel(ch) ? "Remove" : "Add"} ${ch.name} to favorites`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleFavorite(ch);
+        }}
+      >
+        {isFavoriteChannel(ch) ? "★" : "☆"}
+      </button>
+    ) : null;
+
   if (showVisibilityControls) {
     return (
       <div className={itemClass} onClick={handleClick}>
         <div className="list-toggle-row">
-          <input
-            type="checkbox"
-            checked={visible}
-            aria-label={`Show or hide ${ch.name}`}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => onToggleChannelVisible(ch.id, e.target.checked)}
-          />
+          <button
+            type="button"
+            className="list-play-hide-btn"
+            aria-label={`${visible ? "Hide" : "Play"} ${ch.name}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleChannelVisible(ch.id, !visible);
+            }}
+          >
+            {visible ? "Hide" : "Play"}
+          </button>
+          {favoriteButton}
           <button
             type="button"
             className="channel-select-btn"
             disabled={!visible}
             onClick={(e) => {
               e.stopPropagation();
+              if (visible) onSelect(ch);
+            }}
+          >
+            {ch.number} • {ch.name}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (favoriteButton) {
+    return (
+      <div className={itemClass}>
+        <div className="list-toggle-row">
+          {favoriteButton}
+          <button
+            type="button"
+            className="channel-select-btn"
+            disabled={!visible}
+            onClick={() => {
               if (visible) onSelect(ch);
             }}
           >

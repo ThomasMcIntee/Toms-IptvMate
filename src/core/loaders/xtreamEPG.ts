@@ -1,4 +1,5 @@
 import { EPGEvent } from "../epgStore";
+import { isCapacitorRuntime } from "../player/platformDetection";
 import { parseXMLTV } from "./xmltvParser";
 
 const inFlightEpgChannelIds = new Map<string, Promise<Map<string, string>>>();
@@ -150,6 +151,11 @@ export async function loadXtreamEpgChannelIds(
   user: string,
   pass: string
 ): Promise<Map<string, string>> {
+  // Fire TV OOMs if we re-parse the unfiltered 50k+ live catalog just to map EPG ids.
+  if (isCapacitorRuntime()) {
+    return new Map();
+  }
+
   const cacheKey = getPlaylistCacheKey(url, user, pass);
   const existing = inFlightEpgChannelIds.get(cacheKey);
   if (existing) return existing;
@@ -185,6 +191,11 @@ export async function loadXtreamXmltv(
   user: string,
   pass: string
 ): Promise<Record<string, EPGEvent[]>> {
+  // Full xmltv.php for a 50k-channel provider is tens of MB — fatal on Fire TV.
+  if (isCapacitorRuntime()) {
+    return {};
+  }
+
   const cacheKey = getPlaylistCacheKey(url, user, pass);
   const existing = inFlightXmltvLoads.get(cacheKey);
   if (existing) return existing;
@@ -234,6 +245,12 @@ export async function loadXtreamEPG(
   user: string,
   pass: string
 ): Promise<Record<string, EPGEvent[]>> {
+  // Provider-wide get_epg dumps every channel's listings. After a live Reload
+  // that already held 57k rows, this is what kills the Fire Stick process.
+  if (isCapacitorRuntime()) {
+    return {};
+  }
+
   const apiCandidates = buildApiCandidates(
     url,
     `/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_epg`
@@ -332,6 +349,10 @@ export async function loadXtreamEPGForStream(
 
   if (Array.isArray(fromTable[sid]) && hasCurrentOrFutureEvents(fromTable[sid])) {
     return fromTable[sid].sort((a, b) => a.start - b.start);
+  }
+
+  if (isCapacitorRuntime()) {
+    return [];
   }
 
   const epgChannelIds = await loadXtreamEpgChannelIds(url, user, pass).catch(

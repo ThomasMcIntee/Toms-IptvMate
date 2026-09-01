@@ -125,7 +125,7 @@ export function GroupList({
                 className="group-list-bulk-btn"
                 onClick={() => onSetAllVisible(true)}
               >
-                Unhide All
+                Play All
               </button>
             </>
           )}
@@ -150,14 +150,18 @@ export function GroupList({
         >
           {showVisibilityControls ? (
             <div className="list-toggle-row">
-              <input
-                type="checkbox"
-                checked={isGroupVisible(g)}
+              <button
+                type="button"
+                className="list-play-hide-btn"
                 disabled={g === "Favorites"}
-                aria-label={`Show or hide ${g}`}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => onToggleGroupVisible(g, e.target.checked)}
-              />
+                aria-label={`${isGroupVisible(g) ? "Hide" : "Play"} ${g}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleGroupVisible(g, !isGroupVisible(g));
+                }}
+              >
+                {isGroupVisible(g) ? "Hide" : "Play"}
+              </button>
               <button
                 type="button"
                 className="group-select-btn"
@@ -165,7 +169,7 @@ export function GroupList({
               >
                 <span>{g}</span>
                 <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
-                  {groupCounts[g] ?? 0}
+                  {groupCounts[g] ? groupCounts[g].toLocaleString() : ""}
                 </span>
               </button>
             </div>
@@ -177,7 +181,7 @@ export function GroupList({
             >
               <span>{g}</span>
               <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
-                {groupCounts[g] ?? 0}
+                  {groupCounts[g] ? groupCounts[g].toLocaleString() : ""}
               </span>
             </button>
           )}

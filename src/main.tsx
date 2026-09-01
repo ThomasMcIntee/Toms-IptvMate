@@ -79,7 +79,9 @@ const loadApp = () => {
     });
 };
 
-if (typeof requestIdleCallback === "function") {
+if (/AFT|Android/i.test(navigator.userAgent || "")) {
+  window.setTimeout(loadApp, 800);
+} else if (typeof requestIdleCallback === "function") {
   requestIdleCallback(() => loadApp(), { timeout: 1500 });
 } else {
   window.setTimeout(loadApp, 100);

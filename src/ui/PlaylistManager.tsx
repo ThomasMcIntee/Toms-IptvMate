@@ -15,14 +15,22 @@ import {
   getAllChannels,
   getVisibilitySnapshot,
   getVisibilitySnapshotForChannelIds,
-  applyVisibilitySnapshotForCurrentChannels,
+  getCompactVisibilitySnapshot,
   setActiveVisibilityRole,
   saveRoleVisibility,
   ChannelVisibilitySnapshot,
-  ingestCapacitorLiveChannelCatalogAsync
+  ingestCapacitorLiveChannelCatalogAsync,
+  saveCapacitorCategoryCatalog,
+  persistCapacitorNamedGroupChannels,
+  isGroupVisible,
+  isChannelVisible
 } from "../core/channelStore";
 import { loadEPGForPlaylist } from "../core/loaders/epgLoader";
-import { loadChannelsForPlaylist } from "../core/loaders/playlistLoader";
+import {
+  loadChannelsForPlaylist,
+  loadCategoryIndexForPlaylist,
+  loadCategoryChannelsForPlaylist
+} from "../core/loaders/playlistLoader";
 import { loadEPGCache } from "../core/epgStore";
 import { isCapacitorRuntime } from "../core/player/platformDetection";
 
@@ -603,7 +611,7 @@ export default function PlaylistManager({
 
   async function persistRoleSnapshot(kind: "adult" | "child", playlistId: string) {
     const visibility = isCapacitorRuntime()
-      ? getVisibilitySnapshot()
+      ? getCompactVisibilitySnapshot()
       : getVisibilitySnapshotForChannelIds(getAllChannels().map((channel) => channel.id));
     if (!visibility) return;
 
@@ -644,6 +652,18 @@ export default function PlaylistManager({
 
     // Write to the protected saved-role key (never overwritten by playlist resets).
     saveRoleVisibility(kind);
+    if (isCapacitorRuntime()) {
+      const current = getAllChannels();
+      const groupName = String(current[0]?.group || "").trim();
+      const contentType = current[0]?.contentType;
+      if (groupName && (contentType === "live" || contentType === "movie" || contentType === "series")) {
+        await persistCapacitorNamedGroupChannels(
+          groupName,
+          contentType,
+          current.filter((channel) => isChannelVisible(String(channel.id || "")))
+        );
+      }
+    }
     await persistRoleSnapshot(kind, targetPlaylist.id);
     setStatusMessage(`✓ Saved ${kind} visibility for "${targetPlaylist.name}".`);
   }
@@ -689,6 +709,98 @@ export default function PlaylistManager({
     setLoadingId(p.id);
     setStatusMessage(`Loading "${p.name}"… this can take up to a minute for large playlists.`);
     try {
+      if (isCapacitorRuntime() && p.type === "xtream") {
+        setStatusMessage(`Loading categories for "${p.name}"…`);
+        const live = await loadCategoryIndexForPlaylist(p, "live");
+        if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
+        const movies = await loadCategoryIndexForPlaylist(p, "movies");
+        if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
+        const series = await loadCategoryIndexForPlaylist(p, "series");
+        if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
+
+        if (live.length + movies.length + series.length === 0) {
+          throw new Error("Xtream returned no categories. Check URL/credentials.");
+        }
+
+        saveCapacitorCategoryCatalog({ playlistId: p.id, live, movies, series });
+
+        const playEntries = [...live, ...movies, ...series].filter((entry) => isGroupVisible(entry.group));
+        const hiddenCategoryCount = live.length + movies.length + series.length - playEntries.length;
+        const reloadUnhiddenLimit = 48;
+        let refreshed = 0;
+
+        if (playEntries.length === 0) {
+          setStatusMessage("All categories are hidden. Hidden lists were not downloaded.");
+        } else if (playEntries.length > reloadUnhiddenLimit) {
+          setStatusMessage(
+            `Loaded ${live.length} live, ${movies.length} movie, ${series.length} series categories. Skipped ${hiddenCategoryCount} hidden. ${playEntries.length} play categories — select one to load, or Hide unused then Reload.`
+          );
+        } else {
+          setStatusMessage(`Refreshing ${playEntries.length} play categories (hidden skipped)…`);
+          for (const entry of playEntries) {
+            if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
+            try {
+              const streams = await loadCategoryChannelsForPlaylist(p, entry);
+              const unhidden = streams.filter((channel) => isChannelVisible(String(channel.id || "")));
+              await persistCapacitorNamedGroupChannels(entry.group, entry.contentType, unhidden, streams.length);
+              if (getAllChannels().length === 0 && unhidden.length > 0) {
+                setChannels(
+                  unhidden,
+                  entry.contentType === "live" ? "capacitor-group-load" : "capacitor-vod-group-load"
+                );
+              }
+              refreshed += 1;
+              setStatusMessage(`Refreshed ${refreshed}/${playEntries.length} play categories…`);
+            } catch {
+              // Keep going; one category failure must not abort the catalog.
+            }
+            await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+          }
+        }
+
+        if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
+
+        setCurrentPlaylistId(p.id);
+        setSelectedPlaylistId(p.id);
+        writeStorageItem(SHARED_PLAYLIST_ID_KEY, p.id);
+        saveChannelsCacheMeta({
+          playlistId: p.id,
+          scopes: ["live", "movies", "series"],
+          updatedAt: Date.now()
+        });
+        onPlaylistLoadedWithId(getAllChannels(), p.id);
+
+        const visibility = getCompactVisibilitySnapshot();
+        const samePlaylistAssignedToBothRoles = adultPlaylistId === p.id && childPlaylistId === p.id;
+        const persistAdult =
+          roleToPersist === "adult" ||
+          (roleToPersist === null && adultPlaylistId === p.id && !samePlaylistAssignedToBothRoles);
+        const persistChild =
+          roleToPersist === "child" ||
+          (roleToPersist === null && childPlaylistId === p.id && !samePlaylistAssignedToBothRoles);
+
+        if (persistAdult) {
+          await writeRoleCache("adult", {
+            playlistId: p.id,
+            channels: [],
+            visibility
+          });
+        }
+
+        if (persistChild) {
+          await writeRoleCache("child", {
+            playlistId: p.id,
+            channels: [],
+            visibility
+          });
+        }
+
+        setStatusMessage(
+          `✓ Categories ready: live=${live.length}, movies=${movies.length}, series=${series.length}. Reloaded ${refreshed} play categories; ${hiddenCategoryCount} hidden were skipped.`
+        );
+        return;
+      }
+
       const mergeChannelsById = (existingChannels: Channel[], incomingChannels: Channel[]) => {
         const byId = new Map<string, Channel>();
         existingChannels.forEach((channel) => byId.set(String(channel.id || ""), channel));
@@ -798,18 +910,18 @@ export default function PlaylistManager({
         updatedAt: Date.now()
       });
       onPlaylistLoadedWithId(loadedForUi, p.id);
-      setStatusMessage(`Loaded ${loadedForUi.length.toLocaleString()} entries from "${p.name}". Fetching EPG…`);
 
-      try {
-        if (isCapacitorRuntime() && channels.length > 3000) {
-          void loadEPGForPlaylist(p).catch((epgErr) => {
-            console.warn("EPG load failed:", epgErr);
-          });
-        } else {
+      if (isCapacitorRuntime()) {
+        const debugLog = (window as any).webosDebugLog || console.log.bind(console);
+        debugLog("capacitor-reload: skipped provider-wide EPG after live ingest");
+        setStatusMessage(`Loaded live catalog from "${p.name}". Guide listings load when you open a channel.`);
+      } else {
+        setStatusMessage(`Loaded ${loadedForUi.length.toLocaleString()} entries from "${p.name}". Fetching EPG…`);
+        try {
           await loadEPGForPlaylist(p);
+        } catch (epgErr) {
+          console.warn("EPG load failed:", epgErr);
         }
-      } catch (epgErr) {
-        console.warn("EPG load failed:", epgErr);
       }
       if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
 

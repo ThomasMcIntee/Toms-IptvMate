@@ -1,3 +1,19 @@
-2026/08/30-11:14:16.754 2b24 Reusing MANIFEST C:\prgtm\Toms-IPTVmate\Toms-IPTVmate\.runtime\harness\live\sessionData\Session Storage/MANIFEST-000001
-2026/08/30-11:14:16.754 2b24 Recovering log #10
-2026/08/30-11:14:16.755 2b24 Reusing old log C:\prgtm\Toms-IPTVmate\Toms-IPTVmate\.runtime\harness\live\sessionData\Session Storage/000010.log 
+2026/08/30-16:23:10.328 82b0 Reusing MANIFEST C:\prgtm\Toms-IPTVmate\Toms-IPTVmate\.runtime\harness\live\sessionData\Session Storage/MANIFEST-000001
+2026/08/30-16:23:10.329 82b0 Recovering log #10
+2026/08/30-16:23:10.330 82b0 Reusing old log C:\prgtm\Toms-IPTVmate\Toms-IPTVmate\.runtime\harness\live\sessionData\Session Storage/000010.log 
+2026/08/30-16:45:33.590 82b0 Level-0 table #13: started
+2026/08/30-16:45:33.603 82b0 Level-0 table #13: 27940 bytes OK
+2026/08/30-16:45:33.603 82b0 Delete type=0 #10
+2026/08/30-16:45:33.604 82b0 Compacting 4@0 + 0@1 files
+2026/08/30-16:45:33.820 82b0 Generated table #14@0: 9 keys, 10048841 bytes
+2026/08/30-16:45:33.923 82b0 Generated table #15@0: 4 keys, 10047575 bytes
+2026/08/30-16:45:34.036 82b0 Generated table #16@0: 4 keys, 10051123 bytes
+2026/08/30-16:45:34.044 82b0 Generated table #17@0: 54 keys, 26389 bytes
+2026/08/30-16:45:34.044 82b0 Compacted 4@0 + 0@1 files => 30173928 bytes
+2026/08/30-16:45:34.045 82b0 compacted to: files[ 0 4 0 0 0 0 0 ]
+2026/08/30-16:45:34.045 82b0 Delete type=2 #3
+2026/08/30-16:45:34.045 82b0 Delete type=2 #6
+2026/08/30-16:45:34.045 82b0 Delete type=2 #9
+2026/08/30-16:45:34.045 82b0 Delete type=2 #13
+2026/08/30-16:45:34.051 82b0 Moved #14 to level-2 10048841 bytes OK: files[ 0 3 1 0 0 0 0 ]
+2026/08/30-16:45:34.051 82b0 Moved #15 to level-2 10047575 bytes OK: files[ 0 2 2 0 0 0 0 ]

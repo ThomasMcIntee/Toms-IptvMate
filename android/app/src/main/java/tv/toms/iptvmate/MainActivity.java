@@ -285,6 +285,10 @@ public class MainActivity extends BridgeActivity {
             });
     }
 
+    public ExoPlayerManager peekExoPlayerManager() {
+        return exoPlayerManager;
+    }
+
     public ExoPlayerManager getOrCreateExoPlayerManager() {
         if (exoPlayerManager == null) {
             WebView webView = getBridge().getWebView();

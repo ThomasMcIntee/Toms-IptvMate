@@ -1,4 +1,4 @@
-import { capCapacitorCatalogList, Channel, ContentType } from "../channelStore";
+import { capCapacitorCatalogList, Channel, ContentType, type CatalogCategoryEntry } from "../channelStore";
 import { isCapacitorRuntime } from "../player/platformDetection";
 import type { PlaylistLoadScope } from "./playlistLoader";
 
@@ -192,6 +192,125 @@ function categoryNameMap(categoryItems: any[]): Record<string, string> {
     map[String(category.category_id)] = String(category.category_name || `Category ${category.category_id}`);
   }
   return map;
+}
+
+const XTREAM_CATEGORY_PREFIX: Record<ContentType, string> = {
+  live: "TV: ",
+  movie: "Movies: ",
+  series: "Series: "
+};
+
+const XTREAM_CATEGORY_ACTIONS: Record<ContentType, { categories: string; streams: string }> = {
+  live: { categories: "get_live_categories", streams: "get_live_streams" },
+  movie: { categories: "get_vod_categories", streams: "get_vod_streams" },
+  series: { categories: "get_series_categories", streams: "get_series" }
+};
+
+function xtreamCategoryItemCount(category: any): number | undefined {
+  const raw = category?.category_count ?? category?.count ?? category?.total ?? category?.streams_count ?? category?.num;
+  const count = Number(raw);
+  return Number.isFinite(count) && count > 0 ? count : undefined;
+}
+
+export async function loadXtreamCategoryIndex(
+  url: string,
+  user: string,
+  pass: string,
+  contentType: ContentType
+): Promise<CatalogCategoryEntry[]> {
+  const { baseUrl, useProxy } = await resolveReachableBaseUrl(url, user, pass);
+  const actions = XTREAM_CATEGORY_ACTIONS[contentType];
+  const prefix = XTREAM_CATEGORY_PREFIX[contentType];
+  const categoryItems = await fetchXtreamList(baseUrl, user, pass, useProxy, actions.categories);
+  const entries: CatalogCategoryEntry[] = [];
+
+  for (const category of categoryItems) {
+    if (category?.category_id == null) continue;
+    const categoryId = String(category.category_id);
+    const name = String(category.category_name || `Category ${categoryId}`).trim() || `Category ${categoryId}`;
+    entries.push({
+      group: `${prefix}${name}`,
+      contentType,
+      categoryId,
+      count: xtreamCategoryItemCount(category)
+    });
+  }
+
+  return entries;
+}
+
+function mapXtreamStreamToChannel(
+  item: any,
+  baseUrl: string,
+  user: string,
+  pass: string,
+  contentType: ContentType,
+  groupName: string
+): Channel | null {
+  if (contentType === "series") {
+    if (!item?.series_id) return null;
+    return {
+      id: `series_${item.series_id}`,
+      name: item.name || `Series ${item.series_id}`,
+      logo: item.cover,
+      url: `${baseUrl}/series/${user}/${pass}/${item.series_id}.m3u8`,
+      group: groupName,
+      contentType: "series"
+    };
+  }
+
+  if (item?.stream_id == null) return null;
+
+  if (contentType === "movie") {
+    const vodExtension = String(item.container_extension || "mp4").trim() || "mp4";
+    return {
+      id: `movie_${item.stream_id}`,
+      name: item.name || `Movie ${item.stream_id}`,
+      logo: item.stream_icon,
+      url: `${baseUrl}/movie/${user}/${pass}/${item.stream_id}.${vodExtension}`,
+      group: groupName,
+      contentType: "movie"
+    };
+  }
+
+  const liveExtension = String(item.container_extension || "ts").trim() || "ts";
+  return {
+    id: `live_${item.stream_id}`,
+    name: item.name || `Stream ${item.stream_id}`,
+    logo: item.stream_icon,
+    url: `${baseUrl}/live/${user}/${pass}/${item.stream_id}.${liveExtension}`,
+    group: groupName,
+    contentType: "live",
+    epgChannelId: String(item.epg_channel_id || "").trim() || undefined
+  };
+}
+
+export async function loadXtreamChannelsForCategory(
+  url: string,
+  user: string,
+  pass: string,
+  entry: CatalogCategoryEntry
+): Promise<Channel[]> {
+  const { baseUrl, useProxy } = await resolveReachableBaseUrl(url, user, pass);
+  const actions = XTREAM_CATEGORY_ACTIONS[entry.contentType];
+  const raw = await fetchXtreamList(
+    baseUrl,
+    user,
+    pass,
+    useProxy,
+    actions.streams,
+    `&category_id=${encodeURIComponent(entry.categoryId)}`
+  );
+  const result: Channel[] = [];
+
+  for (const item of raw) {
+    const mapped = mapXtreamStreamToChannel(item, baseUrl, user, pass, entry.contentType, entry.group);
+    if (!mapped) continue;
+    result.push(mapped);
+    if (result.length >= CAPACITOR_SCOPED_STREAM_CAP) break;
+  }
+
+  return result;
 }
 
 async function loadCappedStreamsByCategory(
