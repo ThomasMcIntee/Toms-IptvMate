@@ -13,6 +13,7 @@ type Props = {
   showVisibilityControls?: boolean;
   className?: string;
   onSetAllVisible?: (visible: boolean) => void;
+  formatGroupLabel?: (group: string) => string;
 };
 
 export function GroupList({
@@ -24,7 +25,8 @@ export function GroupList({
   onToggleGroupVisible = () => {},
   showVisibilityControls = true,
   className = "",
-  onSetAllVisible
+  onSetAllVisible,
+  formatGroupLabel = (group) => group
 }: Props) {
   const [sortDirection, setSortDirection] = useState<GroupSortDirection>(() => {
     try {
@@ -110,7 +112,7 @@ export function GroupList({
                 className="group-select-btn"
                 onClick={() => onSelect(g)}
               >
-                <span>{g}</span>
+                <span>{formatGroupLabel(g)}</span>
                 <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
                   {groupCounts[g] ?? 0}
                 </span>
@@ -122,7 +124,7 @@ export function GroupList({
               className="group-select-btn"
               onClick={() => onSelect(g)}
             >
-              <span>{g}</span>
+              <span>{formatGroupLabel(g)}</span>
               <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
                 {groupCounts[g] ?? 0}
               </span>

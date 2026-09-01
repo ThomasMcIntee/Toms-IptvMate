@@ -983,6 +983,15 @@ body.theme-light .playlist-edit-form label {
   padding-top: 10px;
 }
 
+.group-list.group-list-main-content {
+  width: 190px;
+}
+
+.group-list.group-list-with-main-content {
+  left: 190px;
+  width: 300px;
+}
+
 .group-list.group-list-movies-right {
   left: 0;
   right: auto;
@@ -1065,6 +1074,12 @@ body.theme-light .playlist-edit-form label {
   width: 520px;
   background: rgba(0,0,0,0.7);
   overflow-y: auto;
+}
+
+.channel-list.channel-list-with-main-content {
+  left: 490px;
+  right: 0;
+  width: auto;
 }
 
 .list-toggle-row {
@@ -1175,6 +1190,12 @@ body.theme-light .playlist-edit-form label {
   grid-auto-rows: calc((100% - 36px) / 4);
   gap: 12px;
   align-content: unset;
+}
+
+.channel-list.channel-list-icons.channel-list-with-main-content {
+  left: 490px;
+  right: 8px;
+  width: auto;
 }
 
 .channel-list-icons .channel-item {
