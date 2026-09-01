@@ -12,9 +12,12 @@ import {
   isNativePlayerAvailable,
   isNativePlaybackMuted,
   isNativePlaybackPaused,
+  noteNativePlaybackMuted,
+  noteNativePlaybackPaused,
   pauseNativePlayback,
   playNativeUrl,
   resumeNativePlayback,
+  revealNativePlayerControls,
   setNativeMuted,
   stopNativePlayback,
   syncNativePlayerBounds
@@ -55,6 +58,7 @@ import {
   type ChannelVisibilitySnapshot
 } from "./core/channelStore";
 import NowNextOverlay from "./ui/NowNextOverlay";
+import { PlayerControlBar } from "./ui/PlayerControlBar";
 import { isPlaylistsHydrationPending, loadPlaylists } from "./core/playlistStore";
 import { loadEPGForPlaylist } from "./core/loaders/epgLoader";
 import { getEPG, getEPGForChannel, getIndexedEPGForChannel, setEPG } from "./core/epgStore";
@@ -1862,6 +1866,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       
       if (isTextEntryTarget(e.target)) return;
 
+      if (currentChannel && (isLivePreviewFullscreen || e.key === " " || e.key === "Enter" || e.key === "Select" || e.keyCode === 23 || e.key === "f" || e.key === "F" || e.key === "m" || e.key === "M")) {
+        revealNativePlayerControls();
+        window.dispatchEvent(new Event("playerRevealControls"));
+      }
+
       if (e.key === "f" || e.key === "F") {
         e.preventDefault();
         toggleFullscreen();
@@ -1885,6 +1894,24 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       window.removeEventListener("keydown", onKeyDown, true);
     };
   }, [activePanel, isVodPlaybackFullscreen, currentChannel, isSeriesPickerVisible, contentPage, isEffectiveLiveFullscreen, showOpeningScreen, hasPlaylists]);
+
+  useEffect(() => {
+    const onNativeCommand = (event: Event) => {
+      const action = (event as CustomEvent<{ action?: string; paused?: boolean; muted?: boolean }>).detail?.action;
+      const detail = (event as CustomEvent<{ action?: string; paused?: boolean; muted?: boolean }>).detail;
+      if (action === "fullscreen") {
+        toggleFullscreen();
+        return;
+      }
+      if (action === "state") {
+        if (typeof detail?.paused === "boolean") noteNativePlaybackPaused(detail.paused);
+        if (typeof detail?.muted === "boolean") noteNativePlaybackMuted(detail.muted);
+        refreshPlayerUi();
+      }
+    };
+    window.addEventListener("nativePlayerCommand", onNativeCommand);
+    return () => window.removeEventListener("nativePlayerCommand", onNativeCommand);
+  }, [contentPage]);
 
   useEffect(() => {
     const onWindowError = (event: ErrorEvent) => {
@@ -3556,25 +3583,17 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
               tabIndex={isCapacitorRuntime() ? -1 : 0}
               style={{ background: 'transparent', zIndex: 0 }}
             />
-
-
-
-
-        </div>
-      )}
-      {shouldRenderMainVideo && useLivePreviewShell && currentChannel && (
-        <div
-          className={`player-controls-overlay${isLivePreviewFullscreen ? " player-controls-live-fullscreen" : " player-controls-live-preview"}`}
-        >
-          <button type="button" className="player-control-btn" onClick={togglePlayPause}>
-            {isPlaybackPaused() ? "Play" : "Pause"}
-          </button>
-          <button type="button" className="player-control-btn" onClick={toggleMute}>
-            {isPlaybackMuted() ? "Unmute" : "Mute"}
-          </button>
-          <button type="button" className="player-control-btn" onClick={toggleFullscreen}>
-            {isLivePreviewFullscreen ? "Exit Fullscreen" : "Fullscreen"}
-          </button>
+            {currentChannel && (
+              <PlayerControlBar
+                channel={currentChannel}
+                paused={isPlaybackPaused()}
+                muted={isPlaybackMuted()}
+                fullscreen={isLivePreviewFullscreen}
+                onPlayPause={togglePlayPause}
+                onMute={toggleMute}
+                onFullscreen={toggleFullscreen}
+              />
+            )}
         </div>
       )}
       {shouldRenderMainVideo && !useLivePreviewShell && (

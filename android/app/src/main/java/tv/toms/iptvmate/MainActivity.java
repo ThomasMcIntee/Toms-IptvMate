@@ -183,10 +183,6 @@ public class MainActivity extends BridgeActivity {
         webView.setFocusableInTouchMode(true);
         webView.setClickable(true);
         webView.setDescendantFocusability(WebView.FOCUS_AFTER_DESCENDANTS);
-        // NONE during boot uses less GPU memory on Fire TV; ExoPlayerManager switches
-        // to hardware when native playback starts.
-        webView.setLayerType(View.LAYER_TYPE_NONE, null);
-        webView.setBackgroundColor(Color.BLACK);
 
         WebSettings settings = webView.getSettings();
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
@@ -204,6 +200,10 @@ public class MainActivity extends BridgeActivity {
             return;
         }
         webViewConfigured = true;
+
+        // NONE during boot uses less GPU memory on Fire TV.
+        webView.setLayerType(View.LAYER_TYPE_NONE, null);
+        webView.setBackgroundColor(Color.BLACK);
 
         // Setup the Native Proxy Relay once — re-attaching on every focus change leaks memory.
         webView.setWebViewClient(new BridgeWebViewClient(getBridge()) {

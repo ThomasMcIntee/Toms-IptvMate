@@ -63,6 +63,25 @@ public class NativePlayerPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setGuide(PluginCall call) {
+        String title = call.getString("title", "");
+        Double start = call.getDouble("startMs");
+        Double end = call.getDouble("endMs");
+        manager().setGuide(
+            title != null ? title : "",
+            start != null ? start.longValue() : 0L,
+            end != null ? end.longValue() : 0L
+        );
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void revealControls(PluginCall call) {
+        manager().revealControls();
+        call.resolve();
+    }
+
+    @PluginMethod
     public void stop(PluginCall call) {
         manager().stop();
         call.resolve();

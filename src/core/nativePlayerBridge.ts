@@ -9,6 +9,8 @@ type NativePlayerCapPlugin = {
   pause(): Promise<void>;
   resume(): Promise<void>;
   setMuted(options: { muted: boolean }): Promise<void>;
+  setGuide(options: { title?: string; startMs?: number; endMs?: number }): Promise<void>;
+  revealControls(): Promise<void>;
   setBounds(options: {
     left: number;
     top: number;
@@ -284,6 +286,34 @@ export function setNativeMuted(muted: boolean): void {
   if (!isCapacitorRuntime() || !isNativePlayerAvailable()) return;
   void NativePlayerCap.setMuted({ muted }).catch(() => {
     nativeMuted = !muted;
+  });
+}
+
+export function noteNativePlaybackPaused(paused: boolean): void {
+  nativePaused = paused;
+}
+
+export function noteNativePlaybackMuted(muted: boolean): void {
+  nativeMuted = muted;
+}
+
+export function setNativePlayerGuide(
+  guide: { title?: string; startMs?: number; endMs?: number } | null
+): void {
+  if (!isCapacitorRuntime() || !isNativePlayerAvailable()) return;
+  void NativePlayerCap.setGuide({
+    title: guide?.title || "",
+    startMs: Number(guide?.startMs || 0),
+    endMs: Number(guide?.endMs || 0)
+  }).catch(() => {
+    // Guide text is best-effort chrome on the native overlay.
+  });
+}
+
+export function revealNativePlayerControls(): void {
+  if (!isCapacitorRuntime() || !isNativePlayerAvailable()) return;
+  void NativePlayerCap.revealControls().catch(() => {
+    // Showing chrome is best-effort.
   });
 }
 
