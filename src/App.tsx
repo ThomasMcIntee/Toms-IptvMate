@@ -125,7 +125,7 @@ function extractMainContentGroup(group: string): { key: string; label: string } 
     return { key: ROOT_GROUP.toLowerCase(), label: ROOT_GROUP };
   }
 
-  const typedPipeMatch = normalized.match(/^(TV|Movies|Series)\s*:\s*([^|]+)\|(.*)$/i);
+  const typedPipeMatch = normalized.match(/^(TV|Movies|Series)\s*:\s*([^|]+)\|/i);
   if (typedPipeMatch) {
     const contentLabel =
       typedPipeMatch[1].toLowerCase() === "tv"
@@ -2013,9 +2013,20 @@ export function App() {
       const channelIndex = findRowIndex(channelRows);
       const onLoadMore = !!active && active === loadMoreBtn;
 
-      const currentMainContentStop = () =>
-        rowStop(document.querySelector<HTMLElement>(".group-list-main-content .group-item.active")) ||
-        rowStop(mainContentRows[0] || null);
+      const currentMainContentStop = () => {
+        const escapedKey =
+          typeof CSS !== "undefined" && typeof CSS.escape === "function"
+            ? CSS.escape(activeMainContentGroupKey)
+            : activeMainContentGroupKey.replace(/"/g, '\\"');
+        return (
+          rowStop(
+            document.querySelector<HTMLElement>(
+              `.group-list-main-content .group-item[data-main-content-key="${escapedKey}"]`
+            )
+          ) ||
+          rowStop(mainContentRows[0] || null)
+        );
+      };
       const currentGroupStop = () =>
         rowStop(document.querySelector<HTMLElement>(
           showPlaylistManagerMainContentColumn
@@ -2124,7 +2135,7 @@ export function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [showOpeningScreen, activePanel, contentPage, contentMode, showPlaylistManagerMainContentColumn]);
+  }, [showOpeningScreen, activePanel, contentPage, contentMode, showPlaylistManagerMainContentColumn, activeMainContentGroupKey]);
 
   function normalizePlayableChannelUrl(ch: any): string {
     const rawUrl = String(ch?.url || "");
@@ -2749,9 +2760,12 @@ export function App() {
       return;
     }
 
-    const nextGroup = groupsForList.find((group) => {
+    const matchesTargetGroup = (group: string) => {
       return group !== ROOT_GROUP && extractMainContentGroup(group).key === mainContentGroupKey;
-    });
+    };
+    const nextGroup =
+      groupsForList.find((group) => matchesTargetGroup(group) && isGroupVisible(group)) ||
+      groupsForList.find(matchesTargetGroup);
 
     if (nextGroup) {
       setActiveGroup(nextGroup);
@@ -3341,6 +3355,7 @@ export function App() {
               {mainContentGroups.map((group) => (
                 <div
                   key={group.key}
+                  data-main-content-key={group.key}
                   className={"group-item" + (activeMainContentGroupKey === group.key ? " active" : "")}
                 >
                   <button
