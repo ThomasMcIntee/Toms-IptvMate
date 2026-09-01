@@ -657,15 +657,6 @@ export function App() {
   }, [showPlaylistManagerMainContentColumn, mainContentGroups, activeMainContentGroup]);
 
   useEffect(() => {
-    if (!showPlaylistManagerMainContentColumn || activeGroup === ROOT_GROUP) return;
-
-    const nextMainContentGroup = extractMainContentGroupName(activeGroup);
-    if (nextMainContentGroup !== activeMainContentGroup && mainContentGroups.includes(nextMainContentGroup)) {
-      setActiveMainContentGroup(nextMainContentGroup);
-    }
-  }, [showPlaylistManagerMainContentColumn, activeGroup, activeMainContentGroup, mainContentGroups]);
-
-  useEffect(() => {
     if (isLiveContentPage && !isGroupVisible(activeGroup) && activeGroup !== ROOT_GROUP) {
       setActiveGroup(ROOT_GROUP);
     }
