@@ -1,24 +1,35 @@
-<!-- nx configuration start-->
-<!-- Leave the start & end comments to automatically receive updates. -->
+# Repository Guidelines
 
-# General Guidelines for working with Nx
+## Project Overview
+- Tom's IPTVmate is a Vite + React + TypeScript IPTV client.
+- The web app lives in `/home/runner/work/Toms-IptvMate/Toms-IptvMate/src`.
+- Desktop packaging uses Electron from `/home/runner/work/Toms-IptvMate/Toms-IptvMate/electron/main.cjs`.
+- Mobile and TV platform wrappers live in `/home/runner/work/Toms-IptvMate/Toms-IptvMate/android`, `webos`, and Capacitor config files in the repo root.
 
-- For navigating/exploring the workspace, invoke the `nx-workspace` skill first - it has patterns for querying projects, targets, and dependencies
-- When running tasks (for example build, lint, test, e2e, etc.), always prefer running the task through `nx` (i.e. `nx run`, `nx run-many`, `nx affected`) instead of using the underlying tooling directly
-- Prefix nx commands with the workspace's package manager (e.g., `pnpm nx build`, `npm exec nx test`) - avoids using globally installed CLI
-- You have access to the Nx MCP server and its tools, use them to help the user
-- For Nx plugin best practices, check `node_modules/@nx/<plugin>/PLUGIN.md`. Not all plugins have this file - proceed without it if unavailable.
-- NEVER guess CLI flags - always check nx_docs or `--help` first when unsure
+## Important Directories
+- `src/App.tsx` contains the main application shell and most top-level state.
+- `src/core` contains playlist loading, EPG, playback, storage, navigation, and recording logic.
+- `src/ui` contains the TV-style React screens and panels.
+- `src/vod`, `src/subtitles`, `src/timeshift`, `src/analytics`, `src/notifications`, and `src/profiles` hold feature-specific UI and state helpers.
+- `scripts` contains packaging and platform-sync helper scripts.
 
-## Scaffolding & Generators
+## Working Agreement
+- Prefer small, surgical changes in the existing files instead of broad refactors.
+- Match the existing TypeScript and React style; avoid adding comments unless they are necessary.
+- The repository currently has build scripts but no dedicated lint or automated test script in `package.json`.
+- For code changes, validate with the smallest relevant existing command, usually `npm run build`.
 
-- For scaffolding tasks (creating apps, libs, project structure, setup), ALWAYS invoke the `nx-generate` skill FIRST before exploring or calling MCP tools
+## Commands
+- Install dependencies: `npm install`
+- Start local development: `npm run dev`
+- Build the web app: `npm run build`
+- Preview the production build: `npm run preview`
+- Dry-run the package contents: `npm run publish:check`
+- Package desktop app: `npm run desktop:package`
+- Sync Capacitor platforms: `npm run cap:sync`
+- Package webOS build: `npm run webos:package`
 
-## When to use nx_docs
-
-- USE for: advanced config options, unfamiliar flags, migration guides, plugin configuration, edge cases
-- DON'T USE for: basic generator syntax (`nx g @nx/react:app`), standard commands, things you already know
-- The `nx-generate` skill handles generator discovery internally - don't call nx_docs just to look up generator syntax
-
-
-<!-- nx configuration end-->
+## Validation Notes
+- There is no existing `npm test` or `npm run lint` command at the time of writing.
+- Desktop, Android, iOS, and webOS packaging commands are heavier than the standard web build; only run them when the change touches those paths.
+- Keep generated artifacts and dependencies out of commits unless the task explicitly requires updating them.
