@@ -2014,7 +2014,7 @@ export function App() {
       const onLoadMore = !!active && active === loadMoreBtn;
 
       const currentMainContentStop = () => {
-        const escapedKey = CSS.escape(activeMainContentGroupKey);
+        const escapedKey = activeMainContentGroupKey.replace(/"/g, '\\"');
         return (
           rowStop(
             document.querySelector<HTMLElement>(
@@ -3432,7 +3432,7 @@ export function App() {
             suppressLogos={false}
             autoLoadOnScroll={(isMainSeriesScreen || isMainMoviesScreen) && isContentIconsView}
             listClassName={
-              showPlaylistManagerMainContentColumn
+              showPlaylistManagerMainContentColumn && !isContentIconsView
                 ? "channel-list-with-main-content"
                 : isMainSeriesScreen && isContentIconsView
                   ? "channel-list-series-grid"
