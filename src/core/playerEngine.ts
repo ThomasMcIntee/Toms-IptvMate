@@ -728,10 +728,9 @@ async function safePlay(video: HTMLVideoElement) {
 }
 
 export function initPlayerEngine() {
-  videoEl = document.getElementById("player-main") as HTMLVideoElement;
+  videoEl = document.getElementById("player-main") as HTMLVideoElement | null;
 
   if (videoEl) {
-    videoEl.autoplay = true;
     videoEl.playsInline = true;
     videoEl.setAttribute("playsinline", "true");
     videoEl.setAttribute("webkit-playsinline", "true");
@@ -776,7 +775,9 @@ export function stopPlayback() {
       }
     }
     videoEl.removeAttribute("src");
-    videoEl.load();
+    if (!isCapacitorRuntime()) {
+      videoEl.load();
+    }
   } catch {
     // Ignore media element reset errors while stopping playback.
   }
@@ -795,7 +796,28 @@ export function playUrl(
   // Always re-bind to the current DOM element in case React re-rendered and
   // replaced the element reference since the last initPlayerEngine() call.
   videoEl = document.getElementById("player-main") as HTMLVideoElement | null;
-  if (!videoEl) return;
+  const normalizedUrl = normalizeProblematicXtreamSourceUrl(normalizeStreamUrl(url));
+  contentType = inferContentTypeFromUrl(normalizedUrl, contentType);
+  const isLiveContent = contentType === "live";
+  const rootSourceUrlEarly = resolveRootSourceUrl(normalizedUrl);
+
+  const nativeBridgeReady = isNativePlayerAvailable();
+  const isVodContent = contentType === "movie" || contentType === "series";
+  // ExoPlayer has no AVI/WMV extractor — keep the WebView fallback chain for those.
+  const isExoUnsupportedVodContainer = isVodContent && /\.(avi|wmv)(?:[?#]|$)/i.test(rootSourceUrlEarly);
+  const isNativeContent = isLiveContent || (isVodContent && !isExoUnsupportedVodContainer);
+  const canUseNativeExo =
+    isCapacitorRuntime() &&
+    isNativeContent &&
+    nativeBridgeReady &&
+    !hasTriedNativeFallback &&
+    !isTranscodeBootstrapUrl(normalizedUrl) &&
+    !isTranscodeSessionUrl(normalizedUrl);
+
+  // Fire TV native ExoPlayer does not need a WebView <video>. Creating one on
+  // the main menu starts MediaTek codecs and LMK-kills the Stick.
+  if (!videoEl && !canUseNativeExo) return;
+
   const token = ++playRequestToken;
   const globalAttemptId = nextGlobalPlayAttemptId();
   const isStaleRequest = () => token !== playRequestToken || !isCurrentGlobalPlayAttempt(globalAttemptId);
@@ -806,7 +828,6 @@ export function playUrl(
     hasPlaybackStarted = true;
   };
 
-  videoEl.addEventListener("playing", markPlaybackStarted, { once: true });
   const ensureAudibleOnPlaying = () => {
     if (!videoEl || isStaleRequest()) return;
 
@@ -835,19 +856,13 @@ export function playUrl(
 
     tryUnmute();
   };
-  videoEl.addEventListener("playing", ensureAudibleOnPlaying);
-  videoEl.muted = false;
-  videoEl.onerror = null;
-  const normalizedUrl = normalizeProblematicXtreamSourceUrl(normalizeStreamUrl(url));
-  contentType = inferContentTypeFromUrl(normalizedUrl, contentType);
-  const isLiveContent = contentType === "live";
-  const rootSourceUrlEarly = resolveRootSourceUrl(normalizedUrl);
 
-  const nativeBridgeReady = isNativePlayerAvailable();
-  const isVodContent = contentType === "movie" || contentType === "series";
-  // ExoPlayer has no AVI/WMV extractor — keep the WebView fallback chain for those.
-  const isExoUnsupportedVodContainer = isVodContent && /\.(avi|wmv)(?:[?#]|$)/i.test(rootSourceUrlEarly);
-  const isNativeContent = isLiveContent || (isVodContent && !isExoUnsupportedVodContainer);
+  if (videoEl) {
+    videoEl.addEventListener("playing", markPlaybackStarted, { once: true });
+    videoEl.addEventListener("playing", ensureAudibleOnPlaying);
+    videoEl.muted = false;
+    videoEl.onerror = null;
+  }
 
   if (isCapacitorRuntime() && isNativeContent && !hasTriedNativeFallback) {
     console.log(`[playUrl-native-exo-check] bridge=${nativeBridgeReady} cap=${isCapacitorRuntime()} type=${contentType}`);
@@ -857,14 +872,7 @@ export function playUrl(
   // for live, and starts movies/series far faster than WebView progressive
   // probing (which also cannot play MKV at all). Live native failure must not
   // fall back to WebView — that path ANRs Fire TV. VOD may still fall back.
-  if (
-    isCapacitorRuntime() &&
-    isNativeContent &&
-    nativeBridgeReady &&
-    !hasTriedNativeFallback &&
-    !isTranscodeBootstrapUrl(normalizedUrl) &&
-    !isTranscodeSessionUrl(normalizedUrl)
-  ) {
+  if (canUseNativeExo) {
     if (hls) {
       try {
         hls.stopLoad();
@@ -890,7 +898,6 @@ export function playUrl(
           }
         }
         videoEl.removeAttribute("src");
-        videoEl.load();
       } catch {
         // Ignore media element reset errors.
       }
@@ -937,6 +944,8 @@ export function playUrl(
       console.warn("[playUrl-native-exo] Native bridge unavailable, falling back to WebView player");
     }
   }
+
+  if (!videoEl) return;
 
   const allowLiveVideoOnlyFallback = true;
   const isRequestedTranscode =

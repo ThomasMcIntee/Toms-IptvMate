@@ -133,14 +133,12 @@ function isBackKeyEvent(event: KeyboardEvent): boolean {
   return keyCode === 4 || keyCode === 8 || keyCode === 27 || keyCode === 461 || keyCode === 10009;
 }
 
-export function App() {
+export function App({ bootAction = null }: { bootAction?: string | null } = {}) {
   useEffect(() => {
     const debugLog = (window as any).webosDebugLog;
     if (debugLog) debugLog('React App mounted!');
     if (!isCapacitorRuntime()) {
       loadRecordings();
-    } else {
-      window.setTimeout(() => loadRecordings(), 5000);
     }
   }, []);
 
@@ -153,7 +151,7 @@ export function App() {
   const [playerWarning, setPlayerWarning] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<string | null>(null);
   const [showNowNext, setShowNowNext] = useState(false);
-  const [showOpeningScreen, setShowOpeningScreen] = useState(true);
+  const [showOpeningScreen, setShowOpeningScreen] = useState(!bootAction);
   const [categoryRefreshTick, setCategoryRefreshTick] = useState(0);
   const [channelUpdateTick, setChannelUpdateTick] = useState(0);  // Track channel data changes separately
   const [favoritesRefreshTick, setFavoritesRefreshTick] = useState(0);
@@ -163,6 +161,7 @@ export function App() {
   const [hasSelectedLiveChannel, setHasSelectedLiveChannel] = useState(false);
   const [isFullscreenActive, setIsFullscreenActive] = useState(false);
   const [isLiveFullscreenRequested, setIsLiveFullscreenRequested] = useState(false);
+  const [playerUiTick, setPlayerUiTick] = useState(0);
   const [isSeriesPickerVisible, setIsSeriesPickerVisible] = useState(false);
   const [seriesPickerLoading, setSeriesPickerLoading] = useState(false);
   const [seriesPickerError, setSeriesPickerError] = useState<string | null>(null);
@@ -221,7 +220,11 @@ export function App() {
   const isLivePreviewFullscreen =
     isEffectiveLiveFullscreen && contentPage === "live" && hasSelectedLiveChannel && !!currentChannel;
   const forceLivePreviewLayout = !showOpeningScreen && contentPage === "live" && !hasSelectedLiveChannel;
-  const shouldRenderMainVideo = !isPlaylistInputPanelOpen && !isEpgSearchPanelOpen;
+  const shouldRenderMainVideo =
+    !showOpeningScreen &&
+    !isPlaylistInputPanelOpen &&
+    !isEpgSearchPanelOpen &&
+    (!!currentChannel || hasSelectedLiveChannel);
   const useLivePreviewShell = shouldRenderMainVideo && contentPage === "live";
   const isLiveChannelPlaying =
     !showOpeningScreen &&
@@ -257,6 +260,16 @@ export function App() {
     // leaving the app. webOS native exit should not preempt menu navigation.
     document.body.dataset.nativeBackExit = "blocked";
   }, [shouldShowOpeningMenu, activePanel]);
+
+  useEffect(() => {
+    if (
+      activePanel === "recordings" ||
+      activePanel === "recordingPlayback" ||
+      activePanel === "recordingStorage"
+    ) {
+      loadRecordings();
+    }
+  }, [activePanel]);
 
   useEffect(() => {
     const refreshPlaylistsPresence = () => {
@@ -1198,20 +1211,10 @@ export function App() {
       // Don't trigger if we're on the opening screen
       if (showOpeningScreen) return;
       
-      // For live TV, use the CSS-based fullscreen AND native fullscreen on video
+      // For live TV, use the CSS-based fullscreen so the custom control bar stays visible.
       if (contentPage === "live") {
         setIsLiveFullscreenRequested(true);
         setShowLiveMenu(false);
-        
-        // Also trigger native fullscreen on the video element
-        const video = document.querySelector('video');
-        if (video) {
-          if (video.requestFullscreen) {
-            void video.requestFullscreen().catch(() => {});
-          } else if ((video as any).webkitRequestFullscreen) {
-            void (video as any).webkitRequestFullscreen().catch(() => {});
-          }
-        }
         return;
       }
       
@@ -1291,7 +1294,9 @@ export function App() {
     window.addEventListener("resize", applyPinnedPreviewPosition);
 
     if (isCapacitorRuntime()) {
-      window.requestAnimationFrame(() => syncNativePlayerBounds(true));
+      if (hasSelectedLiveChannel && currentChannel) {
+        window.requestAnimationFrame(() => syncNativePlayerBounds(true));
+      }
       return () => window.removeEventListener("resize", applyPinnedPreviewPosition);
     }
 
@@ -1311,10 +1316,10 @@ export function App() {
   }, [showOpeningScreen, contentPage, currentChannel?.id, isLivePreviewFullscreen]);
 
   useEffect(() => {
-    if (!isCapacitorRuntime()) return;
+    if (!isCapacitorRuntime() || showOpeningScreen || !currentChannel) return;
     const frame = window.requestAnimationFrame(() => syncNativePlayerBounds(true));
     return () => window.cancelAnimationFrame(frame);
-  }, [showLiveMenu, isLivePreviewFullscreen, contentPage, hasSelectedLiveChannel, currentChannel?.id]);
+  }, [showOpeningScreen, showLiveMenu, isLivePreviewFullscreen, contentPage, hasSelectedLiveChannel, currentChannel?.id]);
 
   useEffect(() => {
     // Re-bind to the current video element after major UI mode changes.
@@ -1646,6 +1651,7 @@ export function App() {
       }
 
       setPlayerStatus(null);
+      setPlayerUiTick((tick) => tick + 1);
 
       // Native ExoPlayer on Capacitor is fullscreen — bounds sync not needed.
     };
@@ -2320,8 +2326,24 @@ export function App() {
       return;
     }
 
+    const isLiveSelectionEarly = matchesContentMode(ch, "tv");
+    const requestId = ch?.id ? String(ch.id) : null;
+    const sameLiveChannel =
+      isLiveSelectionEarly &&
+      !!requestId &&
+      String(currentChannelRef.current?.id || "") === requestId;
+
+    // First click previews. Second click on the same channel goes fullscreen.
+    if (sameLiveChannel) {
+      if (!isEffectiveLiveFullscreen) {
+        setIsLiveFullscreenRequested(true);
+        setShowLiveMenu(false);
+      }
+      return;
+    }
+
     let capacitorMemoryTrimmed = false;
-    if (isCapacitorRuntime() && matchesContentMode(ch, "tv")) {
+    if (isCapacitorRuntime() && isLiveSelectionEarly) {
       trimCapacitorChannelMemoryForLive();
       const groupName = (ch?.group && String(ch.group).trim()) || "Uncategorized";
       const beforeCount = getAllChannels().length;
@@ -2344,7 +2366,6 @@ export function App() {
 
     // Guard against rapid duplicate tune events for the same stream.
     const now = Date.now();
-    const requestId = ch?.id ? String(ch.id) : null;
     const requestUrl = normalizePlayableChannelUrl(ch);
     const isDuplicateRapidRequest =
       lastPlayRequestRef.current.id === requestId &&
@@ -2352,6 +2373,10 @@ export function App() {
       now - lastPlayRequestRef.current.at < 1500;
 
     if (isDuplicateRapidRequest) {
+      if (isLiveSelectionEarly && !isEffectiveLiveFullscreen) {
+        setIsLiveFullscreenRequested(true);
+        setShowLiveMenu(false);
+      }
       return;
     }
 
@@ -2456,6 +2481,28 @@ export function App() {
     setShowOpeningScreen(false);
   }
 
+  function refreshPlayerUi() {
+    setPlayerUiTick((tick) => tick + 1);
+  }
+
+  function isPlaybackPaused() {
+    void playerUiTick;
+    if (document.body.classList.contains("native-exo-active")) {
+      return isNativePlaybackPaused();
+    }
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    return !player || player.paused;
+  }
+
+  function isPlaybackMuted() {
+    void playerUiTick;
+    if (document.body.classList.contains("native-exo-active")) {
+      return isNativePlaybackMuted();
+    }
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    return !!player && (player.muted || player.volume === 0);
+  }
+
   function togglePlayPause() {
     // While the native ExoPlayer overlay renders video (Fire TV/Android), the
     // WebView video element is empty — route play/pause to the native bridge.
@@ -2465,6 +2512,7 @@ export function App() {
       } else {
         pauseNativePlayback();
       }
+      refreshPlayerUi();
       return;
     }
 
@@ -2473,15 +2521,18 @@ export function App() {
 
     if (player.paused) {
       void player.play();
+      refreshPlayerUi();
       return;
     }
 
     player.pause();
+    refreshPlayerUi();
   }
 
   function toggleMute() {
     if (document.body.classList.contains("native-exo-active")) {
       setNativeMuted(!isNativePlaybackMuted());
+      refreshPlayerUi();
       return;
     }
 
@@ -2491,10 +2542,12 @@ export function App() {
     if (player.muted || player.volume === 0) {
       player.muted = false;
       if (player.volume === 0) player.volume = 1;
+      refreshPlayerUi();
       return;
     }
 
     player.muted = true;
+    refreshPlayerUi();
   }
 
   function toggleFullscreen() {
@@ -3478,6 +3531,17 @@ export function App() {
     setPlayerStatus(null);
   }
 
+  useEffect(() => {
+    if (!bootAction) return;
+    if (bootAction === "live") {
+      void startLiveTV();
+      return;
+    }
+    openPanelFromMenu(bootAction);
+    // Apply the lightweight Fire TV menu choice once after App loads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div className="app-root">
       {shouldRenderMainVideo && useLivePreviewShell && (
@@ -3485,9 +3549,8 @@ export function App() {
             <video
               id="player-main"
               className={`player-main player-main-shell-video${currentChannel ? " player-main-native-controls" : ""}`}
-              autoPlay
               playsInline
-              controls={!!currentChannel}
+              controls={false}
               disablePictureInPicture={true}
               disableRemotePlayback={true}
               tabIndex={isCapacitorRuntime() ? -1 : 0}
@@ -3499,11 +3562,25 @@ export function App() {
 
         </div>
       )}
+      {shouldRenderMainVideo && useLivePreviewShell && currentChannel && (
+        <div
+          className={`player-controls-overlay${isLivePreviewFullscreen ? " player-controls-live-fullscreen" : " player-controls-live-preview"}`}
+        >
+          <button type="button" className="player-control-btn" onClick={togglePlayPause}>
+            {isPlaybackPaused() ? "Play" : "Pause"}
+          </button>
+          <button type="button" className="player-control-btn" onClick={toggleMute}>
+            {isPlaybackMuted() ? "Unmute" : "Mute"}
+          </button>
+          <button type="button" className="player-control-btn" onClick={toggleFullscreen}>
+            {isLivePreviewFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+          </button>
+        </div>
+      )}
       {shouldRenderMainVideo && !useLivePreviewShell && (
         <video
           id="player-main"
           className={`player-main ${shouldShowOpeningMenu && !currentChannel ? "player-main-idle" : showContentPreviewWindow ? "player-main-preview" : contentPage === "live" ? (isEffectiveLiveFullscreen ? "player-main-live" : "player-main-compact") : currentChannel ? "player-main-live" : "player-main-compact"}${forceLivePreviewLayout ? " player-main-force-preview" : ""}`}
-          autoPlay
           playsInline
           controls={!!currentChannel && !forceLivePreviewLayout}
           disablePictureInPicture={contentPage === "live"}

@@ -52,7 +52,8 @@ public class MainActivity extends BridgeActivity {
         System.setProperty("http.agent", APP_USER_AGENT);
 
         
-        WebView.setWebContentsDebuggingEnabled(true);
+        // Chrome remote debugging keeps a socket and metrics process alive.
+        WebView.setWebContentsDebuggingEnabled(false);
         disableSSLVerification();
     }
 
@@ -94,9 +95,44 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
+    public void onPause() {
+        pauseWebView();
+        super.onPause();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        resumeWebView();
+    }
+
+    @Override
     public void onStop() {
         unregisterNativePlayerReceiver();
         super.onStop();
+    }
+
+    private WebView getActivityWebView() {
+        try {
+            if (getBridge() == null) return null;
+            return getBridge().getWebView();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private void pauseWebView() {
+        WebView webView = getActivityWebView();
+        if (webView != null) {
+            webView.onPause();
+        }
+    }
+
+    private void resumeWebView() {
+        WebView webView = getActivityWebView();
+        if (webView != null) {
+            webView.onResume();
+        }
     }
 
     private void registerNativePlayerReceiver() {
@@ -150,16 +186,18 @@ public class MainActivity extends BridgeActivity {
         // NONE during boot uses less GPU memory on Fire TV; ExoPlayerManager switches
         // to hardware when native playback starts.
         webView.setLayerType(View.LAYER_TYPE_NONE, null);
-        webView.setBackgroundColor(Color.TRANSPARENT);
+        webView.setBackgroundColor(Color.BLACK);
 
         WebSettings settings = webView.getSettings();
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        settings.setOffscreenPreRaster(false);
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
         settings.setAllowUniversalAccessFromFileURLs(true);
         settings.setAllowFileAccessFromFileURLs(true);
-        settings.setMediaPlaybackRequiresUserGesture(false);
+        settings.setMediaPlaybackRequiresUserGesture(true);
         settings.setUserAgentString(APP_USER_AGENT);
 
         if (webViewConfigured) {

@@ -1,5 +1,6 @@
 export type PlaylistType = "m3u" | "xtream" | "stalker";
 
+import { isCapacitorRuntime } from "./player/platformDetection";
 import { isWebOsDbAvailable, webosDbGet, webosDbSet } from "./webosStorage";
 
 export type PlaylistEntry = {
@@ -264,6 +265,7 @@ async function requestPlaylistsFromOriginPopup(origin: string): Promise<Playlist
 function tryImportPlaylistsFromDevOrigins() {
   if (crossOriginImportInFlight) return;
   if (typeof window === "undefined") return;
+  if (isCapacitorRuntime()) return;
 
   const currentOrigin = String(window.location?.origin || "");
   if (!isLocalDevOrigin(currentOrigin)) return;
@@ -325,6 +327,7 @@ function tryImportPlaylistsFromDevOrigins() {
 export async function forceImportPlaylistsFromDevOrigins(): Promise<number> {
   if (crossOriginImportInFlight) return 0;
   if (typeof window === "undefined") return 0;
+  if (isCapacitorRuntime()) return 0;
 
   const currentOrigin = String(window.location?.origin || "");
   if (!isLocalDevOrigin(currentOrigin)) return 0;
@@ -1218,13 +1221,16 @@ export function loadPlaylists(): PlaylistEntry[] {
   tryImportPlaylistsFromDevOrigins();
 
   // One-time compatibility recovery for installs where playlists were saved
-  // under provider/version-specific storage keys.
+  // under provider/version-specific storage keys. Skip on Fire TV — scanning
+  // every localStorage key JSON-parses the channel cache and never goes idle.
   if (!storageKeyRecoveryAttempted) {
     storageKeyRecoveryAttempted = true;
-    const recovered = recoverPlaylistsFromAnyStorageKey();
-    if (recovered.length > 0) {
-      safeSetPlaylists(recovered, false);
-      return recovered;
+    if (!isCapacitorRuntime()) {
+      const recovered = recoverPlaylistsFromAnyStorageKey();
+      if (recovered.length > 0) {
+        safeSetPlaylists(recovered, false);
+        return recovered;
+      }
     }
   }
 

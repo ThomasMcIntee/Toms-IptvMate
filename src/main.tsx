@@ -1,5 +1,19 @@
 import "./styles/main.css";
 
+function isFireTvLiteRuntime() {
+  if (typeof window === "undefined") return false;
+  const host = window.location.hostname;
+  return (
+    /Android/i.test(navigator.userAgent) ||
+    host === "app" ||
+    (host === "localhost" && !window.location.port)
+  );
+}
+
+if (isFireTvLiteRuntime()) {
+  document.documentElement.classList.add("firetv-lite");
+}
+
 function showBootShell(root: HTMLElement) {
   root.replaceChildren();
   const shell = document.createElement("div");

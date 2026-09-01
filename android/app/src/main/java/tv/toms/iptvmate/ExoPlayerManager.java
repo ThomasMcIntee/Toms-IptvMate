@@ -43,6 +43,8 @@ public class ExoPlayerManager {
     private int boundTop;
     private int boundWidth;
     private int boundHeight;
+    private int cssViewportWidth;
+    private int cssViewportHeight;
     private boolean hasBounds;
     private boolean playIsLive = true;
 
@@ -91,6 +93,8 @@ public class ExoPlayerManager {
             boundTop = Math.max(0, top);
             boundWidth = Math.max(1, width);
             boundHeight = Math.max(1, height);
+            this.cssViewportWidth = Math.max(0, cssViewportWidth);
+            this.cssViewportHeight = Math.max(0, cssViewportHeight);
             hasBounds = boundWidth >= 2 && boundHeight >= 2;
             Log.i(TAG, "setBounds css=" + left + "," + top + " " + width + "x" + height
                 + " viewport=" + cssViewportWidth + "x" + cssViewportHeight);
@@ -116,6 +120,7 @@ public class ExoPlayerManager {
                     overlay.bringToFront();
                 }
                 applyBoundsOnMain();
+                setWebViewOpaque(false);
                 silenceWebViewMedia();
                 playBound(trimmed, isLive);
                 requestJsBoundsOnMain();
@@ -169,6 +174,12 @@ public class ExoPlayerManager {
         }
     }
 
+    private void setWebViewOpaque(boolean opaque) {
+        WebView webView = activity.getBridge() != null ? activity.getBridge().getWebView() : null;
+        if (webView == null) return;
+        webView.setBackgroundColor(opaque ? Color.BLACK : Color.TRANSPARENT);
+    }
+
     private void hideNativeSurface() {
         if (overlay != null) {
             overlay.setVisibility(View.GONE);
@@ -185,6 +196,7 @@ public class ExoPlayerManager {
             if (overlay != null) {
                 overlay.setVisibility(View.GONE);
             }
+            setWebViewOpaque(true);
             jsNotifier.evaluateJs(
                 "document.body.classList.remove('native-exo-active');" +
                 "document.body.classList.remove('native-exo-vod');"
@@ -199,6 +211,7 @@ public class ExoPlayerManager {
             if (overlay != null) {
                 overlay.setVisibility(View.GONE);
             }
+            setWebViewOpaque(true);
             jsNotifier.evaluateJs(
                 "document.body.classList.remove('native-exo-active');" +
                 "document.body.classList.remove('native-exo-vod');"
@@ -231,7 +244,10 @@ public class ExoPlayerManager {
         String escaped = message != null
             ? message.replace("\\", "\\\\").replace("'", "\\'")
             : "Native playback failed";
-        mainHandler.post(this::hideNativeSurface);
+        mainHandler.post(() -> {
+            hideNativeSurface();
+            setWebViewOpaque(true);
+        });
         jsNotifier.evaluateJs(
             "document.body.classList.remove('native-exo-active');" +
             "document.body.classList.remove('native-exo-vod');" +
@@ -323,19 +339,25 @@ public class ExoPlayerManager {
             ? webView.getHeight()
             : (parent != null ? parent.getHeight() : 0);
 
-        boolean jsLooksFullscreen = hasBounds
-            && hostWidth > 0
-            && boundWidth >= (int) (hostWidth * 0.85f)
-            && boundHeight >= (int) (hostHeight * 0.70f);
+        boolean jsLooksFullscreen = hasBounds && (
+            cssViewportWidth > 0 && cssViewportHeight > 0
+                ? boundWidth >= (int) (cssViewportWidth * 0.85f)
+                    && boundHeight >= (int) (cssViewportHeight * 0.70f)
+                : hostWidth > 0
+                    && boundWidth >= (int) (hostWidth * 0.85f)
+                    && boundHeight >= (int) (hostHeight * 0.70f)
+        );
+
+        int controlStrip = controlStripPx(hostHeight);
 
         if (!playIsLive || jsLooksFullscreen) {
             lp.width = ViewGroup.LayoutParams.MATCH_PARENT;
-            lp.height = ViewGroup.LayoutParams.MATCH_PARENT;
+            lp.height = Math.max(1, hostHeight > 0 ? hostHeight - controlStrip : ViewGroup.LayoutParams.MATCH_PARENT);
             lp.leftMargin = 0;
             lp.topMargin = 0;
             lp.rightMargin = 0;
             lp.bottomMargin = 0;
-            Log.i(TAG, "applyBounds fullscreen isLive=" + playIsLive);
+            Log.i(TAG, "applyBounds fullscreen isLive=" + playIsLive + " strip=" + controlStrip);
         } else if (hostWidth >= 2 && hostHeight >= 2) {
             float density = activity.getResources().getDisplayMetrics().density;
             int margin = Math.max(12, Math.round(16 * density));
@@ -346,13 +368,14 @@ public class ExoPlayerManager {
                 previewHeight = Math.round(previewWidth * 9f / 16f);
             }
             lp.width = previewWidth;
-            lp.height = previewHeight;
+            lp.height = Math.max(120, previewHeight - controlStrip);
             lp.leftMargin = Math.max(0, hostWidth - previewWidth - margin);
             lp.topMargin = margin;
             lp.rightMargin = 0;
             lp.bottomMargin = 0;
             Log.i(TAG, "applyBounds live-preview " + lp.leftMargin + "," + lp.topMargin
-                + " " + previewWidth + "x" + previewHeight + " host=" + hostWidth + "x" + hostHeight);
+                + " " + previewWidth + "x" + lp.height + " host=" + hostWidth + "x" + hostHeight
+                + " strip=" + controlStrip);
         } else if (hasBounds) {
             lp.width = boundWidth;
             lp.height = boundHeight;
@@ -369,6 +392,15 @@ public class ExoPlayerManager {
         }
         overlay.setLayoutParams(lp);
         overlay.requestLayout();
+    }
+
+    private int controlStripPx(int hostHeight) {
+        final int cssControls = 48;
+        if (cssViewportHeight > 0 && hostHeight > 0) {
+            return Math.max(36, Math.round(cssControls * (hostHeight / (float) cssViewportHeight)));
+        }
+        float density = activity.getResources().getDisplayMetrics().density;
+        return Math.max(36, Math.round(cssControls * density));
     }
 
     private void configureSurfaceZOrderOnMain() {

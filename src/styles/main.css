@@ -63,6 +63,7 @@ body.is-capacitor {
   --live-preview-right: 16px;
   --live-preview-width: 38vw;
   --live-preview-height: 21.375vw;
+  --live-preview-controls-height: 48px;
 }
 
 body.is-capacitor .player-main-compact,
@@ -311,6 +312,7 @@ body.theme-light .app-login-input {
   --live-preview-top: 20px;
   --live-preview-width: 720px;
   --live-preview-height: 405px;
+  --live-preview-controls-height: 48px;
 }
 
 .app-root {
@@ -523,9 +525,13 @@ body.theme-light .app-login-input {
 .player-controls-live-preview {
   left: auto;
   right: var(--live-preview-right);
-  top: calc(var(--live-preview-top) + var(--live-preview-height) + 12px);
+  top: calc(var(--live-preview-top) + var(--live-preview-height) - var(--live-preview-controls-height));
+  width: var(--live-preview-width);
+  max-width: var(--live-preview-width);
   bottom: auto;
   transform: none;
+  z-index: 90;
+  border-radius: 0 0 16px 16px;
 }
 
 .player-controls-live-fullscreen {
@@ -538,7 +544,7 @@ body.theme-light .app-login-input {
 
 @media (max-width: 1280px) {
   .player-controls-live-preview {
-    top: calc(var(--live-preview-top) + var(--live-preview-height) + 12px);
+    top: calc(var(--live-preview-top) + var(--live-preview-height) - var(--live-preview-controls-height));
   }
 }
 
@@ -549,7 +555,8 @@ body.theme-light .app-login-input {
   color: #fff;
   font: inherit;
   font-size: 13px;
-  padding: 7px 12px;
+  min-height: 36px;
+  padding: 7px 14px;
   cursor: pointer;
 }
 
@@ -2532,4 +2539,19 @@ body.theme-light .recording-setup-btn {
   .opening-menu {
     grid-template-columns: 1fr;
   }
+}
+
+html.firetv-lite .opening-glow {
+  display: none !important;
+}
+
+html.firetv-lite .opening-screen {
+  background: #050c18;
+}
+
+html.firetv-lite .opening-card {
+  background: #0a1628;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }

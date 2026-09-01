@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { verifyIndexAssets } = require("./sync-android-web.cjs");
 
 const root = process.cwd();
 const distDir = path.join(root, "dist");
@@ -36,6 +37,7 @@ function syncWebOsBundle() {
   ensureExists(distDir, "dist directory");
   ensureExists(distAssetsDir, "dist assets directory");
   ensureExists(webosDir, "webos directory");
+  verifyIndexAssets(distDir, "dist");
 
   copyDirContents(distAssetsDir, webosAssetsDir);
 

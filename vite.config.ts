@@ -1277,9 +1277,32 @@ export default defineConfig({
         server.middlewares.use(streamRelayMiddleware);
         server.middlewares.use(transcodeMiddleware);
       }
+    },
+    {
+      name: "iptvmate-verify-index-assets",
+      apply: "build",
+      closeBundle: {
+        sequential: true,
+        order: "post",
+        handler() {
+          const distDir = path.join(process.cwd(), "dist");
+          const indexPath = path.join(distDir, "index.html");
+          if (!fs.existsSync(indexPath)) {
+            throw new Error("dist/index.html missing after build");
+          }
+
+          const html = fs.readFileSync(indexPath, "utf8");
+          const refs = [...html.matchAll(/(?:src|href)=["'](?:\.\/)?([^"']+\.(?:js|css))["']/gi)].map((match) => match[1]);
+          const missing = refs.filter((relativePath) => !fs.existsSync(path.join(distDir, relativePath)));
+          if (missing.length > 0) {
+            throw new Error(`dist/index.html references missing files: ${missing.join(", ")}`);
+          }
+        }
+      }
     }
   ],
   build: {
+    emptyOutDir: true,
     outDir: "dist"
   },
   server: {
