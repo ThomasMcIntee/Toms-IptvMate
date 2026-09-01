@@ -9,6 +9,8 @@ import { initNavigation } from "./core/navigation";
 import { normalizeRemoteNavKey } from "./core/remoteKeys";
 import { initPlayerEngine, playUrl, stopPlayback } from "./core/playerEngine";
 import { GroupList } from "./ui/GroupList";
+import { MainCategoryList } from "./ui/MainCategoryList";
+import { ALL_MAIN_CATEGORIES, groupMatchesMainCategory } from "./ui/mainCategories";
 import { sortChannelsByName, type ItemSortDirection } from "./ui/groupSorting";
 import {
   getAllChannels,
@@ -134,6 +136,7 @@ export function App() {
   const [channelUpdateTick, setChannelUpdateTick] = useState(0);  // Track channel data changes separately
   const [favoritesRefreshTick, setFavoritesRefreshTick] = useState(0);
   const [activeGroup, setActiveGroup] = useState(ROOT_GROUP);
+  const [activeMainCategory, setActiveMainCategory] = useState(ALL_MAIN_CATEGORIES);
   const [contentMode, setContentMode] = useState<"tv" | "movies" | "series">("tv");
   const [showLiveMenu, setShowLiveMenu] = useState(true);
   const [hasSelectedLiveChannel, setHasSelectedLiveChannel] = useState(false);
@@ -366,6 +369,12 @@ export function App() {
       isLiveContentPage || isMainMoviesScreen || (isMainSeriesScreen && !isPlaylistManagerPage);
     return useVisibleOnly ? visibleGroups : groups;
   }, [isLiveContentPage, isMainMoviesScreen, isMainSeriesScreen, isPlaylistManagerPage, visibleGroups, groups]);
+  const groupsForListFiltered = useMemo(() => {
+    if (!isPlaylistManagerPage || activeMainCategory === ALL_MAIN_CATEGORIES) return groupsForList;
+    return groupsForList.filter(
+      (group) => group === ROOT_GROUP || groupMatchesMainCategory(group, activeMainCategory)
+    );
+  }, [groupsForList, isPlaylistManagerPage, activeMainCategory]);
   const groupCounts = useMemo(() => {
     const counts: Record<string, number> = { [ROOT_GROUP]: 0 };
 
@@ -567,10 +576,20 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!groupsForList.includes(activeGroup)) {
-      setActiveGroup(groupsForList[0] || ROOT_GROUP);
+    if (!groupsForListFiltered.includes(activeGroup)) {
+      setActiveGroup(groupsForListFiltered[0] || ROOT_GROUP);
     }
-  }, [groupsForList, activeGroup]);
+  }, [groupsForListFiltered, activeGroup]);
+
+  useEffect(() => {
+    if (activeMainCategory === ALL_MAIN_CATEGORIES) return;
+    const stillAvailable = groupsForList.some((group) =>
+      group !== ROOT_GROUP && groupMatchesMainCategory(group, activeMainCategory)
+    );
+    if (!stillAvailable) {
+      setActiveMainCategory(ALL_MAIN_CATEGORIES);
+    }
+  }, [groupsForList, activeMainCategory]);
 
   useEffect(() => {
     if (isLiveContentPage && !isGroupVisible(activeGroup) && activeGroup !== ROOT_GROUP) {
@@ -3155,8 +3174,17 @@ export function App() {
               </button>
             </div>
           )}
+          {isPlaylistManagerPage && (
+            <MainCategoryList
+              groups={groupsForList}
+              groupCounts={groupCounts}
+              activeCategory={activeMainCategory}
+              onSelect={(category) => setActiveMainCategory(category)}
+              excludedGroups={[ROOT_GROUP]}
+            />
+          )}
           <GroupList
-            groups={groupsForList}
+            groups={groupsForListFiltered}
             groupCounts={groupCounts}
             activeGroup={activeGroup}
             onSelect={(group) => {
@@ -3168,11 +3196,17 @@ export function App() {
               setCategoryRefreshTick((tick) => tick + 1);
             }}
             showVisibilityControls={isPlaylistManagerPage}
-            className={isMainMoviesScreen ? "group-list-movies-right" : ""}
+            className={
+              isMainMoviesScreen
+                ? "group-list-movies-right"
+                : isPlaylistManagerPage
+                  ? "group-list-with-main-categories"
+                  : ""
+            }
             onSetAllVisible={
               isPlaylistManagerPage
                 ? (visible) => {
-                    setGroupsVisible(groups, visible);
+                    setGroupsVisible(groupsForListFiltered.filter((group) => group !== ROOT_GROUP), visible);
                     if (!visible) {
                       setActiveGroup(ROOT_GROUP);
                     }
@@ -3207,11 +3241,16 @@ export function App() {
             suppressLogos={false}
             autoLoadOnScroll={(isMainSeriesScreen || isMainMoviesScreen) && isContentIconsView}
             listClassName={
-              isMainSeriesScreen && isContentIconsView
-                ? "channel-list-series-grid"
-                : isMainMoviesScreen && isContentIconsView
-                  ? "channel-list-movies-grid"
-                  : ""
+              [
+                isMainSeriesScreen && isContentIconsView
+                  ? "channel-list-series-grid"
+                  : isMainMoviesScreen && isContentIconsView
+                    ? "channel-list-movies-grid"
+                    : "",
+                isPlaylistManagerPage ? "channel-list-with-main-categories" : ""
+              ]
+                .filter(Boolean)
+                .join(" ")
             }
           />
         </>

@@ -2459,3 +2459,91 @@ body.theme-light .recording-setup-btn {
     grid-template-columns: 1fr;
   }
 }
+
+/* Main category column (Playlist Manager) */
+.main-category-list {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 300px;
+  background: rgba(0, 0, 0, 0.8);
+  overflow-y: auto;
+  padding-top: 10px;
+  z-index: 1;
+}
+
+.main-category-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.main-category-list-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.main-category-item {
+  padding: 10px 14px;
+  font-size: 15px;
+  color: #ddd;
+}
+
+.main-category-item.active {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.main-category-select-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+
+.main-category-select-btn:focus {
+  outline: 2px solid #7ec5ff;
+  outline-offset: 2px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.main-category-item.active .group-item-count {
+  color: #fff;
+}
+
+.group-list.group-list-with-main-categories {
+  left: 300px;
+}
+
+.channel-list.channel-list-with-main-categories {
+  left: 660px;
+}
+
+.channel-list.channel-list-icons.channel-list-with-main-categories,
+.channel-list.channel-list-icons.channel-list-series-grid.channel-list-with-main-categories,
+.channel-list.channel-list-icons.channel-list-movies-grid.channel-list-with-main-categories {
+  left: 660px;
+  width: auto;
+}
+
+body.theme-light .main-category-list {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(17, 24, 39, 0.18);
+}
+
+body.theme-light .main-category-item.active {
+  background: rgba(59, 130, 246, 0.2);
+}
