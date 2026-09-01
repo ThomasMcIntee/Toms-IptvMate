@@ -485,7 +485,7 @@ export function App() {
     return counts;
   }, [contentChannels]);
 
-  const showPlaylistManagerMainContentColumn = isPlaylistManagerPage && mainContentGroups.length > 1;
+  const showPlaylistManagerMainContentColumn = isPlaylistManagerPage;
   const channelsForScope = useMemo(() => {
     return isLiveContentPage ? visibleChannels : contentChannels;
   }, [isLiveContentPage, visibleChannels, contentChannels]);
