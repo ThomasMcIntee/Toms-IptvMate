@@ -2014,10 +2014,7 @@ export function App() {
       const onLoadMore = !!active && active === loadMoreBtn;
 
       const currentMainContentStop = () => {
-        const escapedKey =
-          typeof CSS !== "undefined" && typeof CSS.escape === "function"
-            ? CSS.escape(activeMainContentGroupKey)
-            : activeMainContentGroupKey.replace(/"/g, '\\"');
+        const escapedKey = CSS.escape(activeMainContentGroupKey);
         return (
           rowStop(
             document.querySelector<HTMLElement>(
@@ -3385,10 +3382,13 @@ export function App() {
               setCategoryRefreshTick((tick) => tick + 1);
             }}
             showVisibilityControls={isPlaylistManagerPage}
-            className={[
-              showPlaylistManagerMainContentColumn ? "group-list-with-main-content" : "",
-              isMainMoviesScreen ? "group-list-movies-right" : ""
-            ].filter(Boolean).join(" ")}
+            className={
+              showPlaylistManagerMainContentColumn
+                ? "group-list-with-main-content"
+                : isMainMoviesScreen
+                  ? "group-list-movies-right"
+                  : ""
+            }
             formatGroupLabel={
               showPlaylistManagerMainContentColumn && activeMainContentGroupKey !== MAIN_CONTENT_ALL_KEY
                 ? (group) => formatGroupNameWithinMainContent(group, activeMainContentGroupKey)
@@ -3432,14 +3432,13 @@ export function App() {
             suppressLogos={false}
             autoLoadOnScroll={(isMainSeriesScreen || isMainMoviesScreen) && isContentIconsView}
             listClassName={
-              [
-                showPlaylistManagerMainContentColumn ? "channel-list-with-main-content" : "",
-                isMainSeriesScreen && isContentIconsView
+              showPlaylistManagerMainContentColumn
+                ? "channel-list-with-main-content"
+                : isMainSeriesScreen && isContentIconsView
                   ? "channel-list-series-grid"
                   : isMainMoviesScreen && isContentIconsView
                     ? "channel-list-movies-grid"
                     : ""
-              ].filter(Boolean).join(" ")
             }
           />
         </>
