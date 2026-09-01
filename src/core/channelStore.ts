@@ -1993,8 +1993,8 @@ export function setGroupVisible(group: string, visible: boolean) {
   dispatchVisibilityChanged();
 }
 
-export function setGroupsVisible(groups: string[], visible: boolean) {
-  if (isCapacitorRuntime() && groups.length >= CAPACITOR_BULK_GROUP_THRESHOLD) {
+export function setGroupsVisible(groups: string[], visible: boolean, catalogWide = false) {
+  if (catalogWide && isCapacitorRuntime() && groups.length >= CAPACITOR_BULK_GROUP_THRESHOLD) {
     visibilityState = {
       ...visibilityState,
       groups: {},

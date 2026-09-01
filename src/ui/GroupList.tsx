@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { sortGroupNames, type GroupSortDirection } from "./groupSorting";
+import {
+  extractMasterBouquetKey,
+  masterBouquetDisplayLabel,
+  sortGroupsByMasterCategory
+} from "../core/masterMinList";
 
 const SORT_DIRECTION_KEY = "iptvmate_group_sort_direction";
 
@@ -10,12 +15,55 @@ type Props = {
   onSelect: (group: string) => void;
   isGroupVisible: (group: string) => boolean;
   onToggleGroupVisible: (group: string, visible: boolean) => void;
+  onToggleGroupsVisible?: (groups: string[], visible: boolean) => void;
   showVisibilityControls?: boolean;
+  showCategoryHeaders?: boolean;
   className?: string;
   onSetAllVisible?: (visible: boolean) => void;
   batchSize?: number;
   autoLoadOnScroll?: boolean;
 };
+
+function CategoryHeader({
+  label,
+  groups,
+  isGroupVisible,
+  onToggle
+}: {
+  label: string;
+  groups: string[];
+  isGroupVisible: (group: string) => boolean;
+  onToggle: (groups: string[], visible: boolean) => void;
+}) {
+  const checkboxRef = useRef<HTMLInputElement | null>(null);
+  const visibleCount = groups.filter((group) => isGroupVisible(group)).length;
+  const allVisible = groups.length > 0 && visibleCount === groups.length;
+  const noneVisible = visibleCount === 0;
+
+  useEffect(() => {
+    if (checkboxRef.current) {
+      checkboxRef.current.indeterminate = !allVisible && !noneVisible;
+    }
+  }, [allVisible, noneVisible]);
+
+  return (
+    <div className={"group-category-header" + (allVisible ? "" : " hidden")}>
+      <div className="list-toggle-row">
+        <input
+          ref={checkboxRef}
+          type="checkbox"
+          checked={allVisible}
+          aria-label={`Show or hide ${label}`}
+          onChange={(event) => onToggle(groups, event.target.checked)}
+        />
+        <span className="group-category-header-label">{label}</span>
+        <span className="group-item-count" aria-label={`${groups.length} groups`}>
+          {groups.length}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 export function GroupList({
   groups,
@@ -24,7 +72,9 @@ export function GroupList({
   onSelect,
   isGroupVisible = () => true,
   onToggleGroupVisible = () => {},
+  onToggleGroupsVisible,
   showVisibilityControls = true,
+  showCategoryHeaders = false,
   className = "",
   onSetAllVisible,
   batchSize,
@@ -57,18 +107,39 @@ export function GroupList({
   }, [sortDirection]);
 
   const sortedGroups = useMemo(() => {
-    if (!sortDirection && groups.length > 150) {
-      if (!activeGroup || groups.includes(activeGroup)) {
-        return groups;
-      }
-      return [activeGroup, ...groups];
+    let nextGroups: string[];
+    if (showCategoryHeaders) {
+      nextGroups = sortGroupsByMasterCategory(groups, sortDirection === "desc" ? "desc" : "asc");
+    } else if (!sortDirection && groups.length > 150) {
+      nextGroups = groups;
+    } else {
+      nextGroups = sortGroupNames(groups, sortDirection, ["Favorites"]);
     }
-    const sorted = sortGroupNames(groups, sortDirection, ["Favorites"]);
-    if (!activeGroup || sorted.includes(activeGroup)) {
-      return sorted;
+    if (!activeGroup || nextGroups.includes(activeGroup)) {
+      return nextGroups;
     }
-    return [activeGroup, ...sorted];
-  }, [groups, sortDirection, activeGroup]);
+    return [activeGroup, ...nextGroups];
+  }, [groups, sortDirection, activeGroup, showCategoryHeaders]);
+
+  const groupsByCategory = useMemo(() => {
+    const byKey = new Map<string, string[]>();
+    for (const group of sortedGroups) {
+      const key = extractMasterBouquetKey(group);
+      if (!key) continue;
+      const list = byKey.get(key);
+      if (list) list.push(group);
+      else byKey.set(key, [group]);
+    }
+    return byKey;
+  }, [sortedGroups]);
+
+  const categoryLeaders = useMemo(() => {
+    const leaders = new Set<string>();
+    for (const categoryGroups of groupsByCategory.values()) {
+      if (categoryGroups[0]) leaders.add(categoryGroups[0]);
+    }
+    return leaders;
+  }, [groupsByCategory]);
 
   useEffect(() => {
     setVisibleCount(effectiveBatchSize);
@@ -139,50 +210,71 @@ export function GroupList({
           {sortButtonLabel}
         </button>
       </div>
-      {renderedGroups.map((g) => (
-        <div
-          key={g}
-          className={
-            "group-item" +
-            (activeGroup === g ? " active" : "") +
-            (isGroupVisible(g) ? "" : " hidden")
-          }
-        >
-          {showVisibilityControls ? (
-            <div className="list-toggle-row">
-              <input
-                type="checkbox"
-                checked={isGroupVisible(g)}
-                disabled={g === "Favorites"}
-                aria-label={`Show or hide ${g}`}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => onToggleGroupVisible(g, e.target.checked)}
+      {renderedGroups.map((g) => {
+        const categoryKey = extractMasterBouquetKey(g);
+        const categoryGroups = categoryKey ? groupsByCategory.get(categoryKey) || [] : [];
+        const showHeader =
+          showCategoryHeaders &&
+          showVisibilityControls &&
+          !!categoryKey &&
+          categoryLeaders.has(g);
+
+        return (
+          <div key={g}>
+            {showHeader && categoryKey && (
+              <CategoryHeader
+                label={masterBouquetDisplayLabel(categoryKey)}
+                groups={categoryGroups}
+                isGroupVisible={isGroupVisible}
+                onToggle={onToggleGroupsVisible || ((items, visible) => {
+                  items.forEach((item) => onToggleGroupVisible(item, visible));
+                })}
               />
-              <button
-                type="button"
-                className="group-select-btn"
-                onClick={() => onSelect(g)}
-              >
-                <span>{g}</span>
-                <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
-                  {groupCounts[g] ?? 0}
-                </span>
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="group-select-btn"
-              onClick={() => onSelect(g)}
+            )}
+            <div
+              className={
+                "group-item" +
+                (activeGroup === g ? " active" : "") +
+                (isGroupVisible(g) ? "" : " hidden")
+              }
             >
-              <span>{g}</span>
-              <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
-                {groupCounts[g] ?? 0}
-              </span>
-            </button>
-          )}
-        </div>
-      ))}
+              {showVisibilityControls ? (
+                <div className="list-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={isGroupVisible(g)}
+                    disabled={g === "Favorites"}
+                    aria-label={`Show or hide ${g}`}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => onToggleGroupVisible(g, e.target.checked)}
+                  />
+                  <button
+                    type="button"
+                    className="group-select-btn"
+                    onClick={() => onSelect(g)}
+                  >
+                    <span>{g}</span>
+                    <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
+                      {groupCounts[g] ?? 0}
+                    </span>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="group-select-btn"
+                  onClick={() => onSelect(g)}
+                >
+                  <span>{g}</span>
+                  <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
+                    {groupCounts[g] ?? 0}
+                  </span>
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
       {hasMoreGroups && (batchSize || autoLoadOnScroll) && (
         <button type="button" className="group-list-bulk-btn" onClick={loadNextBatch}>
           Load more groups ({renderedGroups.length}/{sortedGroups.length})

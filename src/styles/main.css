@@ -1098,6 +1098,149 @@ body.theme-light .playlist-edit-form strong,
 body.theme-light .playlist-edit-form label {
   color: #111827;
 }
+
+.master-min-list {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 200px;
+  background: rgba(0, 0, 0, 0.82);
+  overflow-y: auto;
+  padding-top: 10px;
+  z-index: 3;
+}
+
+.master-min-list-empty {
+  margin: 12px 14px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.app-root.has-master-min-list .group-list:not(.group-list-movies-right) {
+  left: 200px;
+}
+
+.app-root.has-master-min-list .channel-list:not(.channel-list-icons) {
+  left: 560px;
+}
+
+.app-root.is-playlist-manager {
+  font-size: 12px;
+}
+
+.app-root.is-playlist-manager .side-panel {
+  padding: 10px 12px;
+}
+
+.app-root.is-playlist-manager .side-panel h2 {
+  margin-bottom: 6px;
+  font-size: 15px;
+}
+
+.app-root.is-playlist-manager .playlist-loaded-summary,
+.app-root.is-playlist-manager .playlist-item-type,
+.app-root.is-playlist-manager .playlist-meta,
+.app-root.is-playlist-manager .playlist-status-banner,
+.app-root.is-playlist-manager .master-min-list-empty {
+  font-size: 11px;
+}
+
+.app-root.is-playlist-manager .playlist-title {
+  font-size: 14px;
+}
+
+.app-root.is-playlist-manager .playlist-type,
+.app-root.is-playlist-manager .playlist-loaded-badge,
+.app-root.is-playlist-manager .playlist-edit-form strong,
+.app-root.is-playlist-manager .playlist-edit-form label {
+  font-size: 11px;
+}
+
+.app-root.is-playlist-manager .btn-primary,
+.app-root.is-playlist-manager .btn-secondary,
+.app-root.is-playlist-manager .btn-danger,
+.app-root.is-playlist-manager .group-list-bulk-btn {
+  padding: 6px 8px;
+  font-size: 11px;
+  margin-top: 0;
+}
+
+.app-root.is-playlist-manager .playlist-card {
+  padding: 8px;
+  margin-bottom: 8px;
+}
+
+.app-root.is-playlist-manager .group-item,
+.app-root.is-playlist-manager .channel-item {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.app-root.is-playlist-manager .list-header {
+  padding: 6px 10px;
+  font-size: 10px;
+}
+
+.app-root.is-playlist-manager .group-item-count,
+.app-root.is-playlist-manager .channel-icon-label {
+  font-size: 10px;
+}
+
+.app-root.is-playlist-manager .list-toggle-row input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+}
+
+.app-root.is-playlist-manager .group-list-toolbar {
+  gap: 6px;
+}
+
+.group-category-header {
+  position: sticky;
+  top: 36px;
+  z-index: 1;
+  padding: 6px 10px;
+  background: rgba(18, 42, 72, 0.96);
+  border-top: 1px solid rgba(126, 197, 255, 0.28);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.group-category-header.hidden {
+  opacity: 0.7;
+}
+
+.group-category-header-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #d6ecff;
+}
+
+.app-root.is-playlist-manager .group-category-header-label {
+  font-size: 10px;
+}
+
+body.is-capacitor .app-root.is-playlist-manager .channel-list-movies-grid .channel-icon-label,
+body.is-capacitor .app-root.is-playlist-manager .channel-list-series-grid .channel-icon-label {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+body.is-capacitor .app-root.has-master-min-list .group-list:not(.group-list-movies-right) {
+  left: 200px;
+  width: 280px;
+}
+
+body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-icons) {
+  left: 480px;
+}
+
 .group-list {
   position: absolute;
   left: 0;

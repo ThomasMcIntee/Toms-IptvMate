@@ -895,6 +895,9 @@ export default function PlaylistManager({
           Save {activeRoleContext === "child" ? "Child" : "Adult"} Visibility
         </button>
       </div>
+      <p className="playlist-loaded-summary">
+        Master min list is the left column: tick matching (Tv:???| groups to keep for Master Live TV.
+      </p>
 
       <div className="playlist-manager-actions">
         <button className="btn-primary btn-flex" onClick={() => onOpenAddPlaylist?.()}>

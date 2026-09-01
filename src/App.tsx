@@ -1,9 +1,10 @@
 /* @refresh reload */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ChannelList } from "./ui/ChannelList";
 import { EPGGrid } from "./ui/EPGGrid";
 import { PanelsHost } from "./ui/PanelsHost";
+import { firstGroupForMasterKey, MasterMinList } from "./ui/MasterMinList";
 import { useProfile } from "./profiles/ProfileContext";
 import { initNavigation } from "./core/navigation";
 import { normalizeRemoteNavKey } from "./core/remoteKeys";
@@ -62,6 +63,12 @@ import { PlayerControlBar } from "./ui/PlayerControlBar";
 import { isPlaylistsHydrationPending, loadPlaylists } from "./core/playlistStore";
 import { loadEPGForPlaylist } from "./core/loaders/epgLoader";
 import { getEPG, getEPGForChannel, getIndexedEPGForChannel, setEPG } from "./core/epgStore";
+import {
+  getMasterMinListVersion,
+  groupMatchesMasterMinList,
+  hasMasterMinList,
+  subscribeMasterMinList
+} from "./core/masterMinList";
 import { loadRecordings } from "./core/recordingEngine";
 import MainMenuScreen from "./ui/MainMenuScreen";
 import { loadChannelsForPlaylist, loadFromAnyPlaylist } from "./core/loaders/playlistLoader";
@@ -343,6 +350,13 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     }
   }, [moviesSortDirection]);
 
+  const masterMinListVersion = useSyncExternalStore(
+    subscribeMasterMinList,
+    getMasterMinListVersion,
+    getMasterMinListVersion
+  );
+  const applyMasterMinList = accessLevel === "master" && hasMasterMinList();
+
 
 
   useEffect(() => {
@@ -438,8 +452,14 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     return Array.from(groupSet);
   }, [contentChannels, contentMode, channelUpdateTick, currentChannel]);
   const visibleGroups = useMemo(() => {
-    return groups.filter((group) => isGroupVisible(group));
-  }, [groups, categoryRefreshTick]);
+    return groups.filter((group) => {
+      if (!isGroupVisible(group)) return false;
+      if (applyMasterMinList && contentMode === "tv") {
+        return groupMatchesMasterMinList(group);
+      }
+      return true;
+    });
+  }, [groups, categoryRefreshTick, applyMasterMinList, contentMode, masterMinListVersion]);
   const visibleChannelsByMode = useMemo(() => {
     const visibleBuckets: Record<"tv" | "movies" | "series", any[]> = {
       tv: [],
@@ -451,12 +471,16 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       visibleBuckets[mode] = channelsByMode[mode].filter((channel) => {
         if (!isChannelRecord(channel)) return false;
         const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
-        return isGroupVisible(groupName) && isChannelVisible(String(channel.id || ""));
+        return (
+          isGroupVisible(groupName) &&
+          isChannelVisible(String(channel.id || "")) &&
+          (!applyMasterMinList || mode !== "tv" || groupMatchesMasterMinList(groupName))
+        );
       });
     }
 
     return visibleBuckets;
-  }, [channelsByMode, categoryRefreshTick]);
+  }, [channelsByMode, categoryRefreshTick, applyMasterMinList, masterMinListVersion]);
   const visibleChannels = useMemo(() => {
     return visibleChannelsByMode[contentMode];
   }, [visibleChannelsByMode, contentMode]);
@@ -3570,7 +3594,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, []);
 
   return (
-    <div className="app-root">
+    <div className={`app-root${isPlaylistManagerPage ? " is-playlist-manager" : ""}${isPlaylistManagerPage && contentMode === "tv" ? " has-master-min-list" : ""}`}>
       {shouldRenderMainVideo && useLivePreviewShell && (
         <div className={`live-preview-shell${isLivePreviewFullscreen ? " live-preview-shell-fullscreen" : ""}`} aria-hidden="false">
             <video
@@ -3795,6 +3819,16 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
               </button>
             </div>
           )}
+          {isPlaylistManagerPage && contentMode === "tv" && (
+            <MasterMinList
+              groups={groups}
+              groupCounts={groupCounts}
+              onSelectKey={(key) => {
+                const match = firstGroupForMasterKey(groups, key);
+                if (match) setActiveGroup(match);
+              }}
+            />
+          )}
           <GroupList
             groups={groupsForList}
             groupCounts={groupCounts}
@@ -3808,13 +3842,22 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
               setCategoryRefreshTick((tick) => tick + 1);
             }}
             showVisibilityControls={isPlaylistManagerPage}
+            showCategoryHeaders={isPlaylistManagerPage}
             className={isMainMoviesScreen ? "group-list-movies-right" : ""}
             batchSize={isCapacitorRuntime() && (isLiveContentPage || isPlaylistManagerPage) ? 60 : undefined}
             autoLoadOnScroll={isCapacitorRuntime() && (isLiveContentPage || isPlaylistManagerPage)}
+            onToggleGroupsVisible={
+              isPlaylistManagerPage
+                ? (groupNames, visible) => {
+                    setGroupsVisible(groupNames, visible);
+                    setCategoryRefreshTick((tick) => tick + 1);
+                  }
+                : undefined
+            }
             onSetAllVisible={
               isPlaylistManagerPage
                 ? (visible) => {
-                    setGroupsVisible(groups, visible);
+                    setGroupsVisible(groups, visible, true);
                     if (!visible) {
                       setActiveGroup(ROOT_GROUP);
                     }
