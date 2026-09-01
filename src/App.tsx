@@ -40,6 +40,7 @@ import { loadXtreamEPGForStream } from "./core/loaders/xtreamEPG";
 import SeriesEpisodePicker from "./ui/SeriesEpisodePicker";
 
 const ROOT_GROUP = "Favorites";
+const MAIN_CONTENT_ALL = "All Content";
 const MAX_SERIES_SEARCH_RESULTS = 120;
 const MAX_SERIES_SEARCH_SCAN = 40000;
 const SERIES_SEARCH_MIN_TERM_LENGTH = 3;
@@ -113,6 +114,43 @@ function isBackKeyEvent(event: KeyboardEvent): boolean {
   return keyCode === 8 || keyCode === 27 || keyCode === 461 || keyCode === 10009;
 }
 
+function normalizeChannelGroupName(group?: string): string {
+  return (group && String(group).trim()) || "Uncategorized";
+}
+
+function extractMainContentGroupName(group: string): string {
+  const normalized = normalizeChannelGroupName(group);
+  if (normalized === ROOT_GROUP) return ROOT_GROUP;
+
+  const pipeIndex = normalized.indexOf("|");
+  if (pipeIndex >= 0) {
+    const prefix = normalized.slice(0, pipeIndex + 1).trim();
+    if (prefix) return prefix;
+  }
+
+  const colonIndex = normalized.indexOf(":");
+  if (colonIndex >= 0) {
+    const prefix = normalized.slice(0, colonIndex + 1).trim();
+    if (prefix) return prefix;
+  }
+
+  return normalized;
+}
+
+function formatGroupNameWithinMainContent(group: string, mainContentGroup: string): string {
+  const normalized = normalizeChannelGroupName(group);
+  if (!mainContentGroup || mainContentGroup === MAIN_CONTENT_ALL || normalized === ROOT_GROUP) {
+    return normalized;
+  }
+
+  if (!normalized.startsWith(mainContentGroup)) {
+    return normalized;
+  }
+
+  const trimmed = normalized.slice(mainContentGroup.length).trim();
+  return trimmed || normalized;
+}
+
 export function App() {
   useEffect(() => {
     const debugLog = (window as any).webosDebugLog;
@@ -134,6 +172,7 @@ export function App() {
   const [channelUpdateTick, setChannelUpdateTick] = useState(0);  // Track channel data changes separately
   const [favoritesRefreshTick, setFavoritesRefreshTick] = useState(0);
   const [activeGroup, setActiveGroup] = useState(ROOT_GROUP);
+  const [activeMainContentGroup, setActiveMainContentGroup] = useState(MAIN_CONTENT_ALL);
   const [contentMode, setContentMode] = useState<"tv" | "movies" | "series">("tv");
   const [showLiveMenu, setShowLiveMenu] = useState(true);
   const [hasSelectedLiveChannel, setHasSelectedLiveChannel] = useState(false);
@@ -331,7 +370,7 @@ export function App() {
   const groups = useMemo(() => {
     const groupSet = new Set<string>([ROOT_GROUP]);
     contentChannels.forEach((channel) => {
-      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+      const groupName = normalizeChannelGroupName(channel.group);
       groupSet.add(groupName);
     });
     return Array.from(groupSet);
@@ -349,7 +388,7 @@ export function App() {
     for (const mode of ["tv", "movies", "series"] as const) {
       visibleBuckets[mode] = channelsByMode[mode].filter((channel) => {
         if (!isChannelRecord(channel)) return false;
-        const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+        const groupName = normalizeChannelGroupName(channel.group);
         return isGroupVisible(groupName) && isChannelVisible(String(channel.id || ""));
       });
     }
@@ -373,15 +412,47 @@ export function App() {
       if (!isChannelRecord(channel)) continue;
       if (isFavoriteChannelRecord(channel)) counts[ROOT_GROUP] += 1;
 
-      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+      const groupName = normalizeChannelGroupName(channel.group);
       counts[groupName] = (counts[groupName] || 0) + 1;
     }
 
     return counts;
   }, [contentChannels, favoritesRefreshTick]);
+  const mainContentGroups = useMemo(() => {
+    const options = new Set<string>([MAIN_CONTENT_ALL]);
+    groups.forEach((group) => {
+      if (group === ROOT_GROUP) return;
+      options.add(extractMainContentGroupName(group));
+    });
+    return Array.from(options);
+  }, [groups]);
+  const mainContentGroupCounts = useMemo(() => {
+    const counts: Record<string, number> = { [MAIN_CONTENT_ALL]: 0 };
+
+    for (const channel of contentChannels) {
+      if (!isChannelRecord(channel)) continue;
+      counts[MAIN_CONTENT_ALL] += 1;
+      const groupName = normalizeChannelGroupName(channel.group);
+      if (groupName === ROOT_GROUP) continue;
+      const mainContentGroup = extractMainContentGroupName(groupName);
+      counts[mainContentGroup] = (counts[mainContentGroup] || 0) + 1;
+    }
+
+    return counts;
+  }, [contentChannels]);
+  const showPlaylistManagerMainContentColumn = isPlaylistManagerPage && contentMode === "tv" && mainContentGroups.length > 1;
   const channelsForScope = useMemo(() => {
     return isLiveContentPage ? visibleChannels : contentChannels;
   }, [isLiveContentPage, visibleChannels, contentChannels]);
+  const filteredGroupsForList = useMemo(() => {
+    if (!showPlaylistManagerMainContentColumn || activeMainContentGroup === MAIN_CONTENT_ALL) {
+      return groupsForList;
+    }
+
+    return groupsForList.filter((group) => {
+      return group === ROOT_GROUP || extractMainContentGroupName(group) === activeMainContentGroup;
+    });
+  }, [groupsForList, showPlaylistManagerMainContentColumn, activeMainContentGroup]);
   const filteredChannels = useMemo(() => {
     if (activeGroup === ROOT_GROUP) {
       // Favorites should show all starred channels for the current content mode,
@@ -393,7 +464,7 @@ export function App() {
     }
     return channelsForScope.filter((channel) => {
       if (!isChannelRecord(channel)) return false;
-      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+      const groupName = normalizeChannelGroupName(channel.group);
       return groupName === activeGroup;
     });
   }, [channelsForScope, contentChannels, activeGroup, categoryRefreshTick, favoritesRefreshTick]);
@@ -401,7 +472,7 @@ export function App() {
     if (!isMainSeriesScreen) return [] as any[];
     return contentChannels.filter((channel) => {
       if (!isChannelRecord(channel)) return false;
-      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+      const groupName = normalizeChannelGroupName(channel.group);
       return isGroupVisible(groupName);
     });
   }, [isMainSeriesScreen, contentChannels, categoryRefreshTick]);
@@ -421,7 +492,7 @@ export function App() {
       const term = String(moviesMainSearchTerm || "").trim().toLowerCase();
       const movies = contentChannels.filter((channel) => isChannelRecord(channel));
       const visibleMovies = movies.filter((channel) => {
-        const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+        const groupName = normalizeChannelGroupName(channel.group);
         return isGroupVisible(groupName);
       });
 
@@ -429,7 +500,7 @@ export function App() {
         activeGroup === ROOT_GROUP
           ? movies.filter((channel) => isFavoriteChannelRecord(channel))
           : visibleMovies.filter((channel) => {
-              const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+              const groupName = normalizeChannelGroupName(channel.group);
               return groupName === activeGroup;
             });
 
@@ -451,7 +522,7 @@ export function App() {
 
     const visibleSeriesChannels = filteredChannels.filter((channel) => {
       if (!isChannelRecord(channel)) return false;
-      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+      const groupName = normalizeChannelGroupName(channel.group);
       return isGroupVisible(groupName);
     });
     const term = String(seriesMainSearchDebouncedTerm || "").trim().toLowerCase();
@@ -460,7 +531,7 @@ export function App() {
 
     return (seriesMainSearchResults ?? []).filter((channel) => {
       if (!isChannelRecord(channel)) return false;
-      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+      const groupName = normalizeChannelGroupName(channel.group);
       return isGroupVisible(groupName);
     });
   }, [
@@ -567,10 +638,32 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!groupsForList.includes(activeGroup)) {
-      setActiveGroup(groupsForList[0] || ROOT_GROUP);
+    if (!filteredGroupsForList.includes(activeGroup)) {
+      setActiveGroup(filteredGroupsForList[0] || ROOT_GROUP);
     }
-  }, [groupsForList, activeGroup]);
+  }, [filteredGroupsForList, activeGroup]);
+
+  useEffect(() => {
+    if (!showPlaylistManagerMainContentColumn) {
+      if (activeMainContentGroup !== MAIN_CONTENT_ALL) {
+        setActiveMainContentGroup(MAIN_CONTENT_ALL);
+      }
+      return;
+    }
+
+    if (!mainContentGroups.includes(activeMainContentGroup)) {
+      setActiveMainContentGroup(mainContentGroups[0] || MAIN_CONTENT_ALL);
+    }
+  }, [showPlaylistManagerMainContentColumn, mainContentGroups, activeMainContentGroup]);
+
+  useEffect(() => {
+    if (!showPlaylistManagerMainContentColumn || activeGroup === ROOT_GROUP) return;
+
+    const nextMainContentGroup = extractMainContentGroupName(activeGroup);
+    if (nextMainContentGroup !== activeMainContentGroup && mainContentGroups.includes(nextMainContentGroup)) {
+      setActiveMainContentGroup(nextMainContentGroup);
+    }
+  }, [showPlaylistManagerMainContentColumn, activeGroup, activeMainContentGroup, mainContentGroups]);
 
   useEffect(() => {
     if (isLiveContentPage && !isGroupVisible(activeGroup) && activeGroup !== ROOT_GROUP) {
@@ -1862,26 +1955,43 @@ export function App() {
 
       if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return;
 
-      const groupRows = Array.from(document.querySelectorAll<HTMLElement>(".group-list .group-item"));
+      const mainContentRows = showPlaylistManagerMainContentColumn
+        ? Array.from(document.querySelectorAll<HTMLElement>(".group-list-main-content .group-item"))
+        : [];
+      const groupRows = showPlaylistManagerMainContentColumn
+        ? Array.from(document.querySelectorAll<HTMLElement>(".group-list-with-main-content .group-item"))
+        : Array.from(document.querySelectorAll<HTMLElement>(".group-list .group-item"));
       const channelRows = Array.from(document.querySelectorAll<HTMLElement>(".channel-list .channel-item"))
         .filter((row) => !row.classList.contains("channel-header-item"));
       const toolbarButtons = Array.from(
-        document.querySelectorAll<HTMLElement>(".group-list .group-list-bulk-btn")
+        document.querySelectorAll<HTMLElement>(
+          showPlaylistManagerMainContentColumn
+            ? ".group-list-with-main-content .group-list-bulk-btn"
+            : ".group-list .group-list-bulk-btn"
+        )
       );
       const loadMoreBtn = document.querySelector<HTMLElement>(".channel-list .channel-load-more-btn");
-      if (groupRows.length === 0 && channelRows.length === 0) return;
+      if (mainContentRows.length === 0 && groupRows.length === 0 && channelRows.length === 0) return;
 
       const isCheckbox = active instanceof HTMLInputElement && active.type === "checkbox";
       const findRowIndex = (rows: HTMLElement[]) =>
         rows.findIndex((row) => row === active || (!!active && row.contains(active)));
 
+      const mainContentIndex = findRowIndex(mainContentRows);
       const toolbarIndex = active ? toolbarButtons.indexOf(active) : -1;
       const groupIndex = findRowIndex(groupRows);
       const channelIndex = findRowIndex(channelRows);
       const onLoadMore = !!active && active === loadMoreBtn;
 
+      const currentMainContentStop = () =>
+        rowStop(document.querySelector<HTMLElement>(".group-list-main-content .group-item.active")) ||
+        rowStop(mainContentRows[0] || null);
       const currentGroupStop = () =>
-        rowStop(document.querySelector<HTMLElement>(".group-list .group-item.active")) ||
+        rowStop(document.querySelector<HTMLElement>(
+          showPlaylistManagerMainContentColumn
+            ? ".group-list-with-main-content .group-item.active"
+            : ".group-list .group-item.active"
+        )) ||
         rowStop(groupRows[0] || null);
 
       // Keep column identity while moving vertically: checkbox stays in the
@@ -1899,14 +2009,28 @@ export function App() {
 
       // Focus is outside the lists: capture only from inert targets (body,
       // video surface), never steal from other focused buttons (EPG, player).
-      if (toolbarIndex < 0 && groupIndex < 0 && channelIndex < 0 && !onLoadMore) {
+      if (toolbarIndex < 0 && mainContentIndex < 0 && groupIndex < 0 && channelIndex < 0 && !onLoadMore) {
         const inert =
           !active ||
           active === document.body ||
           active === document.documentElement ||
           active instanceof HTMLMediaElement;
         if (!inert) return;
-        moveTo(currentGroupStop() || verticalStop(channelRows[0] || null));
+        moveTo(currentMainContentStop() || currentGroupStop() || verticalStop(channelRows[0] || null));
+        return;
+      }
+
+      if (mainContentIndex >= 0) {
+        if (key === "ArrowUp") {
+          if (mainContentIndex === 0) e.preventDefault();
+          else moveTo(rowStop(mainContentRows[mainContentIndex - 1]));
+        } else if (key === "ArrowDown") {
+          moveTo(rowStop(mainContentRows[mainContentIndex + 1] || null));
+        } else if (key === "ArrowRight") {
+          moveTo(currentGroupStop() || verticalStop(channelRows[0] || null));
+        } else {
+          e.preventDefault();
+        }
         return;
       }
 
@@ -1926,9 +2050,14 @@ export function App() {
         } else if (key === "ArrowDown") {
           moveTo(verticalStop(groupRows[groupIndex + 1] || null));
         } else if (key === "ArrowLeft") {
-          // Row button -> its visibility checkbox (playlist manager).
-          if (!isCheckbox) moveTo(enabledCheckbox(row) || null);
-          else e.preventDefault();
+          if (showPlaylistManagerMainContentColumn) {
+            if (!isCheckbox) moveTo(enabledCheckbox(row) || currentMainContentStop());
+            else moveTo(currentMainContentStop());
+          } else if (!isCheckbox) {
+            moveTo(enabledCheckbox(row) || null);
+          } else {
+            e.preventDefault();
+          }
         } else {
           // Right: checkbox -> row button, button -> channel column.
           if (isCheckbox) moveTo(enabledButton(row));
@@ -1965,7 +2094,7 @@ export function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [showOpeningScreen, activePanel, contentPage, contentMode]);
+  }, [showOpeningScreen, activePanel, contentPage, contentMode, showPlaylistManagerMainContentColumn]);
 
   function normalizePlayableChannelUrl(ch: any): string {
     const rawUrl = String(ch?.url || "");
@@ -2580,6 +2709,25 @@ export function App() {
     handlePlaylistLoaded(channels);
   }
 
+  function selectMainContentGroup(mainContentGroup: string) {
+    setActiveMainContentGroup(mainContentGroup);
+    if (!showPlaylistManagerMainContentColumn || mainContentGroup === MAIN_CONTENT_ALL) {
+      return;
+    }
+
+    if (activeGroup !== ROOT_GROUP && extractMainContentGroupName(activeGroup) === mainContentGroup) {
+      return;
+    }
+
+    const nextGroup = groupsForList.find((group) => {
+      return group !== ROOT_GROUP && extractMainContentGroupName(group) === mainContentGroup;
+    });
+
+    if (nextGroup) {
+      setActiveGroup(nextGroup);
+    }
+  }
+
   async function ensureGuideEPGLoaded() {
     const playlists = loadPlaylists();
     if (playlists.length === 0) return;
@@ -3155,8 +3303,32 @@ export function App() {
               </button>
             </div>
           )}
+          {showPlaylistManagerMainContentColumn && (
+            <div className="group-list group-list-main-content">
+              <div className="list-header group-list-toolbar">
+                <span>Main Content</span>
+              </div>
+              {mainContentGroups.map((group) => (
+                <div
+                  key={group}
+                  className={"group-item" + (activeMainContentGroup === group ? " active" : "")}
+                >
+                  <button
+                    type="button"
+                    className="group-select-btn"
+                    onClick={() => selectMainContentGroup(group)}
+                  >
+                    <span>{group}</span>
+                    <span className="group-item-count" aria-label={`${mainContentGroupCounts[group] ?? 0} items`}>
+                      {mainContentGroupCounts[group] ?? 0}
+                    </span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <GroupList
-            groups={groupsForList}
+            groups={filteredGroupsForList}
             groupCounts={groupCounts}
             activeGroup={activeGroup}
             onSelect={(group) => {
@@ -3168,7 +3340,15 @@ export function App() {
               setCategoryRefreshTick((tick) => tick + 1);
             }}
             showVisibilityControls={isPlaylistManagerPage}
-            className={isMainMoviesScreen ? "group-list-movies-right" : ""}
+            className={[
+              showPlaylistManagerMainContentColumn ? "group-list-with-main-content" : "",
+              isMainMoviesScreen ? "group-list-movies-right" : ""
+            ].filter(Boolean).join(" ")}
+            formatGroupLabel={
+              showPlaylistManagerMainContentColumn && activeMainContentGroup !== MAIN_CONTENT_ALL
+                ? (group) => formatGroupNameWithinMainContent(group, activeMainContentGroup)
+                : undefined
+            }
             onSetAllVisible={
               isPlaylistManagerPage
                 ? (visible) => {
@@ -3207,11 +3387,14 @@ export function App() {
             suppressLogos={false}
             autoLoadOnScroll={(isMainSeriesScreen || isMainMoviesScreen) && isContentIconsView}
             listClassName={
-              isMainSeriesScreen && isContentIconsView
-                ? "channel-list-series-grid"
-                : isMainMoviesScreen && isContentIconsView
-                  ? "channel-list-movies-grid"
-                  : ""
+              [
+                showPlaylistManagerMainContentColumn ? "channel-list-with-main-content" : "",
+                isMainSeriesScreen && isContentIconsView
+                  ? "channel-list-series-grid"
+                  : isMainMoviesScreen && isContentIconsView
+                    ? "channel-list-movies-grid"
+                    : ""
+              ].filter(Boolean).join(" ")
             }
           />
         </>
