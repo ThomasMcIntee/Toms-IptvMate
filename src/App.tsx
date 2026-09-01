@@ -485,7 +485,7 @@ export function App() {
     return counts;
   }, [contentChannels]);
 
-  const showPlaylistManagerMainContentColumn = isPlaylistManagerPage && contentMode === "tv" && mainContentGroups.length > 1;
+  const showPlaylistManagerMainContentColumn = isPlaylistManagerPage && mainContentGroups.length > 1;
   const channelsForScope = useMemo(() => {
     return isLiveContentPage ? visibleChannels : contentChannels;
   }, [isLiveContentPage, visibleChannels, contentChannels]);
@@ -3430,13 +3430,14 @@ export function App() {
             suppressLogos={false}
             autoLoadOnScroll={(isMainSeriesScreen || isMainMoviesScreen) && isContentIconsView}
             listClassName={
-              showPlaylistManagerMainContentColumn && !isContentIconsView && !isMainSeriesScreen && !isMainMoviesScreen
-                ? "channel-list-with-main-content"
-                : isMainSeriesScreen && isContentIconsView
+              [
+                showPlaylistManagerMainContentColumn ? "channel-list-with-main-content" : "",
+                isMainSeriesScreen && isContentIconsView
                   ? "channel-list-series-grid"
                   : isMainMoviesScreen && isContentIconsView
                     ? "channel-list-movies-grid"
                     : ""
+              ].filter(Boolean).join(" ")
             }
           />
         </>

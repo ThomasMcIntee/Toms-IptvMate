@@ -1192,6 +1192,12 @@ body.theme-light .playlist-edit-form label {
   align-content: unset;
 }
 
+.channel-list.channel-list-icons.channel-list-with-main-content {
+  left: 490px;
+  right: 8px;
+  width: auto;
+}
+
 .channel-list-icons .channel-item {
   padding: 0;
 }
