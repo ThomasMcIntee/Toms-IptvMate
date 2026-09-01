@@ -24,10 +24,10 @@ export function MainCategoryList({
   const categories = useMemo(() => {
     const built = buildMainCategories(groups, groupCounts, excludedGroups);
     const sortedNames = sortGroupNames(built.map((category) => category.name), sortDirection);
-    const byName = new Map(built.map((category) => [category.name, category]));
-    return sortedNames
-      .map((name) => byName.get(name))
-      .filter((category): category is NonNullable<typeof category> => !!category);
+    const order = new Map(sortedNames.map((name, index) => [name, index]));
+    return [...built].sort(
+      (left, right) => (order.get(left.name) ?? 0) - (order.get(right.name) ?? 0)
+    );
   }, [groups, groupCounts, excludedGroups, sortDirection]);
 
   const totalCount = useMemo(
