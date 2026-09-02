@@ -7,6 +7,8 @@ const MAIN_MENU_KEYCODE_MAP: Record<number, string> = {
   39: "ArrowRight",
   40: "ArrowDown",
   13: "Enter",
+  23: "Enter",
+  66: "Enter",
   29443: "Enter",
   29460: "ArrowLeft",
   29461: "ArrowRight",

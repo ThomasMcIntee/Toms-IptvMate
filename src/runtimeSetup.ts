@@ -4,6 +4,8 @@ const REMOTE_KEYCODE_MAP: Record<number, string> = {
   4: "Escape",
   8: "Backspace",
   13: "Enter",
+  23: "Enter",
+  66: "Enter",
   27: "Escape",
   37: "ArrowLeft",
   38: "ArrowUp",

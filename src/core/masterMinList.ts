@@ -38,33 +38,59 @@ export function getMasterMinListVersion(): number {
   return masterMinListVersion;
 }
 
+function normalizeContentPrefix(kind: string): "TV" | "Movies" | "Series" {
+  if (/^tv$/i.test(kind)) return "TV";
+  if (/^movies$/i.test(kind)) return "Movies";
+  return "Series";
+}
+
+function normalizeParenBouquetKind(kind: string): string {
+  if (/^tv$/i.test(kind)) return "Tv";
+  if (/^vod$/i.test(kind)) return "Vod";
+  if (/^movies?$/i.test(kind)) return "Movies";
+  if (/^series$/i.test(kind)) return "Series";
+  return kind;
+}
+
 /**
- * Collapse provider bouquets that share the same `(Tv:???|` (or `TV: ???|`)
- * prefix into one master-min-list key.
+ * Collapse provider bouquets that share the same `(Tv:???|` / `(Vod:???|`
+ * (or `TV: ???|` / `Movies: EN -` / `Series: NETFLIX`) prefix into one key.
  */
 export function extractMasterBouquetKey(groupName: string): string | null {
   const raw = String(groupName || "").trim();
   if (!raw || raw === "Favorites") return null;
 
-  const parenTv = raw.match(/\(\s*Tv\s*:\s*([^)|]+)\|/i);
-  if (parenTv) {
-    return `(Tv:${parenTv[1].trim()}|`;
+  const paren = raw.match(/\(\s*(Tv|Vod|Movies?|Series)\s*:\s*([^)|]+)\|/i);
+  if (paren) {
+    return `(${normalizeParenBouquetKind(paren[1])}:${paren[2].trim()}|`;
   }
 
-  const prefixed = raw.match(/^TV:\s*([^|]+)\|/i);
-  if (prefixed) {
-    return `TV: ${prefixed[1].trim()}|`;
+  const pipePrefixed = raw.match(/^(TV|Movies|Series):\s*([^|]+)\|/i);
+  if (pipePrefixed) {
+    return `${normalizeContentPrefix(pipePrefixed[1])}: ${pipePrefixed[2].trim()}|`;
+  }
+
+  const vodToken = raw.match(/^(Movies|Series):\s*(\S+)/i);
+  if (vodToken) {
+    return `${normalizeContentPrefix(vodToken[1])}: ${vodToken[2]}`;
   }
 
   return null;
 }
 
 export function masterBouquetDisplayLabel(key: string): string {
-  const paren = String(key || "").match(/Tv:\s*([^)|]+)/i);
+  const paren = String(key || "").match(/\(\s*(?:Tv|Vod|Movies?|Series)\s*:\s*([^)|]+)/i);
   if (paren) return paren[1].trim();
-  const prefixed = String(key || "").match(/^TV:\s*([^|]+)\|/i);
-  if (prefixed) return prefixed[1].trim();
+  const pipePrefixed = String(key || "").match(/^(?:TV|Movies|Series):\s*([^|]+)\|/i);
+  if (pipePrefixed) return pipePrefixed[1].trim();
+  const vodToken = String(key || "").match(/^(?:Movies|Series):\s*(.+)$/i);
+  if (vodToken) return vodToken[1].trim();
   return String(key || "").replace(/\|$/, "");
+}
+
+export function isLiveMasterBouquetKey(key: string): boolean {
+  const raw = String(key || "").trim();
+  return /^\(\s*Tv\s*:/i.test(raw) || /^TV\s*:/i.test(raw);
 }
 
 export function hasMasterMinList(): boolean {
@@ -112,24 +138,49 @@ export function sortGroupsByMasterCategory(
 export function collectMasterBouquetEntries(
   groups: string[],
   groupCounts: Record<string, number> = {}
-): Array<{ key: string; label: string; groupCount: number; channelCount: number }> {
-  const byKey = new Map<string, { groupCount: number; channelCount: number }>();
+): Array<{
+  key: string;
+  label: string;
+  firstGroup: string;
+  groups: string[];
+  groupCount: number;
+  channelCount: number;
+}> {
+  const byKey = new Map<
+    string,
+    { firstGroup: string; groups: string[]; channelCount: number }
+  >();
 
   for (const group of groups) {
     const key = extractMasterBouquetKey(group);
     if (!key) continue;
-    const current = byKey.get(key) || { groupCount: 0, channelCount: 0 };
-    current.groupCount += 1;
-    current.channelCount += Number(groupCounts[group] || 0);
-    byKey.set(key, current);
+    const current = byKey.get(key);
+    if (current) {
+      current.groups.push(group);
+      current.channelCount += Number(groupCounts[group] || 0);
+    } else {
+      byKey.set(key, {
+        firstGroup: group,
+        groups: [group],
+        channelCount: Number(groupCounts[group] || 0)
+      });
+    }
   }
 
   return Array.from(byKey.entries())
-    .map(([key, counts]) => ({
-      key,
-      label: masterBouquetDisplayLabel(key),
-      groupCount: counts.groupCount,
-      channelCount: counts.channelCount
-    }))
+    .map(([key, entry]) => {
+      const groupsInCategory = [...entry.groups].sort((left, right) =>
+        left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" })
+      );
+      const firstGroup = groupsInCategory[0] || entry.firstGroup;
+      return {
+        key,
+        label: firstGroup,
+        firstGroup,
+        groups: groupsInCategory,
+        groupCount: groupsInCategory.length,
+        channelCount: entry.channelCount
+      };
+    })
     .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: "base" }));
 }

@@ -14,13 +14,23 @@ function filterChannelsForScope(channels: any[], scope: PlaylistLoadScope) {
   return scope === "movies" || scope === "series" ? capCapacitorCatalogList(scoped) : scoped;
 }
 
-export async function loadChannelsForPlaylist(playlist: PlaylistEntry, scope: PlaylistLoadScope = "all") {
+export async function loadChannelsForPlaylist(
+  playlist: PlaylistEntry,
+  scope: PlaylistLoadScope = "all",
+  onProgress?: (status: string) => void
+) {
   if (playlist.type === "m3u") {
     return filterChannelsForScope(await loadM3U(playlist.data.url), scope);
   }
 
   if (playlist.type === "xtream") {
-    const xtreamChannels = await loadXtream(playlist.data.url, playlist.data.user, playlist.data.pass, scope);
+    const xtreamChannels = await loadXtream(
+      playlist.data.url,
+      playlist.data.user,
+      playlist.data.pass,
+      scope,
+      onProgress
+    );
     return scope === "movies" || scope === "series" ? capCapacitorCatalogList(xtreamChannels) : xtreamChannels;
   }
 

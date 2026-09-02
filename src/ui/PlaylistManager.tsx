@@ -19,7 +19,11 @@ import {
   setActiveVisibilityRole,
   saveRoleVisibility,
   ChannelVisibilitySnapshot,
-  ingestCapacitorLiveChannelCatalogAsync
+  ingestCapacitorLiveChannelCatalogAsync,
+  getCapacitorLiveGroupCounts,
+  getCapacitorLiveGroupNames,
+  getCapacitorVodGroupNames,
+  loadCapacitorLiveGroupChannels
 } from "../core/channelStore";
 import { loadEPGForPlaylist } from "../core/loaders/epgLoader";
 import { loadChannelsForPlaylist } from "../core/loaders/playlistLoader";
@@ -194,7 +198,9 @@ function parseRoleCache(raw: string | null, playlistId: string): RoleCachePayloa
               parsed.visibility.channels && typeof parsed.visibility.channels === "object"
                 ? (parsed.visibility.channels as Record<string, boolean>)
                 : {},
-            allGroupsHidden: parsed.visibility.allGroupsHidden === true
+            allGroupsHidden: parsed.visibility.allGroupsHidden === true,
+            allMoviesHidden: parsed.visibility.allMoviesHidden === true,
+            allSeriesHidden: parsed.visibility.allSeriesHidden === true
           }
         : undefined;
 
@@ -308,7 +314,11 @@ async function writeRoleCache(kind: "adult" | "child", payload: RoleCachePayload
     playlistId: payload.playlistId,
     visibility: payload.visibility
   };
-  writeStorageItem(roleCacheStorageKey(kind), JSON.stringify(metaOnly));
+    try {
+      writeStorageItem(roleCacheStorageKey(kind), JSON.stringify(metaOnly));
+    } catch {
+      // Quota or stringify failures must not fail the role save.
+    }
 
   const db = await openRoleCacheDb();
   if (!db) return;
@@ -347,13 +357,15 @@ export default function PlaylistManager({
   onSelectContent,
   onPlaylistLoadedWithId,
   activePlaylistId,
-  onOpenAddPlaylist
+  onOpenAddPlaylist,
+  contentMode = "tv"
 }: {
   visible: boolean;
   onSelectContent: (content: "tv" | "movies" | "series") => void;
   onPlaylistLoadedWithId: (channels: any[], playlistId: string) => void;
   activePlaylistId: string;
   onOpenAddPlaylist?: () => void;
+  contentMode?: "tv" | "movies" | "series";
 }) {
   const [playlists, setPlaylists] = useState<PlaylistEntry[]>([]);
   const [storageDiagnostics, setStorageDiagnostics] = useState<PlaylistStorageDiagnostics>({
@@ -387,6 +399,28 @@ export default function PlaylistManager({
     return readStorageItem(CHILD_PLAYLIST_ID_KEY) || "";
   });
 
+  function resolveSavePlaylistId(kind: "adult" | "child"): string {
+    const listed = playlists.length > 0 ? playlists : loadPlaylists();
+    const roleStored =
+      kind === "child"
+        ? childPlaylistId || readStorageItem(CHILD_PLAYLIST_ID_KEY) || ""
+        : adultPlaylistId || readStorageItem(ADULT_PLAYLIST_ID_KEY) || "";
+    return (
+      activePlaylistId ||
+      selectedPlaylistId ||
+      currentPlaylistId ||
+      roleStored ||
+      readStorageItem(SHARED_PLAYLIST_ID_KEY) ||
+      listed[0]?.id ||
+      ""
+    );
+  }
+
+  function findPlaylistById(id: string): PlaylistEntry | undefined {
+    if (!id) return undefined;
+    return playlists.find((playlist) => playlist.id === id) || loadPlaylists().find((playlist) => playlist.id === id);
+  }
+
   useEffect(() => {
     visibleRef.current = visible;
     if (!visible) {
@@ -401,9 +435,9 @@ export default function PlaylistManager({
 
   useEffect(() => {
     if (!visible) return;
-    // Default to adult visibility when the screen opens.
+    // Default Adult/Child Save target, but do not replace live hide/show
+    // with a role snapshot — that would wipe checkmarks on every open.
     setActiveRoleContext("adult");
-    setActiveVisibilityRole("adult");
 
     const refresh = () => {
       const loaded = loadPlaylists();
@@ -458,6 +492,23 @@ export default function PlaylistManager({
       document.removeEventListener("visibilitychange", onVisibilityChanged);
     };
   }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const listed = playlists.length > 0 ? playlists : loadPlaylists();
+    const resolved =
+      activePlaylistId ||
+      selectedPlaylistId ||
+      currentPlaylistId ||
+      readStorageItem(SHARED_PLAYLIST_ID_KEY) ||
+      adultPlaylistId ||
+      childPlaylistId ||
+      listed[0]?.id ||
+      "";
+    if (!resolved) return;
+    if (!selectedPlaylistId) setSelectedPlaylistId(resolved);
+    if (!currentPlaylistId) setCurrentPlaylistId(resolved);
+  }, [visible, activePlaylistId, playlists, adultPlaylistId, childPlaylistId, selectedPlaylistId, currentPlaylistId]);
 
   useEffect(() => {
     // Role snapshots are intentionally not auto-persisted from visibility events.
@@ -620,32 +671,36 @@ export default function PlaylistManager({
       return;
     }
 
-    const targetPlaylistId = activePlaylistId || selectedPlaylistId || currentPlaylistId;
+    const targetPlaylistId = resolveSavePlaylistId(kind);
     if (!targetPlaylistId) {
-      alert("Select or load a playlist first, then save its visibility for the selected role.");
+      setStatusMessage("✗ Add a playlist first, then save visibility.");
       return;
     }
 
-    const targetPlaylist = playlists.find((playlist) => playlist.id === targetPlaylistId);
-    if (!targetPlaylist) {
-      alert("The currently loaded playlist no longer exists. Load it again first.");
-      return;
+    const targetPlaylist = findPlaylistById(targetPlaylistId);
+    const playlistName = targetPlaylist?.name || "playlist";
+
+    try {
+      if (kind === "adult") {
+        setAdultPlaylistId(targetPlaylistId);
+        writeStorageItem(ADULT_PLAYLIST_ID_KEY, targetPlaylistId);
+      } else {
+        setChildPlaylistId(targetPlaylistId);
+        writeStorageItem(CHILD_PLAYLIST_ID_KEY, targetPlaylistId);
+      }
+
+      setSelectedPlaylistId(targetPlaylistId);
+      setCurrentPlaylistId(targetPlaylistId);
+      writeStorageItem(SHARED_PLAYLIST_ID_KEY, targetPlaylistId);
+
+      // Write to the protected saved-role key (never overwritten by playlist resets).
+      saveRoleVisibility(kind);
+      await persistRoleSnapshot(kind, targetPlaylistId);
+      setStatusMessage(`✓ Saved ${kind} visibility for "${playlistName}".`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to save visibility.";
+      setStatusMessage(`✗ ${message}`);
     }
-
-    if (kind === "adult") {
-      setAdultPlaylistId(targetPlaylist.id);
-      writeStorageItem(ADULT_PLAYLIST_ID_KEY, targetPlaylist.id);
-    } else {
-      setChildPlaylistId(targetPlaylist.id);
-      writeStorageItem(CHILD_PLAYLIST_ID_KEY, targetPlaylist.id);
-    }
-
-    writeStorageItem(SHARED_PLAYLIST_ID_KEY, targetPlaylist.id);
-
-    // Write to the protected saved-role key (never overwritten by playlist resets).
-    saveRoleVisibility(kind);
-    await persistRoleSnapshot(kind, targetPlaylist.id);
-    setStatusMessage(`✓ Saved ${kind} visibility for "${targetPlaylist.name}".`);
   }
 
   async function applyActiveRoleVisibility(kind: "adult" | "child") {
@@ -687,7 +742,7 @@ export default function PlaylistManager({
     loadRequestTokenRef.current = requestToken;
 
     setLoadingId(p.id);
-    setStatusMessage(`Loading "${p.name}"… this can take up to a minute for large playlists.`);
+    setStatusMessage(`Loading "${p.name}"… large playlists can take several minutes on Fire TV.`);
     try {
       const mergeChannelsById = (existingChannels: Channel[], incomingChannels: Channel[]) => {
         const byId = new Map<string, Channel>();
@@ -696,112 +751,118 @@ export default function PlaylistManager({
         return Array.from(byId.values());
       };
 
-      let channels = await loadChannelsForPlaylist(p, isCapacitorRuntime() ? "live" : "all");
-      const initialMovieCount = channels.filter(
-        (channel) => String(channel?.contentType || "").toLowerCase() === "movie"
-      ).length;
-      const initialSeriesCount = channels.filter(
-        (channel) => String(channel?.contentType || "").toLowerCase() === "series"
-      ).length;
-      let finalMovieStatus = `all=${initialMovieCount.toLocaleString()}`;
+      setStatusMessage(`Loading live channels from "${p.name}"…`);
+      let channels: Channel[] = [];
+      let movieChannels: Channel[] = [];
+      let seriesChannels: Channel[] = [];
       let finalMovieError = "";
-      let finalSeriesStatus = `all=${initialSeriesCount.toLocaleString()}`;
       let finalSeriesError = "";
 
-      if (!isCapacitorRuntime()) {
-      const hasMovies = channels.some((channel) => String(channel?.contentType || "").toLowerCase() === "movie");
-      if (!hasMovies && p.type === "xtream") {
+      if (p.type === "xtream") {
+        // Fire TV: do not stream per-category names into React state. Each
+        // update re-renders Playlist Manager and stalls the load.
+        const reportProgress = isCapacitorRuntime() ? undefined : setStatusMessage;
+        await loadChannelsForPlaylist(p, "live", reportProgress);
+        channels = [];
+        setStatusMessage(`Loading movies from "${p.name}"…`);
         try {
-          const movieChannels = await loadChannelsForPlaylist(p, "movies");
-          if (Array.isArray(movieChannels) && movieChannels.length > 0) {
-            channels = mergeChannelsById(channels, movieChannels);
-          }
-          const mergedMovieCount = channels.filter(
-            (channel) => String(channel?.contentType || "").toLowerCase() === "movie"
-          ).length;
-          finalMovieStatus = `all=${initialMovieCount.toLocaleString()} backfill=${movieChannels.length.toLocaleString()} merged=${mergedMovieCount.toLocaleString()}`;
-          if (movieChannels.length === 0) {
-            finalMovieError = "movie scope returned 0 entries";
-          }
-          setStatusMessage(
-            `Movie backfill: all=${initialMovieCount.toLocaleString()} movies=${movieChannels.length.toLocaleString()} merged=${mergedMovieCount.toLocaleString()}${movieChannels.length === 0 ? " error=movie scope returned 0 entries" : ""}`
-          );
+          await loadChannelsForPlaylist(p, "movies", reportProgress);
         } catch (movieErr) {
-          const movieMessage = movieErr instanceof Error ? movieErr.message : "Unknown movie load error";
-          finalMovieStatus = `all=${initialMovieCount.toLocaleString()} backfill=failed`;
-          finalMovieError = movieMessage;
-          setStatusMessage(`Movie backfill failed after all-load=${initialMovieCount.toLocaleString()}: ${movieMessage}`);
-          // Keep the primary load result if movie backfill fails.
+          finalMovieError = movieErr instanceof Error ? movieErr.message : "Unknown movie load error";
+          setStatusMessage(`Movie load failed: ${finalMovieError}`);
         }
-      } else {
-        finalMovieStatus = `all=${initialMovieCount.toLocaleString()}`;
-        setStatusMessage(`Initial load: total=${channels.length.toLocaleString()} movies=${initialMovieCount.toLocaleString()} series=${initialSeriesCount.toLocaleString()}`);
-      }
 
-      const hasSeries = channels.some((channel) => String(channel?.contentType || "").toLowerCase() === "series");
-      if (!hasSeries && p.type === "xtream") {
+        setStatusMessage(`Loading series from "${p.name}"…`);
         try {
-          const seriesChannels = await loadChannelsForPlaylist(p, "series");
-          if (Array.isArray(seriesChannels) && seriesChannels.length > 0) {
-            channels = mergeChannelsById(channels, seriesChannels);
-          }
-          const mergedSeriesCount = channels.filter(
-            (channel) => String(channel?.contentType || "").toLowerCase() === "series"
-          ).length;
-          finalSeriesStatus = `all=${initialSeriesCount.toLocaleString()} backfill=${seriesChannels.length.toLocaleString()} merged=${mergedSeriesCount.toLocaleString()}`;
-          if (seriesChannels.length === 0) {
-            finalSeriesError = "series scope returned 0 entries";
-          }
-          setStatusMessage(
-            `Series backfill: all=${initialSeriesCount.toLocaleString()} series=${seriesChannels.length.toLocaleString()} merged=${mergedSeriesCount.toLocaleString()}${seriesChannels.length === 0 ? " error=series scope returned 0 entries" : ""}`
-          );
+          await loadChannelsForPlaylist(p, "series", reportProgress);
         } catch (seriesErr) {
-          const seriesMessage = seriesErr instanceof Error ? seriesErr.message : "Unknown series load error";
-          finalSeriesStatus = `all=${initialSeriesCount.toLocaleString()} backfill=failed`;
-          finalSeriesError = seriesMessage;
-          setStatusMessage(`Series backfill failed after all-load=${initialSeriesCount.toLocaleString()}: ${seriesMessage}`);
+          finalSeriesError = seriesErr instanceof Error ? seriesErr.message : "Unknown series load error";
+          setStatusMessage(`Series load failed: ${finalSeriesError}`);
         }
-      }
       } else {
-        setStatusMessage(
-          `Loaded ${channels.length.toLocaleString()} live channels on Fire TV/Android (movies/series load on demand).`
+        channels = await loadChannelsForPlaylist(p, "all");
+        movieChannels = channels.filter(
+          (channel) => String(channel?.contentType || "").toLowerCase() === "movie"
+        );
+        seriesChannels = channels.filter(
+          (channel) => String(channel?.contentType || "").toLowerCase() === "series"
         );
       }
 
+      if (!isCapacitorRuntime()) {
+        channels = mergeChannelsById(mergeChannelsById(channels, movieChannels), seriesChannels);
+      }
+
+      const liveGroupNames = isCapacitorRuntime() ? getCapacitorLiveGroupNames() : [];
+      const liveGroupCount = liveGroupNames.length;
+      const liveTitleCount = isCapacitorRuntime()
+        ? Object.values(getCapacitorLiveGroupCounts()).reduce((sum, count) => sum + count, 0)
+        : channels.filter((channel) => String(channel?.contentType || "").toLowerCase() === "live").length;
+      const movieCount = isCapacitorRuntime()
+        ? getCapacitorVodGroupNames("movies").length
+        : channels.filter((channel) => String(channel?.contentType || "").toLowerCase() === "movie").length;
+      const seriesCount = isCapacitorRuntime()
+        ? getCapacitorVodGroupNames("series").length
+        : channels.filter((channel) => String(channel?.contentType || "").toLowerCase() === "series").length;
+
       if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
 
-      if (channels.length === 0) {
+      if (
+        channels.length === 0 &&
+        liveGroupCount === 0 &&
+        movieCount === 0 &&
+        seriesCount === 0
+      ) {
         throw new Error("Zero channels added. Check playlist URL/credentials and provider response.");
       }
 
-      setStatusMessage(`Indexing ${channels.length.toLocaleString()} entries…`);
+      setStatusMessage(
+        isCapacitorRuntime()
+          ? `Indexing live=${liveGroupCount.toLocaleString()} groups (${liveTitleCount.toLocaleString()} titles) movies=${movieCount.toLocaleString()} series=${seriesCount.toLocaleString()}…`
+          : `Indexing live=${channels.length.toLocaleString()} movies=${movieCount.toLocaleString()} series=${seriesCount.toLocaleString()}…`
+      );
       setCurrentPlaylistId(p.id);
       setSelectedPlaylistId(p.id);
       writeStorageItem(SHARED_PLAYLIST_ID_KEY, p.id);
 
       let loadedForUi = channels;
       if (isCapacitorRuntime()) {
-        const defaultGroup =
-          channels.find((channel) => String(channel?.contentType || "").toLowerCase() === "live")?.group ||
-          channels[0]?.group ||
-          "Uncategorized";
-        await ingestCapacitorLiveChannelCatalogAsync(channels, String(defaultGroup));
-        loadedForUi = getAllChannels();
-        channels.length = 0;
+        if (liveGroupNames.length > 0) {
+          // Per-category Xtream persist already wrote every live group to IDB.
+          // Re-ingesting the preview array would wipe that catalog down to one group.
+          await loadCapacitorLiveGroupChannels(liveGroupNames[0]);
+          loadedForUi = getAllChannels();
+        } else if (channels.length > 0) {
+          const defaultGroup =
+            channels.find((channel) => String(channel?.contentType || "").toLowerCase() === "live")?.group ||
+            channels[0]?.group ||
+            "Uncategorized";
+          await ingestCapacitorLiveChannelCatalogAsync(channels, String(defaultGroup));
+          loadedForUi = getAllChannels();
+          channels.length = 0;
+        }
       } else {
         setChannels(channels, roleToPersist ? "playlist-manager-role-load" : "playlist-manager-generic-load");
       }
 
+      const loadedScopes: Array<"live" | "movies" | "series"> = [];
+      if (channels.length > 0 || loadedForUi.length > 0 || liveGroupCount > 0) loadedScopes.push("live");
+      if (movieCount > 0) loadedScopes.push("movies");
+      if (seriesCount > 0) loadedScopes.push("series");
       saveChannelsCacheMeta({
         playlistId: p.id,
-        scopes: isCapacitorRuntime() ? ["live"] : inferLoadedScopes(loadedForUi),
+        scopes: loadedScopes.length > 0 ? loadedScopes : inferLoadedScopes(loadedForUi),
         updatedAt: Date.now()
       });
       onPlaylistLoadedWithId(loadedForUi, p.id);
-      setStatusMessage(`Loaded ${loadedForUi.length.toLocaleString()} entries from "${p.name}". Fetching EPG…`);
+      setStatusMessage(
+        isCapacitorRuntime()
+          ? `Loaded "${p.name}". Fetching EPG…`
+          : `Loaded ${loadedForUi.length.toLocaleString()} entries from "${p.name}". Fetching EPG…`
+      );
 
       try {
-        if (isCapacitorRuntime() && channels.length > 3000) {
+        if (isCapacitorRuntime() && (channels.length > 3000 || liveGroupCount > 0)) {
           void loadEPGForPlaylist(p).catch((epgErr) => {
             console.warn("EPG load failed:", epgErr);
           });
@@ -839,20 +900,26 @@ export default function PlaylistManager({
         });
       }
 
+      const movieGroupCount = isCapacitorRuntime() ? getCapacitorVodGroupNames("movies").length : 0;
+      const seriesGroupCount = isCapacitorRuntime() ? getCapacitorVodGroupNames("series").length : 0;
+      const finalLiveGroupCount = isCapacitorRuntime() ? getCapacitorLiveGroupNames().length : liveGroupCount;
+      const finalLiveTitleCount = isCapacitorRuntime()
+        ? Object.values(getCapacitorLiveGroupCounts()).reduce((sum, count) => sum + count, 0)
+        : liveTitleCount;
       const finalMovieCount = isCapacitorRuntime()
-        ? 0
+        ? movieGroupCount
         : loadedForUi.filter(
         (channel) => String(channel?.contentType || "").toLowerCase() === "movie"
       ).length;
       const finalSeriesCount = isCapacitorRuntime()
-        ? 0
+        ? seriesGroupCount
         : loadedForUi.filter(
         (channel) => String(channel?.contentType || "").toLowerCase() === "series"
       ).length;
       setStatusMessage(
         isCapacitorRuntime()
-          ? `✓ Loaded live catalog (${getAllChannels().length.toLocaleString()} channels in active group) from "${p.name}".`
-          : `${finalMovieError ? `Movie error=${finalMovieError} | ` : ""}${finalSeriesError ? `Series error=${finalSeriesError} | ` : ""}✓ Loaded ${loadedForUi.length.toLocaleString()} entries from "${p.name}". Movies: ${finalMovieStatus} final=${finalMovieCount.toLocaleString()} | Series: ${finalSeriesStatus} final=${finalSeriesCount.toLocaleString()}`
+          ? `✓ Loaded "${p.name}". Live ${finalLiveGroupCount.toLocaleString()} groups (${finalLiveTitleCount.toLocaleString()} titles), ${movieGroupCount.toLocaleString()} movie categories, ${seriesGroupCount.toLocaleString()} series categories.`
+          : `${finalMovieError ? `Movie error=${finalMovieError} | ` : ""}${finalSeriesError ? `Series error=${finalSeriesError} | ` : ""}✓ Loaded ${loadedForUi.length.toLocaleString()} entries from "${p.name}". Movies: ${finalMovieCount.toLocaleString()} | Series: ${finalSeriesCount.toLocaleString()}`
       );
     } catch (err) {
       if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
@@ -865,10 +932,19 @@ export default function PlaylistManager({
     }
   }
 
-  const loadedPlaylist = playlists.find((playlist) => playlist.id === activePlaylistId);
+  const loadedPlaylistId =
+    activePlaylistId ||
+    selectedPlaylistId ||
+    currentPlaylistId ||
+    adultPlaylistId ||
+    childPlaylistId ||
+    playlists[0]?.id ||
+    "";
+  const loadedPlaylist = playlists.find((playlist) => playlist.id === loadedPlaylistId);
 
   return (
     <div className="side-panel">
+      <div className="playlist-manager-chrome">
       <h2>Playlist Manager</h2>
 
       <p className="playlist-loaded-summary" aria-live="polite">
@@ -889,29 +965,39 @@ export default function PlaylistManager({
           Child
         </button>
         <button
-          className="btn-primary btn-flex"
+          className="btn-primary btn-flex playlist-manager-save-btn"
           onClick={() => { void saveActiveRoleSnapshot(); }}
         >
           Save {activeRoleContext === "child" ? "Child" : "Adult"} Visibility
         </button>
       </div>
       <p className="playlist-loaded-summary">
-        Master min list is the left column: tick matching (Tv:???| groups to keep for Master Live TV.
+        Load a playlist here. Hide or show categories, then Live TV / Movies / Series open instantly from this save — they do not download again until you press Load.
       </p>
 
       <div className="playlist-manager-actions">
-        <button className="btn-primary btn-flex" onClick={() => onOpenAddPlaylist?.()}>
+        <button className="btn-secondary btn-flex" onClick={() => onOpenAddPlaylist?.()}>
           Add Playlist
         </button>
-        <button className="btn-primary btn-flex" onClick={() => onSelectContent("tv")}>
+        <button
+          className={`btn-secondary btn-flex${contentMode === "tv" ? " playlist-mode-active" : ""}`}
+          onClick={() => onSelectContent("tv")}
+        >
           Live TV
         </button>
-        <button className="btn-secondary btn-flex" onClick={() => onSelectContent("movies")}>
+        <button
+          className={`btn-secondary btn-flex${contentMode === "movies" ? " playlist-mode-active" : ""}`}
+          onClick={() => onSelectContent("movies")}
+        >
           Movies
         </button>
-        <button className="btn-secondary btn-flex" onClick={() => onSelectContent("series")}>
+        <button
+          className={`btn-secondary btn-flex${contentMode === "series" ? " playlist-mode-active" : ""}`}
+          onClick={() => onSelectContent("series")}
+        >
           Series
         </button>
+      </div>
       </div>
 
       {playlists.length === 0 && <p>No playlists added yet.</p>}
@@ -920,7 +1006,7 @@ export default function PlaylistManager({
         <div
           className={`playlist-status-banner${loadingId ? " playlist-status-banner-loading" : ""}`}
           role="status"
-          aria-live="polite"
+          aria-live={loadingId && isCapacitorRuntime() ? "off" : "polite"}
         >
           {loadingId && <span className="playlist-status-spinner">⏳</span>}
           {statusMessage}
@@ -930,11 +1016,11 @@ export default function PlaylistManager({
       {playlists.map((p) => (
         <div
           key={p.id}
-          className={`playlist-card${selectedPlaylistId === p.id ? " playlist-role-active" : ""}${activePlaylistId === p.id ? " playlist-card-loaded" : ""}`}
+          className={`playlist-card${selectedPlaylistId === p.id ? " playlist-role-active" : ""}${loadedPlaylistId === p.id ? " playlist-card-loaded" : ""}`}
         >
           <div className="playlist-header">
             <strong>{p.name}</strong>
-            {activePlaylistId === p.id && <span className="playlist-loaded-badge">Loaded</span>}
+            {loadedPlaylistId === p.id && <span className="playlist-loaded-badge">Loaded</span>}
           </div>
           <div className="playlist-item-type">
             Type: {p.type.toUpperCase()}
@@ -963,7 +1049,7 @@ export default function PlaylistManager({
               disabled={loadingId !== null}
               onClick={() => { void loadPlaylistIntoApp(p, null); }}
             >
-              {loadingId === p.id ? "Reloading…" : "Reload"}
+              {loadingId === p.id ? "Loading…" : activePlaylistId === p.id ? "Reload" : "Load"}
             </button>
 
             <button

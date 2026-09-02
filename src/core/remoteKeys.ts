@@ -9,6 +9,8 @@
 
 const KEYCODE_MAP: Record<number, string> = {
   13: "Enter",
+  23: "Enter",
+  66: "Enter",
   37: "ArrowLeft",
   38: "ArrowUp",
   39: "ArrowRight",

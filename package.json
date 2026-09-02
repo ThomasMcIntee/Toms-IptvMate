@@ -1,6 +1,6 @@
 {
   "name": "toms-iptvmate",
-  "version": "1.4.6",
+  "version": "1.4.7",
   "main": "electron/main.cjs",
   "files": [
     "dist",
@@ -17,6 +17,7 @@
     "cap:android": "npx cap open android",
     "cap:ios": "npx cap open ios",
     "android:build": "node scripts/build-android.cjs",
+    "android:log": "node scripts/android-log.cjs",
     "ios:build": "node scripts/build-ios.cjs",
     "desktop:package": "node scripts/repair-electron-install.cjs && electron-builder --win nsis --config.electronDist=node_modules/electron/dist",
     "webos:version-sync": "node scripts/sync-webos-version.cjs",
