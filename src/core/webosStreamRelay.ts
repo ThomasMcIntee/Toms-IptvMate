@@ -430,6 +430,22 @@ function pcRelayOrigins(): string[] {
   return found;
 }
 
+function redactUrl(url: string): string {
+  return String(url || "")
+    .replace(/([?&](?:username|password|user|pass|pwd)=)[^&]*/gi, "$1***")
+    .substring(0, 90);
+}
+
+function shouldCacheRemote(url: string, textLength: number): boolean {
+  if (textLength > 400_000) return false;
+  if (/[?&]action=get_(live_streams|vod_streams|series)(?:&|$)/i.test(url)) return false;
+  return true;
+}
+
+const remoteFetchCache = new Map<string, { at: number; value: WebOsRemoteFetchResult }>();
+const remoteFetchInFlight = new Map<string, Promise<WebOsRemoteFetchResult | null>>();
+const REMOTE_FETCH_CACHE_MS = 90_000;
+
 function xhrGetText(url: string): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {
     try {
@@ -457,7 +473,7 @@ async function tryTextUrl(
   try {
     const res = await xhrGetText(fetchUrl);
     if (res.status >= 200 && res.status < 300 && res.text) {
-      debugLog(`FETCH: ${label} ${res.status} ${sourceUrl.substring(0, 80)}`);
+      debugLog(`FETCH: ${label} ${res.status} ${redactUrl(sourceUrl)}`);
       return { ok: true, status: res.status, url: sourceUrl, text: res.text };
     }
     debugLog(`FETCH: ${label} HTTP ${res.status || 0}`);
@@ -470,7 +486,7 @@ async function tryTextUrl(
     if (res.ok) {
       const text = await res.text();
       if (text) {
-        debugLog(`FETCH: ${label}-fetch ${res.status} ${sourceUrl.substring(0, 80)}`);
+        debugLog(`FETCH: ${label}-fetch ${res.status} ${redactUrl(sourceUrl)}`);
         return { ok: true, status: res.status, url: sourceUrl, text };
       }
     }
@@ -489,9 +505,9 @@ export type WebOsRemoteFetchResult = {
   text: string;
 };
 
-export async function fetchWebOsRemote(url: string): Promise<WebOsRemoteFetchResult | null> {
+async function fetchWebOsRemoteUncached(url: string): Promise<WebOsRemoteFetchResult | null> {
   const candidates = targetCandidates(url);
-  debugLog(`FETCH: start ${candidates[0]?.substring(0, 80) || url.substring(0, 80)}`);
+  debugLog(`FETCH: start ${redactUrl(candidates[0] || url)}`);
 
   for (const candidate of candidates) {
     const direct = await tryTextUrl(candidate, candidate, "direct");
@@ -524,7 +540,7 @@ export async function fetchWebOsRemote(url: string): Promise<WebOsRemoteFetchRes
       const luna = await fetchWebOsViaLuna(candidate, true);
       const text = String(luna.data || "");
       if (text) {
-        debugLog(`FETCH: luna ok ${candidate.substring(0, 80)}`);
+        debugLog(`FETCH: luna ok ${redactUrl(candidate)}`);
         return { ok: true, status: 200, url: luna.finalUrl || candidate, text };
       }
     } catch (err) {
@@ -534,6 +550,30 @@ export async function fetchWebOsRemote(url: string): Promise<WebOsRemoteFetchRes
 
   debugLog("FETCH: all methods failed");
   return null;
+}
+
+export async function fetchWebOsRemote(url: string): Promise<WebOsRemoteFetchResult | null> {
+  const cacheKey = rewriteHttpsToHttp(url);
+  const cached = remoteFetchCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < REMOTE_FETCH_CACHE_MS) {
+    debugLog(`FETCH: cache ${redactUrl(cacheKey)}`);
+    return cached.value;
+  }
+
+  const pending = remoteFetchInFlight.get(cacheKey);
+  if (pending) return pending;
+
+  const request = fetchWebOsRemoteUncached(url).then((result) => {
+    if (result && shouldCacheRemote(cacheKey, result.text.length)) {
+      remoteFetchCache.set(cacheKey, { at: Date.now(), value: result });
+    }
+    return result;
+  }).finally(() => {
+    remoteFetchInFlight.delete(cacheKey);
+  });
+
+  remoteFetchInFlight.set(cacheKey, request);
+  return request;
 }
 
 export async function fetchWebOsRemoteJson(url: string): Promise<unknown | null> {
