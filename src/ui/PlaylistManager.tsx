@@ -6,7 +6,9 @@ import {
   loadPlaylists,
   updatePlaylist,
   deletePlaylist,
-  PlaylistEntry
+  PlaylistEntry,
+  sanitizePlaylistCatalog,
+  type PlaylistCatalogTotals
 } from "../core/playlistStore";
 import {
   saveChannelsCacheMeta,
@@ -23,12 +25,20 @@ import {
   getCapacitorLiveGroupCounts,
   getCapacitorLiveGroupNames,
   getCapacitorVodGroupNames,
+  getCapacitorVodGroupCounts,
   loadCapacitorLiveGroupChannels
 } from "../core/channelStore";
 import { loadEPGForPlaylist } from "../core/loaders/epgLoader";
 import { loadChannelsForPlaylist } from "../core/loaders/playlistLoader";
+import { fetchXtreamAccountInfo, fetchXtreamCatalogTotals } from "../core/loaders/xtreamLoader";
 import { loadEPGCache } from "../core/epgStore";
 import { isCapacitorRuntime } from "../core/player/platformDetection";
+import {
+  formatXtreamAccountExpiry,
+  isXtreamAccountExpired,
+  resolveXtreamApiCredentials,
+  type XtreamAccountInfo
+} from "../core/xtreamAccount";
 
 const ADULT_CACHE_KEY = "iptvmate_adult_channels_cache";
 const CHILD_CACHE_KEY = "iptvmate_child_channels_cache";
@@ -510,6 +520,92 @@ export default function PlaylistManager({
     if (!currentPlaylistId) setCurrentPlaylistId(resolved);
   }, [visible, activePlaylistId, playlists, adultPlaylistId, childPlaylistId, selectedPlaylistId, currentPlaylistId]);
 
+  const accountPlaylistId =
+    activePlaylistId ||
+    selectedPlaylistId ||
+    currentPlaylistId ||
+    adultPlaylistId ||
+    childPlaylistId ||
+    playlists[0]?.id ||
+    "";
+  const accountCredentials = resolveXtreamApiCredentials(
+    playlists.find((entry) => entry.id === accountPlaylistId)
+  );
+
+  useEffect(() => {
+    if (!visible || !accountPlaylistId || !accountCredentials) return;
+
+    let cancelled = false;
+    void fetchXtreamAccountInfo(
+      accountCredentials.url,
+      accountCredentials.user,
+      accountCredentials.pass
+    ).then((account) => {
+      if (cancelled || !account) return;
+      const latest = loadPlaylists().find((entry) => entry.id === accountPlaylistId);
+      if (!latest) return;
+      const current = latest.data?.account as XtreamAccountInfo | undefined;
+      if (
+        current &&
+        current.maxConnections === account.maxConnections &&
+        current.activeConnections === account.activeConnections &&
+        current.expDateMs === account.expDateMs &&
+        current.unlimited === account.unlimited &&
+        current.status === account.status
+      ) {
+        return;
+      }
+      updatePlaylist(accountPlaylistId, {
+        ...latest,
+        data: { ...latest.data, account }
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    visible,
+    accountPlaylistId,
+    accountCredentials?.url,
+    accountCredentials?.user,
+    accountCredentials?.pass
+  ]);
+
+  useEffect(() => {
+    if (!visible || !accountPlaylistId) return;
+    const stored = sanitizePlaylistCatalog(
+      loadPlaylists().find((entry) => entry.id === accountPlaylistId)?.data?.catalog
+    );
+    const live = getLoadedCatalogTotals();
+    if (live.total > 0 && !(stored && stored.total >= live.total)) {
+      persistPlaylistCatalog(accountPlaylistId, live);
+    }
+    if (stored && stored.total > 0) return;
+    if (live.total > 0) return;
+    if (!accountCredentials) return;
+
+    let cancelled = false;
+    void fetchXtreamCatalogTotals(
+      accountCredentials.url,
+      accountCredentials.user,
+      accountCredentials.pass
+    ).then((catalog) => {
+      if (cancelled || !catalog) return;
+      persistPlaylistCatalog(accountPlaylistId, catalog);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    visible,
+    accountPlaylistId,
+    accountCredentials?.url,
+    accountCredentials?.user,
+    accountCredentials?.pass
+  ]);
+
   useEffect(() => {
     // Role snapshots are intentionally not auto-persisted from visibility events.
     // Automatic writes can capture channels from a different loaded playlist and
@@ -602,7 +698,10 @@ export default function PlaylistManager({
         const epg = String(editEpg || "").trim()
           ? normalizeUrlInput(editEpg, "EPG URL")
           : "";
-        nextData = { url, epg };
+        const urlChanged = url !== String(playlist.data?.url || "");
+        nextData = urlChanged
+          ? { url, epg }
+          : { url, epg, account: playlist.data?.account, catalog: playlist.data?.catalog };
       } else if (playlist.type === "xtream") {
         const url = normalizeUrlInput(editUrl, "Server URL");
         const user = String(editUser || "").trim();
@@ -610,14 +709,20 @@ export default function PlaylistManager({
         if (!user || !pass) {
           throw new Error("Xtream username and password are required.");
         }
-        nextData = { url, user, pass };
+        const credentialsChanged =
+          url !== String(playlist.data?.url || "") ||
+          user !== String(playlist.data?.user || "") ||
+          pass !== String(playlist.data?.pass || "");
+        nextData = credentialsChanged
+          ? { url, user, pass }
+          : { url, user, pass, account: playlist.data?.account, catalog: playlist.data?.catalog };
       } else {
         const portal = normalizeUrlInput(editPortal, "Portal URL");
         const mac = String(editMac || "").trim();
         if (!mac) {
           throw new Error("MAC address is required.");
         }
-        nextData = { portal, mac };
+        nextData = { portal, mac, catalog: playlist.data?.catalog };
       }
 
       updatePlaylist(playlist.id, {
@@ -760,13 +865,19 @@ export default function PlaylistManager({
 
       if (p.type === "xtream") {
         // Fire TV: do not stream per-category names into React state. Each
-        // update re-renders Playlist Manager and stalls the load.
+        // update re-renders Playlist Manager and stalls the load. webOS/desktop
+        // have no Capacitor IDB ingest, so they must keep the returned arrays.
         const reportProgress = isCapacitorRuntime() ? undefined : setStatusMessage;
-        await loadChannelsForPlaylist(p, "live", reportProgress);
-        channels = [];
-        setStatusMessage(`Loading movies from "${p.name}"…`);
+        const liveChannels = await loadChannelsForPlaylist(p, "live", reportProgress);
+        channels = isCapacitorRuntime() ? [] : liveChannels;
+        if (!isCapacitorRuntime()) {
+          setStatusMessage(`Loaded ${channels.length.toLocaleString()} live channels from "${p.name}". Loading movies…`);
+        } else {
+          setStatusMessage(`Loading movies from "${p.name}"…`);
+        }
         try {
-          await loadChannelsForPlaylist(p, "movies", reportProgress);
+          const loadedMovies = await loadChannelsForPlaylist(p, "movies", reportProgress);
+          movieChannels = isCapacitorRuntime() ? [] : loadedMovies;
         } catch (movieErr) {
           finalMovieError = movieErr instanceof Error ? movieErr.message : "Unknown movie load error";
           setStatusMessage(`Movie load failed: ${finalMovieError}`);
@@ -774,7 +885,8 @@ export default function PlaylistManager({
 
         setStatusMessage(`Loading series from "${p.name}"…`);
         try {
-          await loadChannelsForPlaylist(p, "series", reportProgress);
+          const loadedSeries = await loadChannelsForPlaylist(p, "series", reportProgress);
+          seriesChannels = isCapacitorRuntime() ? [] : loadedSeries;
         } catch (seriesErr) {
           finalSeriesError = seriesErr instanceof Error ? seriesErr.message : "Unknown series load error";
           setStatusMessage(`Series load failed: ${finalSeriesError}`);
@@ -921,6 +1033,21 @@ export default function PlaylistManager({
           ? `✓ Loaded "${p.name}". Live ${finalLiveGroupCount.toLocaleString()} groups (${finalLiveTitleCount.toLocaleString()} titles), ${movieGroupCount.toLocaleString()} movie categories, ${seriesGroupCount.toLocaleString()} series categories.`
           : `${finalMovieError ? `Movie error=${finalMovieError} | ` : ""}${finalSeriesError ? `Series error=${finalSeriesError} | ` : ""}✓ Loaded ${loadedForUi.length.toLocaleString()} entries from "${p.name}". Movies: ${finalMovieCount.toLocaleString()} | Series: ${finalSeriesCount.toLocaleString()}`
       );
+      persistPlaylistCatalog(p.id, {
+        live: finalLiveTitleCount,
+        movies: isCapacitorRuntime()
+          ? sumCountMap(getCapacitorVodGroupCounts("movies"))
+          : finalMovieCount,
+        series: isCapacitorRuntime()
+          ? sumCountMap(getCapacitorVodGroupCounts("series"))
+          : finalSeriesCount,
+        total: isCapacitorRuntime()
+          ? finalLiveTitleCount +
+            sumCountMap(getCapacitorVodGroupCounts("movies")) +
+            sumCountMap(getCapacitorVodGroupCounts("series"))
+          : loadedForUi.length
+      });
+      void refreshAndPersistXtreamAccount(p);
     } catch (err) {
       if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
       const message = err instanceof Error ? err.message : "Unknown error";
@@ -949,6 +1076,11 @@ export default function PlaylistManager({
 
       <p className="playlist-loaded-summary" aria-live="polite">
         Loaded playlist: <strong>{loadedPlaylist?.name || "None"}</strong>
+        <PlaylistAccountLine
+          catalog={resolvePlaylistCatalog(loadedPlaylist, loadedPlaylistId === activePlaylistId || loadedPlaylistId === currentPlaylistId)}
+          account={loadedPlaylist?.data?.account}
+          block
+        />
       </p>
 
       <div className="playlist-manager-parental-actions">
@@ -1025,6 +1157,13 @@ export default function PlaylistManager({
           <div className="playlist-item-type">
             Type: {p.type.toUpperCase()}
           </div>
+          {loadedPlaylistId === p.id && (
+            <PlaylistAccountLine
+              catalog={resolvePlaylistCatalog(p, p.id === activePlaylistId || p.id === currentPlaylistId)}
+              account={p.data?.account}
+              block
+            />
+          )}
 
           <div className="playlist-role-actions">
             <button
@@ -1183,4 +1322,109 @@ export default function PlaylistManager({
       ))}
     </div>
   );
+}
+
+function PlaylistAccountLine({
+  catalog,
+  account,
+  block = false
+}: {
+  catalog?: PlaylistCatalogTotals | null;
+  account?: XtreamAccountInfo | null;
+  block?: boolean;
+}) {
+  const total = catalog && catalog.total > 0 ? catalog.total.toLocaleString() : null;
+  const expiry = account ? formatXtreamAccountExpiry(account) : null;
+  if (!total && !expiry) return null;
+  const expired = account ? isXtreamAccountExpired(account) : false;
+
+  return (
+    <span
+      className={`playlist-account-meta${block ? " playlist-account-meta-block" : ""}${expired ? " playlist-account-meta-expired" : ""}`}
+    >
+      {total ? <>Total: {total}</> : null}
+      {total && expiry ? " · " : null}
+      {expiry ? <>Expiry: {expiry}</> : null}
+    </span>
+  );
+}
+
+function sumCountMap(counts: Record<string, number>): number {
+  return Object.values(counts).reduce((sum, count) => sum + (Number(count) || 0), 0);
+}
+
+function getLoadedCatalogTotals(): PlaylistCatalogTotals {
+  if (isCapacitorRuntime()) {
+    const live = sumCountMap(getCapacitorLiveGroupCounts());
+    const movies = sumCountMap(getCapacitorVodGroupCounts("movies"));
+    const series = sumCountMap(getCapacitorVodGroupCounts("series"));
+    return { live, movies, series, total: live + movies + series };
+  }
+
+  const channels = getAllChannels();
+  const live = channels.filter((channel) => String(channel?.contentType || "").toLowerCase() === "live").length;
+  const movies = channels.filter((channel) => String(channel?.contentType || "").toLowerCase() === "movie").length;
+  const series = channels.filter((channel) => String(channel?.contentType || "").toLowerCase() === "series").length;
+  return {
+    live,
+    movies,
+    series,
+    total: channels.length
+  };
+}
+
+function resolvePlaylistCatalog(
+  playlist: PlaylistEntry | undefined,
+  isCurrentlyLoaded: boolean
+): PlaylistCatalogTotals | null {
+  const stored = sanitizePlaylistCatalog(playlist?.data?.catalog);
+  if (stored && stored.total > 0) return stored;
+  if (!isCurrentlyLoaded) return stored || null;
+  const live = getLoadedCatalogTotals();
+  return live.total > 0 ? live : stored || null;
+}
+
+function persistPlaylistCatalog(playlistId: string, catalog: PlaylistCatalogTotals) {
+  const sanitized = sanitizePlaylistCatalog(catalog);
+  if (!sanitized) return;
+  const latest = loadPlaylists().find((entry) => entry.id === playlistId);
+  if (!latest) return;
+  const current = sanitizePlaylistCatalog(latest.data?.catalog);
+  if (
+    current &&
+    current.total === sanitized.total &&
+    current.live === sanitized.live &&
+    current.movies === sanitized.movies &&
+    current.series === sanitized.series
+  ) {
+    return;
+  }
+  updatePlaylist(playlistId, {
+    ...latest,
+    data: { ...latest.data, catalog: sanitized }
+  });
+}
+
+async function refreshAndPersistXtreamAccount(playlist: PlaylistEntry) {
+  const credentials = resolveXtreamApiCredentials(playlist);
+  if (!credentials) return;
+  const account = await fetchXtreamAccountInfo(credentials.url, credentials.user, credentials.pass);
+  if (!account) return;
+  const latest = loadPlaylists().find((entry) => entry.id === playlist.id);
+  if (!latest) return;
+  const current = latest.data?.account as XtreamAccountInfo | undefined;
+  if (
+    current &&
+    current.maxConnections === account.maxConnections &&
+    current.activeConnections === account.activeConnections &&
+    current.expDateMs === account.expDateMs &&
+    current.unlimited === account.unlimited &&
+    current.status === account.status
+  ) {
+    return;
+  }
+  updatePlaylist(playlist.id, {
+    ...latest,
+    data: { ...latest.data, account }
+  });
 }

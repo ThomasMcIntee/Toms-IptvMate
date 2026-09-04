@@ -7,7 +7,7 @@ import { PanelsHost } from "./ui/PanelsHost";
 import { firstGroupForMasterKey, MasterMinList } from "./ui/MasterMinList";
 import { useProfile } from "./profiles/ProfileContext";
 import { initNavigation } from "./core/navigation";
-import { normalizeRemoteNavKey } from "./core/remoteKeys";
+import { normalizeRemoteMediaKey, normalizeRemoteNavKey } from "./core/remoteKeys";
 import { initPlayerEngine, playUrl, stopPlayback } from "./core/playerEngine";
 import {
   isNativePlayerAvailable,
@@ -23,7 +23,7 @@ import {
   stopNativePlayback,
   syncNativePlayerBounds
 } from "./core/nativePlayerBridge";
-import { isCapacitorRuntime } from "./core/player/platformDetection";
+import { isCapacitorRuntime, isWebOsRuntime } from "./core/player/platformDetection";
 import { GroupList } from "./ui/GroupList";
 import { sortChannelsByName, type ItemSortDirection } from "./ui/groupSorting";
 import {
@@ -62,7 +62,7 @@ import {
   type ChannelVisibilitySnapshot
 } from "./core/channelStore";
 import NowNextOverlay from "./ui/NowNextOverlay";
-import { PlayerControlBar } from "./ui/PlayerControlBar";
+import { PlayerControlBar, VodExitButton } from "./ui/PlayerControlBar";
 import { isPlaylistsHydrationPending, loadPlaylists, type PlaylistEntry } from "./core/playlistStore";
 import { loadEPGForPlaylist } from "./core/loaders/epgLoader";
 import { getEPG, getEPGForChannel, getIndexedEPGForChannel, setEPG } from "./core/epgStore";
@@ -141,6 +141,13 @@ function resolveStoredPlaylistId(playlists: PlaylistEntry[] = loadPlaylists()): 
     return stored;
   }
   return playlists[0]?.id || stored || "";
+}
+
+function isTextEntryActive(target: EventTarget | null = document.activeElement): boolean {
+  if (typeof document !== "undefined" && document.body?.dataset?.webosKeyboard === "open") {
+    return true;
+  }
+  return isTextEntryTarget(target) || isTextEntryTarget(document.activeElement);
 }
 
 function isBackKeyEvent(event: KeyboardEvent): boolean {
@@ -269,6 +276,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     url: null,
     at: 0
   });
+  const playChannelRef = useRef<(ch: any, options?: { forceRestart?: boolean }) => void>(() => {});
+  const scheduleLiveReconnectRef = useRef<(reason: string) => void>(() => {});
+  const liveReconnectTimerRef = useRef<number | null>(null);
+  const liveReconnectAttemptRef = useRef(0);
+  const hadLivePlayingRef = useRef(false);
   const lastFavoriteToggleAtRef = useRef(0);
   const seriesAutoAdvanceTokenRef = useRef(0);
   const lastSeriesEndedRef = useRef<{ url: string | null; at: number }>({
@@ -1670,6 +1682,14 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, []);
 
   useEffect(() => {
+    if (isWebOsRuntime()) {
+      document.body.classList.add("is-webos");
+      return () => document.body.classList.remove("is-webos");
+    }
+    document.body.classList.remove("is-webos");
+  }, []);
+
+  useEffect(() => {
     const onPlayerError = (e: Event) => {
       if (suppressPlayerEventsRef.current) return;
       if (!currentChannelRef.current) return;
@@ -1679,6 +1699,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       setPlayerStatus(null);
       setPlayerWarning(null);
       setPlayerError(message);
+      if (matchesContentMode(currentChannelRef.current, "tv")) {
+        scheduleLiveReconnectRef.current("error");
+      }
     };
 
     const onPlayerPlaying = () => {
@@ -1695,6 +1718,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
       setPlayerStatus(null);
       setPlayerUiTick((tick) => tick + 1);
+      hadLivePlayingRef.current = matchesContentMode(currentChannelRef.current, "tv");
+      liveReconnectAttemptRef.current = 0;
 
       // Native ExoPlayer on Capacitor is fullscreen — bounds sync not needed.
     };
@@ -1720,6 +1745,105 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       window.removeEventListener("playerError", onPlayerError as EventListener);
       window.removeEventListener("playerPlaying", onPlayerPlaying);
       window.removeEventListener("playerTranscoding", onPlayerTranscoding as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    const clearTimer = () => {
+      if (liveReconnectTimerRef.current !== null) {
+        window.clearTimeout(liveReconnectTimerRef.current);
+        liveReconnectTimerRef.current = null;
+      }
+    };
+
+    const schedule = (reason: string) => {
+      const ch = currentChannelRef.current;
+      if (!ch || !matchesContentMode(ch, "tv")) return;
+      if (liveReconnectTimerRef.current !== null) return;
+      const delay = Math.min(20000, Math.round(2500 * Math.pow(1.6, Math.min(liveReconnectAttemptRef.current, 8))));
+      const debugLog = (window as { webosDebugLog?: (msg: string) => void }).webosDebugLog;
+      if (debugLog) debugLog(`LIVE: reconnect in ${delay}ms (${reason})`);
+      setPlayerStatus("Connection lost, reconnecting...");
+      liveReconnectTimerRef.current = window.setTimeout(() => {
+        liveReconnectTimerRef.current = null;
+        const next = currentChannelRef.current;
+        if (!next || !matchesContentMode(next, "tv")) return;
+        if (document.visibilityState === "hidden") {
+          schedule("hidden");
+          return;
+        }
+        liveReconnectAttemptRef.current += 1;
+        lastPlayRequestRef.current = { id: null, url: null, at: 0 };
+        playChannelRef.current(next, { forceRestart: true });
+      }, delay);
+    };
+
+    scheduleLiveReconnectRef.current = schedule;
+
+    const onReconnect = (event: Event) => {
+      if (suppressPlayerEventsRef.current) return;
+      const message = (event as CustomEvent<{ message?: string }>).detail?.message || "reconnect";
+      schedule(message);
+    };
+
+    const onOffline = () => {
+      if (!matchesContentMode(currentChannelRef.current, "tv")) return;
+      setPlayerStatus("Connection lost, waiting to reconnect...");
+    };
+
+    const onOnline = () => {
+      clearTimer();
+      liveReconnectAttemptRef.current = 0;
+      schedule("online");
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!matchesContentMode(currentChannelRef.current, "tv")) return;
+      clearTimer();
+      schedule("visible");
+    };
+
+    const onWaiting = (event: Event) => {
+      const video = event.target as HTMLVideoElement | null;
+      if (!video || video.id !== "player-main") return;
+      if (!hadLivePlayingRef.current) return;
+      if (!matchesContentMode(currentChannelRef.current, "tv")) return;
+      if (liveReconnectTimerRef.current !== null) return;
+      window.setTimeout(() => {
+        const current = document.getElementById("player-main") as HTMLVideoElement | null;
+        if (!current || current.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return;
+        if (!hadLivePlayingRef.current) return;
+        schedule("stall");
+      }, 8000);
+    };
+
+    const onEnded = (event: Event) => {
+      const video = event.target as HTMLVideoElement | null;
+      if (!video || video.id !== "player-main") return;
+      if (!hadLivePlayingRef.current) return;
+      if (!matchesContentMode(currentChannelRef.current, "tv")) return;
+      schedule("ended");
+    };
+
+    window.addEventListener("playerReconnect", onReconnect as EventListener);
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
+    document.addEventListener("visibilitychange", onVisible);
+    document.addEventListener("waiting", onWaiting, true);
+    document.addEventListener("stalled", onWaiting, true);
+    document.addEventListener("ended", onEnded, true);
+
+    return () => {
+      scheduleLiveReconnectRef.current = () => {};
+      clearTimer();
+      window.removeEventListener("playerReconnect", onReconnect as EventListener);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
+      document.removeEventListener("visibilitychange", onVisible);
+      document.removeEventListener("waiting", onWaiting, true);
+      document.removeEventListener("stalled", onWaiting, true);
+      document.removeEventListener("ended", onEnded, true);
     };
   }, []);
 
@@ -1871,11 +1995,28 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     // Listen for custom webosBackKey event (dispatched by webOS SDK)
     const handleWebosBack = () => {
       const debugLog = (window as any).webosDebugLog;
+      if (isTextEntryActive()) {
+        if (debugLog) debugLog(`APP: webosBackKey ignored (text entry)`);
+        return;
+      }
       if (debugLog) debugLog(`APP: webosBackKey event received`);
       handleBackNavigation();
     };
     
     window.addEventListener('webosBackKey', handleWebosBack);
+
+    const onKeyboardStateChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ visibility?: boolean | string; state?: string }>).detail;
+      const visible =
+        detail?.visibility === true ||
+        detail?.visibility === "visible" ||
+        detail?.state === "opened" ||
+        detail?.state === "visible";
+      if (document.body) {
+        document.body.dataset.webosKeyboard = visible ? "open" : "closed";
+      }
+    };
+    document.addEventListener("keyboardStateChange", onKeyboardStateChange);
     
     // Regular keydown handler
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1891,6 +2032,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       // On webOS, Back is handled by webOS SDK + webosBackKey event
       // On other platforms, handle Back here directly
       const isWebOS = (window as any).webOS?.libVersion;
+
+      if (isBack && isTextEntryActive(e.target)) {
+        return;
+      }
       
       if (isBack) {
         if (isWebOS) {
@@ -1913,7 +2058,51 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return;
       }
 
-      if (currentChannel && (isLivePreviewFullscreen || e.key === " " || e.key === "Enter" || e.key === "Select" || e.keyCode === 23 || e.key === "f" || e.key === "F" || e.key === "m" || e.key === "M")) {
+      const mediaKey = normalizeRemoteMediaKey(e);
+      if (mediaKey && currentChannel) {
+        e.preventDefault();
+        e.stopPropagation();
+        window.dispatchEvent(new Event("playerRevealControls"));
+        if (mediaKey === "MediaPlayPause") {
+          togglePlayPause();
+        } else if (mediaKey === "MediaPlay") {
+          playPlayback();
+        } else if (mediaKey === "MediaPause" || mediaKey === "MediaStop") {
+          pausePlayback();
+        } else if (mediaKey === "MediaRewind") {
+          seekPlayback(-15);
+        } else if (mediaKey === "MediaFastForward") {
+          seekPlayback(15);
+        }
+        return;
+      }
+
+      if (isVodPlaybackFullscreen) {
+        window.dispatchEvent(new Event("playerRevealControls"));
+        if (navKey === "ArrowLeft") {
+          e.preventDefault();
+          seekPlayback(-15);
+          return;
+        }
+        if (navKey === "ArrowRight") {
+          e.preventDefault();
+          seekPlayback(15);
+          return;
+        }
+      }
+
+      if (
+        currentChannel &&
+        (e.key === " " ||
+          e.key === "Enter" ||
+          e.key === "Select" ||
+          e.keyCode === 23 ||
+          e.key === "f" ||
+          e.key === "F" ||
+          e.key === "m" ||
+          e.key === "M" ||
+          (isLivePreviewFullscreen && (navKey === "ArrowDown" || navKey === "ArrowUp")))
+      ) {
         revealNativePlayerControls();
         window.dispatchEvent(new Event("playerRevealControls"));
       }
@@ -1938,6 +2127,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
       window.removeEventListener('webosBackKey', handleWebosBack);
+      document.removeEventListener("keyboardStateChange", onKeyboardStateChange);
       window.removeEventListener("keydown", onKeyDown, true);
     };
   }, [activePanel, isVodPlaybackFullscreen, currentChannel, isSeriesPickerVisible, contentPage, isEffectiveLiveFullscreen, showOpeningScreen, hasPlaylists]);
@@ -2385,14 +2575,20 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         document.querySelectorAll<HTMLElement>(".group-list .group-list-bulk-btn")
       );
       const loadMoreBtn = document.querySelector<HTMLElement>(".channel-list .channel-load-more-btn");
-      const favoriteBtn = document.querySelector<HTMLButtonElement>(".epg-favorite-btn");
+      const favoriteBtn =
+        document.querySelector<HTMLButtonElement>(".player-control-bar-favorite") ||
+        document.querySelector<HTMLButtonElement>(".epg-favorite-btn");
+      const cardButtons = playlistCardButtons();
       const onFavorite = !!active && !!favoriteBtn && active === favoriteBtn;
+      const cardIndex = active instanceof HTMLButtonElement ? cardButtons.indexOf(active) : -1;
+      const onCard = cardIndex >= 0;
       if (
         modeButtons.length === 0 &&
         masterRows.length === 0 &&
         groupRows.length === 0 &&
         channelRows.length === 0 &&
-        !onFavorite
+        !onFavorite &&
+        !onCard
       ) {
         return;
       }
@@ -2448,7 +2644,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         groupIndex < 0 &&
         channelIndex < 0 &&
         !onLoadMore &&
-        !onFavorite
+        !onFavorite &&
+        !onCard
       ) {
         const inert =
           !active ||
@@ -2485,9 +2682,33 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         if (key === "ArrowLeft") moveTo(modeButtons[modeIndex - 1] || null);
         else if (key === "ArrowRight") moveTo(modeButtons[modeIndex + 1] || null);
         else if (key === "ArrowDown") {
-          moveTo(currentMasterStop() || toolbarButtons[0] || currentGroupStop());
+          moveTo(firstPlaylistCardButton() || currentMasterStop() || toolbarButtons[0] || currentGroupStop());
         } else if (key === "ArrowUp") {
           moveTo(saveButton || parentalButtons[parentalButtons.length - 1] || parentalButtons[0] || null);
+        }
+        return;
+      }
+
+      if (onCard) {
+        if (key === "ArrowLeft" || key === "ArrowRight") {
+          moveTo(stepPlaylistCardFocus(active, key) || active);
+        } else if (key === "ArrowDown") {
+          const next = stepPlaylistCardFocus(active, "ArrowDown");
+          if (next) moveTo(next);
+          else moveTo(currentMasterStop() || toolbarButtons[0] || currentGroupStop());
+        } else if (key === "ArrowUp") {
+          const next = stepPlaylistCardFocus(active, "ArrowUp");
+          if (next) moveTo(next);
+          else {
+            moveTo(
+              modeButtons.find((button) => button.classList.contains("playlist-mode-active")) ||
+                modeButtons[1] ||
+                modeButtons[0] ||
+                saveButton ||
+                parentalButtons[0] ||
+                null
+            );
+          }
         }
         return;
       }
@@ -2504,7 +2725,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         if (key === "ArrowUp") {
           if (masterIndex === 0) {
             moveTo(
-              modeButtons.find((button) => button.classList.contains("playlist-mode-active")) ||
+              lastPlaylistCardButton() ||
+                modeButtons.find((button) => button.classList.contains("playlist-mode-active")) ||
                 modeButtons[1] ||
                 verticalStop(masterRows[0] || null)
             );
@@ -2530,6 +2752,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             moveTo(
               toolbarButtons[0] ||
                 currentMasterStop() ||
+                lastPlaylistCardButton() ||
                 modeButtons.find((button) => button.classList.contains("playlist-mode-active")) ||
                 modeButtons[1] ||
                 null
@@ -2629,7 +2852,12 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
     // Older loaded Xtream live channels were built with a forced .m3u8 suffix.
     // Newer loaders use the provider's real extension, typically .ts.
-    if (contentType === "live" && /\/live\/[^/]+\/[^/]+\/\d+\.m3u8(?:\?|$)/i.test(rawUrl)) {
+    // webOS cannot play raw MPEG-TS, so keep HLS playlists there.
+    if (
+      contentType === "live" &&
+      !isWebOsRuntime() &&
+      /\/live\/[^/]+\/[^/]+\/\d+\.m3u8(?:\?|$)/i.test(rawUrl)
+    ) {
       return rawUrl.replace(/\.m3u8(?=\?|$)/i, ".ts");
     }
 
@@ -2713,12 +2941,13 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     saveSeriesLastWatchMap(seriesLastWatchRef.current);
   }
 
-  function playChannel(ch: any) {
+  function playChannel(ch: any, options?: { forceRestart?: boolean }) {
     if (showOpeningScreen) {
       // Ignore tune attempts until the user leaves the opening screen.
       return;
     }
 
+    const forceRestart = !!options?.forceRestart;
     const isLiveSelectionEarly = matchesContentMode(ch, "tv");
     const requestId = ch?.id ? String(ch.id) : null;
     const sameLiveChannel =
@@ -2727,7 +2956,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       String(currentChannelRef.current?.id || "") === requestId;
 
     // First click previews. Second click on the same channel goes fullscreen.
-    if (sameLiveChannel) {
+    if (sameLiveChannel && !forceRestart) {
       if (!isEffectiveLiveFullscreen) {
         setIsLiveFullscreenRequested(true);
         setShowLiveMenu(false);
@@ -2765,7 +2994,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       lastPlayRequestRef.current.url === requestUrl &&
       now - lastPlayRequestRef.current.at < 1500;
 
-    if (isDuplicateRapidRequest) {
+    if (isDuplicateRapidRequest && !forceRestart) {
       if (isLiveSelectionEarly && !isEffectiveLiveFullscreen) {
         setIsLiveFullscreenRequested(true);
         setShowLiveMenu(false);
@@ -2779,9 +3008,18 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       at: now
     };
 
+    if (!forceRestart) {
+      liveReconnectAttemptRef.current = 0;
+      hadLivePlayingRef.current = false;
+      if (liveReconnectTimerRef.current !== null) {
+        window.clearTimeout(liveReconnectTimerRef.current);
+        liveReconnectTimerRef.current = null;
+      }
+    }
+
     suppressPlayerEventsRef.current = false;
     setPlayerError(null);
-    setPlayerStatus(null);
+    setPlayerStatus(forceRestart ? "Reconnecting live TV..." : null);
     setPlayerWarning(null);
     const isLiveSelection = matchesContentMode(ch, "tv");
 
@@ -2790,7 +3028,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     setActivePanel(null);
     if (isLiveSelection) {
       setHasSelectedLiveChannel(true);
-      setShowLiveMenu(true);
+      if (!forceRestart) setShowLiveMenu(true);
     }
 
     const player = document.getElementById("player-main") as HTMLVideoElement | null;
@@ -2894,6 +3132,51 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     }
     const player = document.getElementById("player-main") as HTMLVideoElement | null;
     return !!player && (player.muted || player.volume === 0);
+  }
+
+  function playPlayback() {
+    if (document.body.classList.contains("native-exo-active")) {
+      if (isNativePlaybackPaused()) resumeNativePlayback();
+      refreshPlayerUi();
+      return;
+    }
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    if (!player || !player.paused) return;
+    void player.play();
+    refreshPlayerUi();
+  }
+
+  function pausePlayback() {
+    if (document.body.classList.contains("native-exo-active")) {
+      if (!isNativePlaybackPaused()) pauseNativePlayback();
+      refreshPlayerUi();
+      return;
+    }
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    if (!player || player.paused) return;
+    player.pause();
+    refreshPlayerUi();
+  }
+
+  function seekPlayback(deltaSeconds: number) {
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    if (!player || !Number.isFinite(player.currentTime)) return;
+    let next = player.currentTime + deltaSeconds;
+    if (player.seekable && player.seekable.length > 0) {
+      const start = player.seekable.start(0);
+      const end = player.seekable.end(player.seekable.length - 1);
+      next = Math.min(end, Math.max(start, next));
+    } else if (Number.isFinite(player.duration) && player.duration > 0) {
+      next = Math.min(player.duration - 0.25, Math.max(0, next));
+    } else {
+      next = Math.max(0, next);
+    }
+    try {
+      player.currentTime = next;
+    } catch {
+      // Live HLS windows sometimes reject seeks.
+    }
+    window.dispatchEvent(new Event("playerRevealControls"));
   }
 
   function togglePlayPause() {
@@ -3787,6 +4070,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  playChannelRef.current = playChannel;
+
   return (
     <div className={`app-root${isPlaylistManagerPage ? " is-playlist-manager" : ""}${isPlaylistManagerPage ? " has-master-min-list" : ""}`}>
       {shouldRenderMainVideo && useLivePreviewShell && (
@@ -3807,9 +4092,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                 paused={isPlaybackPaused()}
                 muted={isPlaybackMuted()}
                 fullscreen={isLivePreviewFullscreen}
+                isFavorite={isFavoriteChannelRecord(currentChannel)}
                 onPlayPause={togglePlayPause}
                 onMute={toggleMute}
                 onFullscreen={toggleFullscreen}
+                onToggleFavorite={() => toggleFavoriteChannel(currentChannel)}
               />
             )}
         </div>
@@ -3849,16 +4136,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       )}
       {currentChannel && !playerStatus && playerWarning && <div className="player-status player-status-info">{playerWarning}</div>}
       {currentChannel && playerError && <div className="player-status player-status-error">{playerError}</div>}
-      {isVodPlaybackFullscreen && (
-        <button
-          type="button"
-          className="vod-exit-btn"
-          onClick={exitVodPlayback}
-          aria-label="Exit movie playback"
-        >
-          Back
-        </button>
-      )}
+      {isVodPlaybackFullscreen && <VodExitButton visible={isVodPlaybackFullscreen} onExit={exitVodPlayback} />}
 
       {isLoginOverlayVisible && (
         <div className="app-login-overlay" role="dialog" aria-modal="true" aria-label="Login required">
@@ -4151,18 +4429,19 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         </>
       )}
 
-      {!shouldShowOpeningMenu && !isEpgSearchPanelOpen && currentChannel && (String(currentChannel.contentType || "").toLowerCase() === "live" || (!currentChannel.contentType && contentPage === "live")) && (
+      {!shouldShowOpeningMenu && !isEpgSearchPanelOpen && !isLivePreviewFullscreen && currentChannel && (String(currentChannel.contentType || "").toLowerCase() === "live" || (!currentChannel.contentType && contentPage === "live")) && (
         <>
           <EPGGrid
             currentChannel={currentChannel}
-            className={useLivePreviewShell && !isLivePreviewFullscreen ? "epg-grid-preview-window" : ""}
+            className={useLivePreviewShell ? "epg-grid-preview-window" : ""}
             onOpenGuide={() => {
               void openGuidePanel("epgSearch");
             }}
           />
+          {!useLivePreviewShell && (
           <button
             type="button"
-            className={`epg-favorite-btn${useLivePreviewShell && !isLivePreviewFullscreen ? " epg-favorite-btn-preview" : ""}`}
+            className="epg-favorite-btn"
             onClick={() => {
               if (!currentChannel) return;
               toggleFavoriteChannel(currentChannel);
@@ -4170,6 +4449,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
           >
             {isFavoriteChannelRecord(currentChannel) ? "Remove Favorite" : "Add Favorite"}
           </button>
+          )}
         </>
       )}
       {!shouldShowOpeningMenu && (
@@ -4290,12 +4570,72 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
+function playlistCardButtons(): HTMLButtonElement[] {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>(".playlist-card button")).filter(
+    (btn) => !btn.disabled && btn.offsetParent !== null
+  );
+}
+
+function firstPlaylistCardButton(): HTMLButtonElement | null {
+  const loaded = Array.from(
+    document.querySelectorAll<HTMLButtonElement>(".playlist-card-loaded button")
+  ).find((btn) => !btn.disabled && btn.offsetParent !== null);
+  return loaded || playlistCardButtons()[0] || null;
+}
+
+function lastPlaylistCardButton(): HTMLButtonElement | null {
+  const buttons = playlistCardButtons();
+  return buttons[buttons.length - 1] || null;
+}
+
+function stepPlaylistCardFocus(
+  active: HTMLElement | null,
+  key: "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight"
+): HTMLElement | null | undefined {
+  const buttons = playlistCardButtons();
+  if (buttons.length === 0) return undefined;
+  const index = active instanceof HTMLButtonElement ? buttons.indexOf(active) : -1;
+  if (index < 0) return undefined;
+
+  const current = buttons[index];
+  const currentRect = current.getBoundingClientRect();
+  const sameRow = (btn: HTMLButtonElement) =>
+    Math.abs(btn.getBoundingClientRect().top - currentRect.top) < 18;
+
+  if (key === "ArrowLeft" || key === "ArrowRight") {
+    const row = buttons.filter(sameRow);
+    const rowIndex = row.indexOf(current);
+    const next = key === "ArrowRight" ? row[rowIndex + 1] : row[rowIndex - 1];
+    return next || current;
+  }
+
+  const downward = key === "ArrowDown";
+  const candidates = buttons.filter((btn) => {
+    const top = btn.getBoundingClientRect().top;
+    return downward ? top > currentRect.top + 10 : top < currentRect.top - 10;
+  });
+  if (candidates.length === 0) return null;
+
+  const center = currentRect.left + currentRect.width / 2;
+  candidates.sort((a, b) => {
+    const aRect = a.getBoundingClientRect();
+    const bRect = b.getBoundingClientRect();
+    const primary = downward ? aRect.top - bRect.top : bRect.top - aRect.top;
+    if (Math.abs(primary) > 12) return primary;
+    const da = Math.abs(aRect.left + aRect.width / 2 - center);
+    const db = Math.abs(bRect.left + bRect.width / 2 - center);
+    return da - db;
+  });
+  return candidates[0];
+}
+
 function isFavoriteFocusTarget(el: Element | null): el is HTMLButtonElement {
   return (
     el instanceof HTMLButtonElement &&
     (el.classList.contains("channel-list-favorite") ||
       el.classList.contains("channel-icon-favorite") ||
       el.classList.contains("epg-favorite-btn") ||
+      el.classList.contains("player-control-bar-favorite") ||
       el.classList.contains("series-picker-favorite"))
   );
 }

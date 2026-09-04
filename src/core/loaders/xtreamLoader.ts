@@ -9,8 +9,11 @@ import {
   ContentType,
   type CapacitorVodCacheScope
 } from "../channelStore";
-import { isCapacitorRuntime } from "../player/platformDetection";
+import { isCapacitorRuntime, isWebOsRuntime } from "../player/platformDetection";
 import type { PlaylistLoadScope } from "./playlistLoader";
+import type { PlaylistCatalogTotals } from "../playlistStore";
+import { parseXtreamAccountInfo, type XtreamAccountInfo } from "../xtreamAccount";
+import { fetchWebOsRemote, fetchWebOsRemoteJson } from "../webosStreamRelay";
 
 const CAPACITOR_PERSIST_GROUP_CAP = 8000;
 export type XtreamLoadProgress = (status: string) => void;
@@ -66,12 +69,12 @@ export async function loadXtream(
   const { baseUrl, apiUrl, useProxy } = await resolveReachableBaseUrl(url, user, pass);
   const baseApiUrl = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`;
 
-  const res = await fetch(apiUrl || baseApiUrl);
-  if (!res.ok) {
-    throw new Error(`Xtream request failed (${res.status})`);
+  const data = (await fetchJsonWithModeFallback(apiUrl || baseApiUrl, useProxy)) as {
+    user_info?: { auth?: number };
+  } | null;
+  if (!data) {
+    throw new Error("Xtream request failed (empty response)");
   }
-
-  const data = await res.json();
 
   if (data?.user_info?.auth === 0) {
     throw new Error("Xtream credentials are invalid.");
@@ -140,37 +143,25 @@ async function loadLiveStreams(
     return loadAndPersistLiveByCategory(baseUrl, user, pass, useProxy, onProgress);
   }
 
-  // Fetch live categories
-  let categoryMap: Record<string, string> = {};
-  try {
-    const catApi = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_live_categories`;
-    const catUrl = useProxy ? toCorsProxyUrl(catApi) : catApi;
-    const catRes = await fetch(catUrl);
-    if (catRes.ok) {
-      const catData = await catRes.json();
-      if (Array.isArray(catData)) {
-        categoryMap = Object.fromEntries(
-          catData.map((c: any) => [c.category_id.toString(), c.category_name || `Category ${c.category_id}`])
-        );
-      }
-    }
-  } catch {
-    // Categories not available, will use fallback
+  if (isWebOsRuntime()) {
+    onProgress?.("Loading live categories…");
+    const byCategory = await loadCappedStreamsByCategory(
+      baseUrl,
+      user,
+      pass,
+      useProxy,
+      "get_live_categories",
+      "get_live_streams"
+    );
+    return byCategory.streams
+      .map((item: any) => mapLiveStream(item, byCategory.categoryMap, baseUrl, user, pass))
+      .filter((channel): channel is Channel => !!channel);
   }
 
-  let liveStreams = [];
-  try {
-    const liveApi = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_live_streams`;
-    const liveUrl = useProxy ? toCorsProxyUrl(liveApi) : liveApi;
-    const liveRes = await fetch(liveUrl);
-    if (liveRes.ok) {
-      const liveData = await liveRes.json();
-      liveStreams = Array.isArray(liveData) ? liveData : [];
-    }
-  } catch {
-    // Live streams not available
-  }
-
+  const categoryMap = categoryNameMap(
+    await fetchXtreamList(baseUrl, user, pass, useProxy, "get_live_categories")
+  );
+  const liveStreams = await fetchXtreamList(baseUrl, user, pass, useProxy, "get_live_streams");
   const filtered = liveStreams.filter((item: any) => item.stream_id != null);
 
   return filtered
@@ -299,6 +290,30 @@ async function loadCappedStreamsByCategory(
 ): Promise<{ categoryMap: Record<string, string>; streams: any[] }> {
   const categoryItems = await fetchXtreamList(baseUrl, user, pass, useProxy, categoriesAction);
   const categoryMap = categoryNameMap(categoryItems);
+
+  if (isWebOsRuntime()) {
+    const streams: any[] = [];
+    for (const category of categoryItems) {
+      if (category?.category_id == null) continue;
+      const batch = await fetchXtreamList(
+        baseUrl,
+        user,
+        pass,
+        useProxy,
+        streamsAction,
+        `&category_id=${encodeURIComponent(String(category.category_id))}`
+      );
+      for (const item of batch) {
+        if (item && item.category_id == null) item.category_id = category.category_id;
+        if (item && !item.category_name && category.category_name) {
+          item.category_name = category.category_name;
+        }
+        streams.push(item);
+      }
+      await yieldToMain();
+    }
+    return { categoryMap, streams };
+  }
 
   let streams = await fetchXtreamList(baseUrl, user, pass, useProxy, streamsAction);
   if (!Array.isArray(streams) || streams.length === 0) {
@@ -564,6 +579,13 @@ async function resolveReachableBaseUrl(
 
   for (const baseUrl of candidates) {
     const api = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`;
+    if (isWebOsRuntime()) {
+      const remote = await fetchWebOsRemote(api);
+      if (remote) return { baseUrl, apiUrl: api, useProxy: false };
+      reasons.push(`${baseUrl} -> webOS fetch failed`);
+      continue;
+    }
+
     try {
       const res = await fetch(api);
       if (res.ok) return { baseUrl, apiUrl: api, useProxy: false };
@@ -594,6 +616,54 @@ async function resolveReachableBaseUrl(
   }
 
   throw new Error(`Xtream request failed: ${reasons.join(", ")}. Check URL/credentials or CORS restrictions.`);
+}
+
+export async function fetchXtreamAccountInfo(
+  url: string,
+  user: string,
+  pass: string
+): Promise<XtreamAccountInfo | null> {
+  try {
+    const { baseUrl, useProxy } = await resolveReachableBaseUrl(url, user, pass);
+    const api = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`;
+    const data = await fetchJsonWithModeFallback(api, useProxy);
+    if (!data || (data as { user_info?: { auth?: number } }).user_info?.auth === 0) {
+      return null;
+    }
+    return parseXtreamAccountInfo(data);
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchXtreamCatalogTotals(
+  url: string,
+  user: string,
+  pass: string
+): Promise<PlaylistCatalogTotals | null> {
+  if (isWebOsRuntime()) {
+    // Full stream-list counts OOM or stall old webOS Chromium. Title totals
+    // are written after Playlist Manager Load instead.
+    return null;
+  }
+
+  try {
+    const { baseUrl, useProxy } = await resolveReachableBaseUrl(url, user, pass);
+    const liveList = await fetchXtreamList(baseUrl, user, pass, useProxy, "get_live_streams");
+    const live = liveList.length;
+    liveList.length = 0;
+    const movieList = await fetchXtreamList(baseUrl, user, pass, useProxy, "get_vod_streams");
+    const movies = movieList.length;
+    movieList.length = 0;
+    const seriesList = await fetchXtreamList(baseUrl, user, pass, useProxy, "get_series");
+    const series = seriesList.length;
+    seriesList.length = 0;
+    const total = live + movies + series;
+    if (total <= 0) return null;
+    return { live, movies, series, total };
+  } catch {
+    return null;
+  }
 }
 
 function toCorsProxyUrl(url: string): string {
@@ -687,6 +757,10 @@ function parseXtreamSeriesUrl(url: string): {
 }
 
 async function fetchJsonWithProxyFallback(url: string): Promise<unknown> {
+  if (isWebOsRuntime()) {
+    return fetchWebOsRemoteJson(url);
+  }
+
   const direct = await fetch(url).catch(() => null);
   if (direct?.ok) {
     try {
@@ -757,6 +831,10 @@ async function readResponseJsonCapped(response: Response, url: string): Promise<
 }
 
 async function fetchJsonWithModeFallback(url: string, preferProxy: boolean): Promise<unknown> {
+  if (isWebOsRuntime()) {
+    return fetchWebOsRemoteJson(url);
+  }
+
   const first = preferProxy ? toCorsProxyUrl(url) : url;
   const second = preferProxy ? url : toCorsProxyUrl(url);
 

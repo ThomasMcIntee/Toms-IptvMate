@@ -1,11 +1,16 @@
 {
   "id": "tv.toms.iptvmate",
-  "version": "1.4.7",
+  "version": "1.5.1",
   "vendor": "Thomas",
   "type": "web",
   "main": "index.html",
   "title": "Toms IPTVmate",
   "icon": "icon.png",
   "disableBackHistoryAPI": true,
-  "handlesRelaunch": true
+  "handlesRelaunch": true,
+  "requiredPermissions": [
+    "network.connection",
+    "network.protocols",
+    "download"
+  ]
 }
