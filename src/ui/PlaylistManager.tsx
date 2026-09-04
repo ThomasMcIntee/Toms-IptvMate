@@ -62,6 +62,34 @@ type PlaylistStorageDiagnostics = {
   storageKeysWithPlaylist: number;
 };
 
+function createThrottledStatus(setStatus: (status: string) => void, intervalMs = 1500) {
+  let last = 0;
+  let timer: number | null = null;
+  let pending: string | null = null;
+  return (status: string) => {
+    const now = Date.now();
+    if (now - last >= intervalMs) {
+      if (timer != null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+      last = now;
+      pending = null;
+      setStatus(status);
+      return;
+    }
+    pending = status;
+    if (timer != null) return;
+    timer = window.setTimeout(() => {
+      timer = null;
+      if (!pending) return;
+      last = Date.now();
+      setStatus(pending);
+      pending = null;
+    }, intervalMs);
+  };
+}
+
 function roleCacheStorageKey(kind: "adult" | "child"): string {
   return kind === "adult" ? ADULT_CACHE_KEY : CHILD_CACHE_KEY;
 }
@@ -867,13 +895,20 @@ export default function PlaylistManager({
         // Fire TV: do not stream per-category names into React state. Each
         // update re-renders Playlist Manager and stalls the load. webOS/desktop
         // have no Capacitor IDB ingest, so they must keep the returned arrays.
-        const reportProgress = isCapacitorRuntime() ? undefined : setStatusMessage;
-        const liveChannels = await loadChannelsForPlaylist(p, "live", reportProgress);
-        channels = isCapacitorRuntime() ? [] : liveChannels;
-        if (!isCapacitorRuntime()) {
-          setStatusMessage(`Loaded ${channels.length.toLocaleString()} live channels from "${p.name}". Loading movies…`);
-        } else {
-          setStatusMessage(`Loading movies from "${p.name}"…`);
+        const reportProgress = isCapacitorRuntime()
+          ? createThrottledStatus(setStatusMessage)
+          : setStatusMessage;
+        try {
+          const liveChannels = await loadChannelsForPlaylist(p, "live", reportProgress);
+          channels = isCapacitorRuntime() ? [] : liveChannels;
+          if (!isCapacitorRuntime()) {
+            setStatusMessage(`Loaded ${channels.length.toLocaleString()} live channels from "${p.name}". Loading movies…`);
+          } else {
+            setStatusMessage(`Loading movies from "${p.name}"…`);
+          }
+        } catch (liveErr) {
+          const liveMessage = liveErr instanceof Error ? liveErr.message : "Unknown live load error";
+          setStatusMessage(`Live load failed: ${liveMessage}. Trying movies…`);
         }
         try {
           const loadedMovies = await loadChannelsForPlaylist(p, "movies", reportProgress);

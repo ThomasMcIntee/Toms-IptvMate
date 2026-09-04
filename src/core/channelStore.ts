@@ -636,6 +636,28 @@ async function readCachedChannelsFromIndexedDb(
   });
 }
 
+async function writeCachedChannelRecordsToIndexedDb(
+  db: IDBDatabase,
+  records: Array<{ key: string; list: Channel[] }>
+): Promise<boolean> {
+  const ready = records.filter((record) => record.list.length > 0);
+  if (ready.length === 0) return true;
+  return new Promise<boolean>((resolve) => {
+    try {
+      const tx = db.transaction(CHANNELS_CACHE_STORE, "readwrite");
+      const store = tx.objectStore(CHANNELS_CACHE_STORE);
+      for (const record of ready) {
+        store.put(record.list.map(toCacheChannel), record.key);
+      }
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+      tx.onabort = () => resolve(false);
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
 async function writeCachedChannelsToIndexedDb(
   db: IDBDatabase,
   recordKey: string,
@@ -1232,23 +1254,33 @@ export function finishCapacitorLiveCatalogIngest() {
 }
 
 export async function appendCapacitorLiveGroup(groupName: string, list: Channel[]): Promise<void> {
-  if (!isCapacitorRuntime()) return;
-  const normalized = normalizeGroupName(groupName);
-  const members =
-    list.length > CAPACITOR_MAX_IDB_GROUP_CHANNELS
-      ? list.slice(0, CAPACITOR_MAX_IDB_GROUP_CHANNELS)
-      : list;
-  if (members.length === 0) return;
+  await appendCapacitorLiveGroups([{ groupName, list }]);
+}
+
+export async function appendCapacitorLiveGroups(
+  groups: Array<{ groupName: string; list: Channel[] }>
+): Promise<void> {
+  if (!isCapacitorRuntime() || groups.length === 0) return;
+  const records: Array<{ key: string; list: Channel[] }> = [];
+  for (const { groupName, list } of groups) {
+    const normalized = normalizeGroupName(groupName);
+    const members =
+      list.length > CAPACITOR_MAX_IDB_GROUP_CHANNELS
+        ? list.slice(0, CAPACITOR_MAX_IDB_GROUP_CHANNELS)
+        : list;
+    if (members.length === 0) continue;
+    records.push({ key: idbLiveGroupRecordKey(normalized), list: members });
+    if (!capacitorLiveGroupNames.includes(normalized)) capacitorLiveGroupNames.push(normalized);
+    capacitorLiveGroupCounts[normalized] = members.length;
+    rebuildCapacitorFavoriteIndexFromCatalog(members);
+  }
+  if (records.length === 0) return;
 
   const db = capacitorIngestDb || (await openChannelsCacheDb());
   if (db) {
-    await writeCachedChannelsToIndexedDb(db, idbLiveGroupRecordKey(normalized), members, { quiet: true });
+    await writeCachedChannelRecordsToIndexedDb(db, records);
     if (!capacitorIngestDb) db.close();
   }
-
-  if (!capacitorLiveGroupNames.includes(normalized)) capacitorLiveGroupNames.push(normalized);
-  capacitorLiveGroupCounts[normalized] = members.length;
-  rebuildCapacitorFavoriteIndexFromCatalog(members);
   if (capacitorLiveGroupNames.length === 1 || capacitorLiveGroupNames.length % 24 === 0) {
     saveCapacitorLiveGroupCatalog(capacitorLiveGroupNames, capacitorLiveGroupCounts);
   }
@@ -1360,23 +1392,34 @@ export async function appendCapacitorVodGroup(
   groupName: string,
   list: Channel[]
 ): Promise<void> {
-  if (!isCapacitorRuntime()) return;
-  const normalized = normalizeGroupName(groupName);
-  const members =
-    list.length > CAPACITOR_MAX_IDB_GROUP_CHANNELS
-      ? list.slice(0, CAPACITOR_MAX_IDB_GROUP_CHANNELS)
-      : list;
-  if (members.length === 0) return;
+  await appendCapacitorVodGroups(scope, [{ groupName, list }]);
+}
+
+export async function appendCapacitorVodGroups(
+  scope: CapacitorVodCacheScope,
+  groups: Array<{ groupName: string; list: Channel[] }>
+): Promise<void> {
+  if (!isCapacitorRuntime() || groups.length === 0) return;
+  const names = capacitorVodGroupNames[scope];
+  const records: Array<{ key: string; list: Channel[] }> = [];
+  for (const { groupName, list } of groups) {
+    const normalized = normalizeGroupName(groupName);
+    const members =
+      list.length > CAPACITOR_MAX_IDB_GROUP_CHANNELS
+        ? list.slice(0, CAPACITOR_MAX_IDB_GROUP_CHANNELS)
+        : list;
+    if (members.length === 0) continue;
+    records.push({ key: idbVodGroupRecordKey(scope, normalized), list: members });
+    if (!names.includes(normalized)) names.push(normalized);
+    capacitorVodGroupCounts[scope][normalized] = members.length;
+  }
+  if (records.length === 0) return;
 
   const db = capacitorIngestDb || (await openChannelsCacheDb());
   if (db) {
-    await writeCachedChannelsToIndexedDb(db, idbVodGroupRecordKey(scope, normalized), members, { quiet: true });
+    await writeCachedChannelRecordsToIndexedDb(db, records);
     if (!capacitorIngestDb) db.close();
   }
-
-  const names = capacitorVodGroupNames[scope];
-  if (!names.includes(normalized)) names.push(normalized);
-  capacitorVodGroupCounts[scope][normalized] = members.length;
   if (names.length === 1 || names.length % 24 === 0) {
     saveCapacitorVodGroupCatalog(scope, names, capacitorVodGroupCounts[scope]);
   }

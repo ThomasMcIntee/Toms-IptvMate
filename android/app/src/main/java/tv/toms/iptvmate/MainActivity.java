@@ -222,6 +222,56 @@ public class MainActivity extends BridgeActivity {
                     Uri uri = request.getUrl();
                     String path = uri.getPath();
                     
+                    if (path != null && path.contains("/__api")) {
+                        String targetUrl = uri.getQueryParameter("url");
+                        if (targetUrl == null) return null;
+                        try {
+                            HttpURLConnection conn = (HttpURLConnection) new URL(targetUrl).openConnection();
+                            conn.setRequestMethod("GET");
+                            conn.setInstanceFollowRedirects(true);
+                            conn.setConnectTimeout(20000);
+                            conn.setReadTimeout(90000);
+                            conn.setRequestProperty("User-Agent", APP_USER_AGENT);
+                            conn.setRequestProperty("Accept", "application/json,text/plain,*/*");
+
+                            int status = conn.getResponseCode();
+                            int redirects = 0;
+                            while ((status == 301 || status == 302 || status == 303 || status == 307 || status == 308) && redirects < 5) {
+                                String loc = conn.getHeaderField("Location");
+                                if (loc == null) break;
+                                conn.disconnect();
+                                conn = (HttpURLConnection) new URL(loc).openConnection();
+                                conn.setRequestMethod("GET");
+                                conn.setRequestProperty("User-Agent", APP_USER_AGENT);
+                                conn.setRequestProperty("Accept", "application/json,text/plain,*/*");
+                                status = conn.getResponseCode();
+                                redirects++;
+                            }
+
+                            InputStream stream = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
+                            byte[] raw = XtreamCatalogSlimmer.readLimited(stream, 48 * 1024 * 1024);
+                            if (raw == null) {
+                                Log.w(TAG, "API body too large");
+                                return null;
+                            }
+                            byte[] body = XtreamCatalogSlimmer.slimIfCatalog(raw, targetUrl);
+                            String contentType = "application/json";
+                            WebResourceResponse response = new WebResourceResponse(
+                                contentType,
+                                "UTF-8",
+                                new ByteArrayInputStream(body)
+                            );
+                            Map<String, String> headers = new HashMap<>();
+                            headers.put("Access-Control-Allow-Origin", "*");
+                            response.setResponseHeaders(headers);
+                            response.setStatusCodeAndReasonPhrase(status, status >= 200 && status < 300 ? "OK" : "Error");
+                            return response;
+                        } catch (Exception e) {
+                            Log.e(TAG, "API Proxy Error", e);
+                            return null;
+                        }
+                    }
+
                     if (path != null && (path.contains("/__stream") || path.contains("/__playlist"))) {
                         String targetUrl = uri.getQueryParameter("url");
                         if (targetUrl == null) return null;
