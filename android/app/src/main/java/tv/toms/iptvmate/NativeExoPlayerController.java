@@ -209,6 +209,10 @@ public class NativeExoPlayerController {
 
             ensureSystemAudible();
             acquireAudioFocus();
+            if (playerView != null) {
+                playerView.setKeepContentOnPlayerReset(false);
+                playerView.setShutterBackgroundColor(android.graphics.Color.BLACK);
+            }
             exoPlayer.stop();
             exoPlayer.clearMediaItems();
             exoPlayer.setVolume(muted ? 0f : 1f);

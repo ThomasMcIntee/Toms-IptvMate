@@ -2,12 +2,20 @@ export type PlaylistType = "m3u" | "xtream" | "stalker";
 
 import { isCapacitorRuntime } from "./player/platformDetection";
 import { isWebOsDbAvailable, webosDbGet, webosDbSet } from "./webosStorage";
+import { sanitizeXtreamAccount } from "./xtreamAccount";
 
 export type PlaylistEntry = {
   id: string;
   name: string;
   type: PlaylistType;
   data: any;
+};
+
+export type PlaylistCatalogTotals = {
+  total: number;
+  live: number;
+  movies: number;
+  series: number;
 };
 
 export type PlaylistBridgeStatus = {
@@ -933,12 +941,6 @@ function readJsonArray(key: string): unknown[] {
   } catch {
     if (key === KEY) {
       try {
-        const log = (window as any).webosDebugLog;
-        if (log) log("playlists: localStorage JSON parse FAILED, using fallbacks");
-      } catch {
-        // Ignore logging failures.
-      }
-      try {
         const sessionRaw = sessionStorage.getItem(SESSION_KEY);
         if (sessionRaw) {
           const sessionParsed = JSON.parse(sessionRaw) as unknown;
@@ -1073,6 +1075,45 @@ function recoverPlaylistsFromAnyStorageKey(): PlaylistEntry[] {
   return dedupePlaylists([...fromLocal, ...fromSession, ...fromCookie]);
 }
 
+export function sanitizePlaylistCatalog(value: unknown): PlaylistCatalogTotals | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const info = value as Record<string, unknown>;
+  const live = Number(info.live);
+  const movies = Number(info.movies);
+  const series = Number(info.series);
+  const total = Number(info.total);
+  const catalog: PlaylistCatalogTotals = {
+    live: Number.isFinite(live) && live > 0 ? Math.round(live) : 0,
+    movies: Number.isFinite(movies) && movies > 0 ? Math.round(movies) : 0,
+    series: Number.isFinite(series) && series > 0 ? Math.round(series) : 0,
+    total: Number.isFinite(total) && total > 0 ? Math.round(total) : 0
+  };
+  if (catalog.total <= 0) {
+    catalog.total = catalog.live + catalog.movies + catalog.series;
+  }
+  if (catalog.total <= 0) return undefined;
+  return catalog;
+}
+
+function playlistDataExtras(
+  data: Record<string, unknown> | null,
+  details: Record<string, unknown> | null,
+  obj: Record<string, unknown>
+): Record<string, unknown> {
+  const extras: Record<string, unknown> = {};
+  const account =
+    sanitizeXtreamAccount(data?.account) ||
+    sanitizeXtreamAccount(details?.account) ||
+    sanitizeXtreamAccount(obj.account);
+  const catalog =
+    sanitizePlaylistCatalog(data?.catalog) ||
+    sanitizePlaylistCatalog(details?.catalog) ||
+    sanitizePlaylistCatalog(obj.catalog);
+  if (account) extras.account = account;
+  if (catalog) extras.catalog = catalog;
+  return extras;
+}
+
 function toPlaylistEntry(candidate: unknown): PlaylistEntry | null {
   if (!candidate || typeof candidate !== "object") return null;
 
@@ -1129,7 +1170,7 @@ function toPlaylistEntry(candidate: unknown): PlaylistEntry | null {
       id,
       name,
       type: "xtream",
-      data: { url, user, pass }
+      data: { url, user, pass, ...playlistDataExtras(data, details, obj) }
     };
   }
 
@@ -1150,7 +1191,7 @@ function toPlaylistEntry(candidate: unknown): PlaylistEntry | null {
       id,
       name,
       type: "m3u",
-      data: { url, epg }
+      data: { url, epg, ...playlistDataExtras(data, details, obj) }
     };
   }
 
@@ -1170,7 +1211,7 @@ function toPlaylistEntry(candidate: unknown): PlaylistEntry | null {
     id,
     name,
     type: "stalker",
-    data: { portal, mac }
+    data: { portal, mac, ...playlistDataExtras(data, details, obj) }
   };
 }
 

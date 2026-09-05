@@ -170,8 +170,6 @@ function isBackKeyEvent(event: KeyboardEvent): boolean {
 
 export function App({ bootAction = null }: { bootAction?: string | null } = {}) {
   useEffect(() => {
-    const debugLog = (window as any).webosDebugLog;
-    if (debugLog) debugLog('React App mounted!');
     if (!isCapacitorRuntime()) {
       loadRecordings();
     }
@@ -282,6 +280,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   const liveReconnectAttemptRef = useRef(0);
   const hadLivePlayingRef = useRef(false);
   const lastFavoriteToggleAtRef = useRef(0);
+  const lastBackHandledAtRef = useRef(0);
   const seriesAutoAdvanceTokenRef = useRef(0);
   const lastSeriesEndedRef = useRef<{ url: string | null; at: number }>({
     url: null,
@@ -1307,7 +1306,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       
       // Check if the clicked element or its parent has a program/channel name class
       const programElement = target.closest(
-        '.nn-program, .epg-grid-title, .epg-event-title, .epg-search-guide-programme-title, .channel-icon-label, .channel-row-btn'
+        ".nn-program, .epg-grid-title, .epg-event-title, .epg-search-guide-programme-title, .channel-icon-label"
       );
       
       if (!programElement) return;
@@ -1459,13 +1458,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, [accessLevel]);
 
   useEffect(() => {
-    const debugLog = (window as any).webosDebugLog || console.log.bind(console);
     const security = readSetupSecurity();
     
-    debugLog(`startup-check: show=${showOpeningScreen} completed=${startupCacheHydrationCompletedRef.current} login=${security.loginRequired} access=${accessLevel} inflight=${startupAutoLoadInFlightRef.current}`);
 
     if (!showOpeningScreen) {
-      debugLog('startup: SKIP - not on opening screen');
       return;
     }
 
@@ -1474,7 +1470,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       if (startupCacheHydrationCompletedRef.current) {
         return;
       }
-      debugLog("startup: Capacitor fast-boot — deferring channel cache until Live TV");
       scheduleCapacitorLegacyCachePurge();
       startupCacheHydrationCompletedRef.current = true;
       setActivePanel(null);
@@ -1487,7 +1482,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
       window.setTimeout(() => {
         const playlists = loadPlaylists();
-        debugLog(`startup: Capacitor deferred playlists=${playlists.length} adultId=${adultPlaylistId || "none"}`);
         setHasPlaylists(playlists.length > 0);
         if (!activePlaylistIdRef.current) {
           const deferredId = resolveStoredPlaylistId(playlists);
@@ -1505,40 +1499,33 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     }
 
     if (startupCacheHydrationCompletedRef.current) {
-      debugLog('startup: SKIP - already completed');
       return;
     }
     if (security.loginRequired && !accessLevel) {
-      debugLog('startup: SKIP - waiting for login');
       // Pre-warm the channel cache in the background so role login is instant.
       void restoreChannelsCache();
       return;
     }
     if (accessLevel === "adult" || accessLevel === "child") {
-      debugLog('startup: SKIP - has access level');
       return;
     }
     if (startupAutoLoadInFlightRef.current) {
-      debugLog('startup: SKIP - already in flight');
       return;
     }
 
     const playlists = loadPlaylists();
     const playlistsHydrationPending = isPlaylistsHydrationPending();
     
-    debugLog(`startup: playlists=${playlists.length} hydrationPending=${playlistsHydrationPending}`);
 
     // IndexedDB hydration may populate playlists shortly after startup.
     // Wait for hydration events instead of finalizing an empty auto-load path.
     if (playlists.length === 0 && playlistsHydrationPending) {
-      debugLog('startup: SKIP - waiting for playlist hydration');
       return;
     }
 
     // If channels are already in memory from a same-session load, keep the
     // opening menu visible and align shared playlist state.
     if (getAllChannels().length > 0) {
-      debugLog('startup: using existing in-memory channels');
       startupCacheHydrationCompletedRef.current = true;
       const storedPlaylistId = readStoredItem(SHARED_PLAYLIST_ID_KEY);
       if (storedPlaylistId) setActivePlaylistId(storedPlaylistId);
@@ -1551,22 +1538,17 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       return;
     }
 
-    debugLog('startup: PROCEEDING with cache load');
     let cancelled = false;
     startupAutoLoadInFlightRef.current = true;
 
     (async () => {
-      const debugLog = (window as any).webosDebugLog || console.log.bind(console);
-      debugLog('startup: restoring cache...');
       
       // 1. Try restoring from local cache for an instant start, but do not
       // block startup for a long time on slow IndexedDB/storage reads.
       const restored = await restoreChannelsCache();
-      debugLog(`startup: restored ${restored.length} channels`);
       if (cancelled) return;
 
       function applyPreparedContent(channelList: any[], playlistId: string, visibilityRole?: "adult" | "child") {
-        debugLog(`startup: applying ${channelList.length} channels`);
         if (playlistId) setActivePlaylistId(playlistId);
         // Always land on the main menu at startup, regardless of platform.
         // Content (group/mode) is preloaded so Live TV opens instantly once
@@ -1597,11 +1579,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         applyPreparedContent(restored, storedPlaylistId);
         setChannelUpdateTick((tick) => tick + 1);
         setCategoryRefreshTick((tick) => tick + 1);
-        debugLog('startup: cache applied successfully');
         return;
       }
 
-      debugLog('startup: no cache found, staying on menu');
       // Do not fetch from the provider here. Playlist Manager Load is the only
       // download; the next open then restores this cache instantly.
       startupCacheHydrationCompletedRef.current = true;
@@ -1761,8 +1741,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       if (!ch || !matchesContentMode(ch, "tv")) return;
       if (liveReconnectTimerRef.current !== null) return;
       const delay = Math.min(20000, Math.round(2500 * Math.pow(1.6, Math.min(liveReconnectAttemptRef.current, 8))));
-      const debugLog = (window as { webosDebugLog?: (msg: string) => void }).webosDebugLog;
-      if (debugLog) debugLog(`LIVE: reconnect in ${delay}ms (${reason})`);
       setPlayerStatus("Connection lost, reconnecting...");
       liveReconnectTimerRef.current = window.setTimeout(() => {
         liveReconnectTimerRef.current = null;
@@ -1905,7 +1883,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   useEffect(() => {
     // Helper to handle Back navigation (shared by webosBackKey and keydown)
     const handleBackNavigation = () => {
-      const debugLog = (window as any).webosDebugLog;
+      const now = Date.now();
+      if (now - lastBackHandledAtRef.current < 350) return true;
+      lastBackHandledAtRef.current = now;
       
       // Handle Back navigation
       if (isSeriesPickerVisible) {
@@ -1931,7 +1911,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
         if (isWebOS) {
 
-          if (debugLog) debugLog(`APP: Back -> exit app (webOS)`);
           try {
             if ((window as any).webOS?.platformBack) {
               (window as any).webOS.platformBack();
@@ -1939,10 +1918,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
               window.close();
             }
           } catch (e) {
-            if (debugLog) debugLog(`APP: exit failed: ${e}`);
           }
         } else if (isCap) {
-          if (debugLog) debugLog(`APP: Back -> exit app (Capacitor)`);
           try {
             // Use the Capacitor global to access plugins
             const AppPlugin = (window as any).Capacitor?.Plugins?.App;
@@ -1994,12 +1971,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
     // Listen for custom webosBackKey event (dispatched by webOS SDK)
     const handleWebosBack = () => {
-      const debugLog = (window as any).webosDebugLog;
       if (isTextEntryActive()) {
-        if (debugLog) debugLog(`APP: webosBackKey ignored (text entry)`);
         return;
       }
-      if (debugLog) debugLog(`APP: webosBackKey event received`);
       handleBackNavigation();
     };
     
@@ -2020,29 +1994,15 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     
     // Regular keydown handler
     const onKeyDown = (e: KeyboardEvent) => {
-      const debugLog = (window as any).webosDebugLog;
-      
-      // Log every keydown that reaches this handler
-      if (debugLog) {
-        debugLog(`APP-HANDLER: key=${e.key} code=${e.keyCode}`);
-      }
-      
       const isBack = isBackKeyEvent(e);
       
-      // On webOS, Back is handled by webOS SDK + webosBackKey event
-      // On other platforms, handle Back here directly
-      const isWebOS = (window as any).webOS?.libVersion;
-
       if (isBack && isTextEntryActive(e.target)) {
         return;
       }
       
       if (isBack) {
-        if (isWebOS) {
-          // webOS SDK will dispatch webosBackKey event
-          return;
-        }
-        // Non-webOS: handle Back directly
+        // Handle Back here even on webOS. The SDK may also dispatch webosBackKey;
+        // handleBackNavigation debounces the duplicate.
         e.preventDefault();
         handleBackNavigation();
         return;
@@ -2497,6 +2457,24 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, [isMainMoviesScreen, isMainSeriesScreen, isSeriesPickerVisible, contentPage, channelUpdateTick]);
 
   useEffect(() => {
+    if (showOpeningScreen || contentPage !== "live" || activePanel !== null) return;
+
+    const timer = window.setTimeout(() => {
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.closest(".channel-list, .group-list, .opening-screen, .player-control-bar")) return;
+      const channel = document.querySelector<HTMLButtonElement>(
+        ".channel-list .channel-select-btn, .channel-list .channel-row-btn"
+      );
+      const group = document.querySelector<HTMLButtonElement>(
+        ".group-list .group-item.active .group-select-btn, .group-list .group-select-btn"
+      );
+      (channel || group)?.focus();
+    }, 80);
+
+    return () => window.clearTimeout(timer);
+  }, [showOpeningScreen, contentPage, activePanel, channelUpdateTick, activeGroup]);
+
+  useEffect(() => {
     // Remote arrow-key navigation for Live TV and Playlist Manager
     // (Live TV / Movies / Series all use the same Master / Groups / Titles lists).
     const remoteListNavActive =
@@ -2821,8 +2799,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       }
     };
 
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [showOpeningScreen, activePanel, contentPage, contentMode]);
 
   function toggleFavoriteChannel(channel: any) {
@@ -2955,9 +2933,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       !!requestId &&
       String(currentChannelRef.current?.id || "") === requestId;
 
-    // First click previews. Second click on the same channel goes fullscreen.
+    // First click previews. A later click on the same channel goes fullscreen.
+    // Ignore the extra click webOS/simulator often fires with the first select.
     if (sameLiveChannel && !forceRestart) {
-      if (!isEffectiveLiveFullscreen) {
+      const previewingMs = Date.now() - lastPlayRequestRef.current.at;
+      if (!isEffectiveLiveFullscreen && previewingMs > 800) {
         setIsLiveFullscreenRequested(true);
         setShowLiveMenu(false);
       }
@@ -2973,7 +2953,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       capacitorMemoryTrimmed = afterCount < beforeCount;
     }
 
-    console.log(`[playChannel] attempting to play: name=${ch?.name} url=${String(ch?.url).slice(0, 80)}...`);
     if (!ch?.url || typeof ch.url !== "string") {
       const msg = "This channel has no playable stream URL.";
       console.warn(`[playChannel] blocked: ${msg}`);
@@ -2995,10 +2974,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       now - lastPlayRequestRef.current.at < 1500;
 
     if (isDuplicateRapidRequest && !forceRestart) {
-      if (isLiveSelectionEarly && !isEffectiveLiveFullscreen) {
-        setIsLiveFullscreenRequested(true);
-        setShowLiveMenu(false);
-      }
       return;
     }
 
@@ -3064,9 +3039,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       isCapacitorRuntime() &&
       isNativePlayerAvailable();
 
-    // Stop the previous tune immediately so ExoPlayer can switch without waiting
-    // for React to re-render the HTML video surface.
-    if (useNativeLivePlayback && currentChannelRef.current) {
+    // Stop the previous tune immediately so ExoPlayer can clear the last frame
+    // before the next live channel or movie starts.
+    if (isCapacitorRuntime() && isNativePlayerAvailable() && currentChannelRef.current) {
       stopPlayback();
     }
 
@@ -4083,7 +4058,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
               controls={false}
               disablePictureInPicture={true}
               disableRemotePlayback={true}
-              tabIndex={isCapacitorRuntime() ? -1 : 0}
+              tabIndex={isCapacitorRuntime() || isWebOsRuntime() ? -1 : 0}
               style={{ background: 'transparent', zIndex: 0 }}
             />
             {currentChannel && (
@@ -4109,7 +4084,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
           controls={!!currentChannel && !forceLivePreviewLayout}
           disablePictureInPicture={contentPage === "live"}
           disableRemotePlayback={contentPage === "live"}
-          tabIndex={isCapacitorRuntime() ? -1 : 0}
+          tabIndex={isCapacitorRuntime() || isWebOsRuntime() ? -1 : 0}
           style={{ background: 'transparent', zIndex: 0 }}
         />
 

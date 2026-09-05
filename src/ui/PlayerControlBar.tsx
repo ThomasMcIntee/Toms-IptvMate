@@ -17,17 +17,21 @@ export function PlayerControlBar({
   paused,
   muted,
   fullscreen,
+  isFavorite = false,
   onPlayPause,
   onMute,
-  onFullscreen
+  onFullscreen,
+  onToggleFavorite
 }: {
   channel: PlayerChannel;
   paused: boolean;
   muted: boolean;
   fullscreen: boolean;
+  isFavorite?: boolean;
   onPlayPause: () => void;
   onMute: () => void;
   onFullscreen: () => void;
+  onToggleFavorite?: () => void;
 }) {
   useSyncExternalStore(subscribeEPG, getEPGVersion, getEPGVersion);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -35,6 +39,7 @@ export function PlayerControlBar({
   const barRef = useRef<HTMLDivElement | null>(null);
   const hideTimerRef = useRef<number | null>(null);
   const focusedRef = useRef(false);
+  const ignoreFocusUntilRef = useRef(0);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -71,37 +76,49 @@ export function PlayerControlBar({
       }
     };
 
+    const hideBar = () => {
+      focusedRef.current = false;
+      ignoreFocusUntilRef.current = Date.now() + 450;
+      setRevealed(false);
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && barRef.current?.contains(active)) {
+        active.blur();
+      }
+    };
+
     const scheduleHide = () => {
       clearHideTimer();
       hideTimerRef.current = window.setTimeout(() => {
         hideTimerRef.current = null;
-        if (!focusedRef.current) setRevealed(false);
+        hideBar();
       }, CONTROLS_HIDE_MS);
     };
 
     const reveal = () => {
+      ignoreFocusUntilRef.current = 0;
       setRevealed(true);
-      if (focusedRef.current) {
-        clearHideTimer();
-        return;
-      }
       scheduleHide();
     };
 
     reveal();
 
-    const shell = document.querySelector(".live-preview-shell");
+    const shell =
+      barRef.current?.closest(".live-preview-shell") ??
+      document.querySelector(".live-preview-shell");
+    // webOS Magic Remote streams mousemove over the video; only clicks/taps
+    // should keep the bar visible. Listen for mouse too — some webOS builds
+    // never emit PointerEvents.
     const onPointer = () => reveal();
-    shell?.addEventListener("mousemove", onPointer);
     shell?.addEventListener("pointerdown", onPointer);
+    shell?.addEventListener("mousedown", onPointer);
 
     const onPlayerReveal = () => reveal();
     window.addEventListener("playerRevealControls", onPlayerReveal);
 
     return () => {
       clearHideTimer();
-      shell?.removeEventListener("mousemove", onPointer);
       shell?.removeEventListener("pointerdown", onPointer);
+      shell?.removeEventListener("mousedown", onPointer);
       window.removeEventListener("playerRevealControls", onPlayerReveal);
     };
   }, [channel?.id, fullscreen]);
@@ -124,13 +141,30 @@ export function PlayerControlBar({
       className={`player-control-bar${revealed ? "" : " player-control-bar-hidden"}`}
       role="group"
       aria-label="Player controls"
-      onFocusCapture={() => {
+      inert={!revealed || undefined}
+      onFocusCapture={(event) => {
+        if (
+          Date.now() < ignoreFocusUntilRef.current ||
+          barRef.current?.classList.contains("player-control-bar-hidden")
+        ) {
+          if (event.target instanceof HTMLElement) event.target.blur();
+          return;
+        }
         focusedRef.current = true;
         setRevealed(true);
         if (hideTimerRef.current !== null) {
           window.clearTimeout(hideTimerRef.current);
-          hideTimerRef.current = null;
         }
+        hideTimerRef.current = window.setTimeout(() => {
+          hideTimerRef.current = null;
+          focusedRef.current = false;
+          ignoreFocusUntilRef.current = Date.now() + 450;
+          setRevealed(false);
+          const active = document.activeElement;
+          if (active instanceof HTMLElement && barRef.current?.contains(active)) {
+            active.blur();
+          }
+        }, CONTROLS_HIDE_MS);
       }}
       onBlurCapture={(event) => {
         const next = event.relatedTarget as Node | null;
@@ -140,7 +174,10 @@ export function PlayerControlBar({
           if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
           hideTimerRef.current = window.setTimeout(() => {
             hideTimerRef.current = null;
-            if (!focusedRef.current) setRevealed(false);
+            if (!focusedRef.current) {
+              ignoreFocusUntilRef.current = Date.now() + 450;
+              setRevealed(false);
+            }
           }, CONTROLS_HIDE_MS);
         }
       }}
@@ -157,6 +194,7 @@ export function PlayerControlBar({
         <button
           type="button"
           className="player-control-bar-btn"
+          tabIndex={revealed ? 0 : -1}
           onClick={onPlayPause}
           aria-label={paused ? "Play" : "Pause"}
         >
@@ -176,6 +214,7 @@ export function PlayerControlBar({
         <button
           type="button"
           className="player-control-bar-btn"
+          tabIndex={revealed ? 0 : -1}
           onClick={onMute}
           aria-label={muted ? "Unmute" : "Mute"}
         >
@@ -195,9 +234,32 @@ export function PlayerControlBar({
             </svg>
           )}
         </button>
+        {onToggleFavorite && (
+          <button
+            type="button"
+            className={`player-control-bar-btn player-control-bar-favorite${isFavorite ? " is-favorite" : ""}`}
+            tabIndex={revealed ? 0 : -1}
+            onClick={onToggleFavorite}
+            aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+          >
+            {isFavorite ? (
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="currentColor" d="M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.64-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.04 4.38.38-3.32 2.88 1 4.28L12 15.4z"
+                />
+              </svg>
+            )}
+          </button>
+        )}
         <button
           type="button"
           className="player-control-bar-btn"
+          tabIndex={revealed ? 0 : -1}
           onClick={onFullscreen}
           aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
         >
@@ -213,5 +275,98 @@ export function PlayerControlBar({
         </button>
       </div>
     </div>
+  );
+}
+
+export function VodExitButton({
+  visible,
+  onExit
+}: {
+  visible: boolean;
+  onExit: () => void;
+}) {
+  const [revealed, setRevealed] = useState(true);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const hideTimerRef = useRef<number | null>(null);
+  const focusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!visible) {
+      setRevealed(true);
+      return;
+    }
+
+    const clearHideTimer = () => {
+      if (hideTimerRef.current !== null) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+    };
+
+    const scheduleHide = () => {
+      clearHideTimer();
+      hideTimerRef.current = window.setTimeout(() => {
+        hideTimerRef.current = null;
+        if (focusedRef.current) return;
+        setRevealed(false);
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && buttonRef.current === active) {
+          active.blur();
+        }
+      }, CONTROLS_HIDE_MS);
+    };
+
+    const reveal = () => {
+      setRevealed(true);
+      if (focusedRef.current) {
+        clearHideTimer();
+        return;
+      }
+      scheduleHide();
+    };
+
+    reveal();
+
+    const onPointer = () => reveal();
+    document.addEventListener("mousemove", onPointer);
+    document.addEventListener("pointerdown", onPointer);
+    window.addEventListener("playerRevealControls", reveal);
+
+    return () => {
+      clearHideTimer();
+      document.removeEventListener("mousemove", onPointer);
+      document.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("playerRevealControls", reveal);
+    };
+  }, [visible]);
+
+  if (!visible) return null;
+
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      className={`vod-exit-btn${revealed ? "" : " vod-exit-btn-hidden"}`}
+      onClick={onExit}
+      aria-label="Exit movie playback"
+      onFocus={() => {
+        focusedRef.current = true;
+        setRevealed(true);
+        if (hideTimerRef.current !== null) {
+          window.clearTimeout(hideTimerRef.current);
+          hideTimerRef.current = null;
+        }
+      }}
+      onBlur={() => {
+        focusedRef.current = false;
+        if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = window.setTimeout(() => {
+          hideTimerRef.current = null;
+          if (!focusedRef.current) setRevealed(false);
+        }, CONTROLS_HIDE_MS);
+      }}
+    >
+      Back
+    </button>
   );
 }

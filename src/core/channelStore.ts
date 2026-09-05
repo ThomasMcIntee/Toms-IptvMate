@@ -450,15 +450,12 @@ export function clearCurrentChannels(source: string = "unknown") {
 }
 
 function loadCachedChannelsWithPresence(): { hasValue: boolean; channels: Channel[] } {
-  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
   try {
     const raw = localStorage.getItem(CHANNELS_CACHE_KEY);
-    debugLog(`cache-load: raw=${raw ? raw.length + ' chars' : 'null'}`);
     if (raw === null) return { hasValue: false, channels: [] };
 
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) {
-      debugLog('cache-load: not array');
       return { hasValue: true, channels: [] };
     }
 
@@ -468,10 +465,8 @@ function loadCachedChannelsWithPresence(): { hasValue: boolean; channels: Channe
         .map(toValidChannel)
         .filter((item): item is Channel => !!item)
     };
-    debugLog(`cache-load: ${result.channels.length} channels`);
     return result;
   } catch (e) {
-    debugLog(`cache-load error: ${e}`);
     return { hasValue: true, channels: [] };
   }
 }
@@ -492,8 +487,6 @@ function saveCachedChannels(list: Channel[]) {
   } catch (err) {
     // Large channel lists routinely exceed the localStorage quota on TVs.
     // IndexedDB remains the durable store; surface the failure for on-TV debugging.
-    const debugLog = (window as any).webosDebugLog;
-    if (debugLog) debugLog(`cache-save: localStorage failed (${err instanceof Error ? err.name : "error"})`);
   }
 }
 
@@ -664,7 +657,6 @@ async function writeCachedChannelsToIndexedDb(
   list: Channel[],
   options?: { quiet?: boolean }
 ): Promise<boolean> {
-  const debugLog = (window as any).webosDebugLog;
   const quiet = options?.quiet === true;
 
   return new Promise<boolean>((resolve) => {
@@ -672,38 +664,27 @@ async function writeCachedChannelsToIndexedDb(
       const tx = db.transaction(CHANNELS_CACHE_STORE, "readwrite");
       tx.objectStore(CHANNELS_CACHE_STORE).put(list.map(toCacheChannel), recordKey);
       tx.oncomplete = () => {
-        if (debugLog && !quiet) {
-          debugLog(`cache-save: idb persisted ${list.length} channels (${recordKey})`);
-        }
         resolve(true);
       };
       tx.onerror = () => {
-        if (debugLog) debugLog(`cache-save: idb tx error (${recordKey})`);
         resolve(false);
       };
       tx.onabort = () => {
-        if (debugLog) debugLog(`cache-save: idb tx abort (${recordKey})`);
         resolve(false);
       };
     } catch {
-      if (debugLog) debugLog(`cache-save: idb tx exception (${recordKey})`);
       resolve(false);
     }
   });
 }
 
 async function saveCachedChannelsIndexedDb(list: Channel[]) {
-  const debugLog = (window as any).webosDebugLog;
   const db = await openChannelsCacheDb();
   if (!db) {
-    if (debugLog) debugLog("cache-save: idb open failed, channels NOT persisted");
     return;
   }
 
   if (shouldSkipCapacitorFullIdbPersist(list)) {
-    if (debugLog) {
-      debugLog(`cache-save: Capacitor skip idb full persist (${list.length} channels)`);
-    }
 
     const liveOnly = list.filter(isLiveChannel);
     if (liveOnly.length > 0 && liveOnly.length <= CAPACITOR_MAX_IDB_CACHE_CHANNELS) {
@@ -747,13 +728,10 @@ function saveCachedChannelsWebosDb(list: Channel[]): void {
 
     webosDbSaveInFlight = true;
     void (async () => {
-      const debugLog = (window as any).webosDebugLog;
       try {
         const payload = JSON.stringify(toSave.map(toCacheChannel));
         const ok = await webosDbSetLarge(CHANNELS_CACHE_KEY, payload);
-        if (debugLog) debugLog(`cache-save: db8 ${ok ? "ok" : "FAILED"} (${toSave.length} channels)`);
       } catch (err) {
-        if (debugLog) debugLog(`cache-save: db8 threw ${err instanceof Error ? err.message : "error"}`);
       } finally {
         webosDbSaveInFlight = false;
         // A newer list may have arrived while saving; queue it.
@@ -777,10 +755,8 @@ async function loadCachedChannelsWebosDb(): Promise<Channel[]> {
 }
 
 async function loadCapacitorGroupChannelsFromIndexedDb(db: IDBDatabase): Promise<Channel[]> {
-  const debugLog = (window as any).webosDebugLog;
   const groupNames = getCapacitorLiveGroupNames();
   if (groupNames.length === 0) {
-    if (debugLog) debugLog("cache-load: Capacitor skip monolithic idb (no split groups yet)");
     return [];
   }
 
@@ -788,17 +764,14 @@ async function loadCapacitorGroupChannelsFromIndexedDb(db: IDBDatabase): Promise
     const normalized = normalizeGroupName(groupName);
     const groupChannels = await readCachedChannelsFromIndexedDb(db, idbLiveGroupRecordKey(normalized));
     if (groupChannels.length > 0) {
-      if (debugLog) debugLog(`cache-load: idb group ${normalized} ${groupChannels.length} channels`);
       return groupChannels;
     }
   }
 
-  if (debugLog) debugLog("cache-load: Capacitor group catalog present but no idb group records");
   return [];
 }
 
 async function loadCachedChannelsIndexedDb(): Promise<Channel[]> {
-  const debugLog = (window as any).webosDebugLog;
   const db = await openChannelsCacheDb();
   if (!db) return [];
 
@@ -812,13 +785,11 @@ async function loadCachedChannelsIndexedDb(): Promise<Channel[]> {
     // live-only Fire TV record or trim VOD out of a large catalog on restore.
     const full = await readCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
     if (full.length > 0) {
-      if (debugLog) debugLog(`cache-load: idb full ${full.length} channels`);
       return full;
     }
 
     const liveOnly = await readCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_LIVE_RECORD_KEY);
     if (liveOnly.length > 0) {
-      if (debugLog) debugLog(`cache-load: idb live-only ${liveOnly.length} channels`);
       return liveOnly;
     }
 
@@ -1464,10 +1435,6 @@ export function pruneCapacitorVisibilityIfBloated(): void {
   const groupKeyCount = Object.keys(visibilityState.groups).length;
   if (channelKeyCount <= 500 && groupKeyCount <= 2500) return;
 
-  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
-  debugLog(
-    `capacitor-visibility-trim: channels=${channelKeyCount} groups=${groupKeyCount} -> group-only`
-  );
 
   const catalogGroups = new Set(getCapacitorLiveGroupNames());
   const nextGroups: Record<string, boolean> = {};
@@ -1497,19 +1464,16 @@ export function scheduleCapacitorLegacyCachePurge(): void {
 
   window.setTimeout(() => {
     void (async () => {
-      const debugLog = (window as any).webosDebugLog;
       const db = await openChannelsCacheDb();
       if (!db) return;
       await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_LIVE_RECORD_KEY);
       await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
       db.close();
-      if (debugLog) debugLog("cache-load: purged legacy monolithic idb on Capacitor");
     })();
   }, 1500);
 }
 
 async function persistCapacitorLiveGroupsToIdb(list: Channel[], groupNames: string[]): Promise<void> {
-  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
   const db = await openChannelsCacheDb();
   if (!db) return;
 
@@ -1533,7 +1497,6 @@ async function persistCapacitorLiveGroupsToIdb(list: Channel[], groupNames: stri
   await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
 
   db.close();
-  if (debugLog) debugLog(`capacitor-ingest: persisted ${groupNames.length} live groups to idb`);
 }
 
 function yieldToMain(): Promise<void> {
@@ -1544,7 +1507,6 @@ export async function ingestCapacitorLiveChannelCatalogAsync(
   list: Channel[],
   preferredGroup?: string
 ): Promise<{ groupName: string; channelCount: number; totalLive: number }> {
-  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
   const groupCounts = new Map<string, number>();
   const groupBuckets = new Map<string, Channel[]>();
   let totalLive = 0;
@@ -1586,9 +1548,6 @@ export async function ingestCapacitorLiveChannelCatalogAsync(
     "Uncategorized";
 
   const memoryChannels = (groupBuckets.get(targetGroup) || []).slice(0, CAPACITOR_MAX_GROUP_CHANNELS);
-  debugLog(
-    `capacitor-ingest: ${list.length} total -> ${memoryChannels.length} in memory (${targetGroup}), ${groupNames.length} groups`
-  );
   setChannelsWithoutSideEffects(memoryChannels, "capacitor-live-ingest");
 
   const db = await openChannelsCacheDb();
@@ -1609,7 +1568,6 @@ export async function ingestCapacitorLiveChannelCatalogAsync(
     await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_LIVE_RECORD_KEY);
     await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
     db.close();
-    if (debugLog) debugLog(`capacitor-ingest: persisted ${groupNames.length} live groups to idb`);
   }
 
   groupBuckets.clear();
@@ -1630,8 +1588,6 @@ export function ingestCapacitorLiveChannelCatalog(
 ): { groupName: string; channelCount: number; totalLive: number } {
   if (isCapacitorRuntime() && list.length > CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD) {
     if (capacitorLiveIngestInFlight) {
-      const debugLog = (window as any).webosDebugLog || console.log.bind(console);
-      debugLog("capacitor-ingest: skipped duplicate while a catalog ingest is already running");
       const preferred = preferredGroup ? normalizeGroupName(preferredGroup) : "";
       return {
         groupName: preferred || "Uncategorized",
@@ -1651,7 +1607,6 @@ export function ingestCapacitorLiveChannelCatalog(
     };
   }
 
-  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
   const groupCounts = new Map<string, number>();
   let totalLive = 0;
 
@@ -1686,9 +1641,6 @@ export function ingestCapacitorLiveChannelCatalog(
     if (memoryChannels.length >= CAPACITOR_MAX_GROUP_CHANNELS) break;
   }
 
-  debugLog(
-    `capacitor-ingest: ${list.length} total -> ${memoryChannels.length} in memory (${targetGroup}), ${groupNames.length} groups`
-  );
   setChannelsWithoutSideEffects(memoryChannels, "capacitor-live-ingest");
 
   window.setTimeout(() => {
@@ -1840,7 +1792,6 @@ export async function saveCapacitorVodScopeCache(
   if (capacitorVodScopeSaveInFlight[scope]) return capacitorVodScopeSaveInFlight[scope];
 
   capacitorVodScopeSaveInFlight[scope] = (async () => {
-    const debugLog = (window as any).webosDebugLog || console.log.bind(console);
     const expectedType = scope === "movies" ? "movie" : "series";
     const scopedChannels = capCapacitorCatalogList(
       list.filter((channel) => String(channel?.contentType || "").trim().toLowerCase() === expectedType)
@@ -1879,7 +1830,6 @@ export async function saveCapacitorVodScopeCache(
         updatedAt: Date.now()
       };
       saveCapacitorVodCacheMeta(meta);
-      debugLog(`vod-cache: persisted ${scopedChannels.length} ${scope} in ${chunkCount} chunks`);
     } finally {
       db.close();
     }
@@ -2108,8 +2058,6 @@ export function releaseCapacitorMemoryForLivePlayback(
     return channels.length;
   }
 
-  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
-  debugLog(`capacitor-playback-trim: ${channels.length} -> ${trimmed.length} (${normalizedActive})`);
   setChannelsWithoutSideEffects(trimmed, "capacitor-playback-trim");
   return trimmed.length;
 }

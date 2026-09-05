@@ -358,7 +358,7 @@ public class ExoPlayerManager {
             throw new IllegalStateException("native_exo_player_view missing from overlay layout");
         }
         playerView.setUseController(false);
-        playerView.setKeepContentOnPlayerReset(true);
+        playerView.setKeepContentOnPlayerReset(false);
         playerView.setShutterBackgroundColor(Color.BLACK);
         playerView.setKeepScreenOn(true);
         playerView.setClickable(false);

@@ -6,6 +6,8 @@ import { webosDbSelfTest } from "../core/webosStorage";
 import {
   getPlaybackBufferLevel,
   setPlaybackBufferLevel,
+  getWebOsPcRelayOrigin,
+  setWebOsPcRelayOrigin,
   type PlaybackBufferLevel
 } from "../core/playerEngine";
 import {
@@ -106,6 +108,7 @@ export default function RecordingLibrary({ visible, onOpenPlayback, onOpenStorag
     }
   });
   const [bufferLevel, setBufferLevel] = useState<PlaybackBufferLevel>(() => getPlaybackBufferLevel());
+  const [pcRelayOrigin, setPcRelayOrigin] = useState(() => getWebOsPcRelayOrigin() || "");
   const language = useAppLanguage();
   const t = (key: Parameters<typeof translate>[0]) => translate(key, language);
 
@@ -201,6 +204,18 @@ export default function RecordingLibrary({ visible, onOpenPlayback, onOpenStorag
     {
       label: `${t("buffer")}: ${bufferLevel === "off" ? t("off") : bufferLevel === "low" ? `${t("low")} (10s)` : bufferLevel === "medium" ? `${t("medium")} (30s)` : `${t("high")} (60s)`}`,
       onClick: cycleBufferLevel
+    },
+    {
+      label: pcRelayOrigin ? `PC relay: ${pcRelayOrigin.replace(/^https?:\/\//i, "")}` : "PC stream relay: not set",
+      onClick: () => {
+        const raw = prompt(
+          "PC address running npm run dev or npm run preview (example http://192.168.0.50:5173). Leave empty to clear.",
+          pcRelayOrigin || "http://"
+        );
+        if (raw === null) return;
+        const saved = setWebOsPcRelayOrigin(raw);
+        setPcRelayOrigin(saved || "");
+      }
     },
     {
       label: `${t("language")}: ${APP_LANGUAGES.find((option) => option.code === language)?.label || "English"}`,

@@ -110,7 +110,6 @@ function flushNativePlayerBounds(force = false): void {
 
   const { left, top, width, height } = lastBoundsPayload;
   lastBoundsSentAt = now;
-  console.log(`[native-player] setBounds ${left},${top} ${width}x${height}`);
   sendNativePlayerBounds(left, top, width, height);
 }
 

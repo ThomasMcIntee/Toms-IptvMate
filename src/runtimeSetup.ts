@@ -17,7 +17,14 @@ const REMOTE_KEYCODE_MAP: Record<number, string> = {
   29460: "ArrowLeft",
   29461: "ArrowRight",
   29462: "ArrowUp",
-  29463: "ArrowDown"
+  29463: "ArrowDown",
+  19: "MediaPause",
+  412: "MediaRewind",
+  413: "MediaStop",
+  415: "MediaPlay",
+  417: "MediaFastForward",
+  463: "MediaPlayPause",
+  10252: "MediaPlayPause"
 };
 
 const REMOTE_KEY_ALIASES: Record<string, string> = {
@@ -32,8 +39,43 @@ const REMOTE_KEY_ALIASES: Record<string, string> = {
   Right: "ArrowRight",
   Select: "Enter",
   Up: "ArrowUp",
-  XF86Back: "Backspace"
+  XF86Back: "Backspace",
+  Play: "MediaPlay",
+  Pause: "MediaPause",
+  PlayPause: "MediaPlayPause",
+  Rewind: "MediaRewind",
+  FastForward: "MediaFastForward",
+  FastFwd: "MediaFastForward",
+  Stop: "MediaStop"
 };
+
+function isInteractiveRemoteTarget(target: EventTarget | null): HTMLElement | null {
+  const el = target as HTMLElement | null;
+  if (!el || !el.closest) return null;
+  return el.closest("button, [role='button'], a, input, select, textarea");
+}
+
+function enableMagicRemotePointerClicks() {
+  // LG Magic Remote pointer often delivers mousedown/mouseup without a click.
+  let lastClickAt = 0;
+  window.addEventListener(
+    "click",
+    () => {
+      lastClickAt = Date.now();
+    },
+    true
+  );
+  window.addEventListener("mouseup", (event) => {
+    const control = isInteractiveRemoteTarget(event.target);
+    if (!control) return;
+    if (control instanceof HTMLButtonElement && control.disabled) return;
+    if (control instanceof HTMLInputElement && control.disabled) return;
+    window.setTimeout(() => {
+      if (Date.now() - lastClickAt <= 250) return;
+      control.click();
+    }, 260);
+  });
+}
 
 function normalizeRemoteKeyEvents() {
   const keepKeyboardFocus = () => {
@@ -42,13 +84,37 @@ function normalizeRemoteKeyEvents() {
       document.body.setAttribute("tabindex", "-1");
     }
     const active = document.activeElement as HTMLElement | null;
+    if (active instanceof HTMLMediaElement) {
+      active.blur();
+      document.body.focus();
+      return;
+    }
     if (!active || active === document.documentElement) {
       document.body.focus();
     }
   };
 
-  window.addEventListener("pointerdown", () => {
-    window.setTimeout(keepKeyboardFocus, 0);
+  window.addEventListener("pointerdown", (event) => {
+    const control = isInteractiveRemoteTarget(event.target);
+    window.setTimeout(() => {
+      if (control && !(control instanceof HTMLMediaElement) && document.contains(control)) {
+        try {
+          control.focus();
+        } catch {
+          keepKeyboardFocus();
+        }
+        return;
+      }
+      keepKeyboardFocus();
+    }, 0);
+  });
+
+  document.addEventListener("focusin", (event) => {
+    const target = event.target as HTMLElement | null;
+    if (target instanceof HTMLMediaElement) {
+      target.blur();
+      keepKeyboardFocus();
+    }
   });
 
   document.addEventListener("visibilitychange", () => {
@@ -60,11 +126,6 @@ function normalizeRemoteKeyEvents() {
   window.addEventListener("keydown", (event) => {
     const rawKey = String(event.key || "");
     const keyCode = Number(event.keyCode || 0);
-    const debugLog = (window as Window & { webosDebugLog?: (msg: string) => void }).webosDebugLog;
-    if (debugLog) {
-      debugLog(`KEY: ${rawKey} code=${keyCode}`);
-    }
-
     const normalizedKey = REMOTE_KEY_ALIASES[rawKey] || REMOTE_KEYCODE_MAP[keyCode];
     if (normalizedKey && normalizedKey !== rawKey) {
       try {
@@ -98,150 +159,8 @@ function normalizeRemoteKeyEvents() {
     }
   });
 
+  enableMagicRemotePointerClicks();
   keepKeyboardFocus();
-}
-
-function initHiddenDiagnostics() {
-  const buffer: string[] = [];
-  const MAX_LINES = 120;
-  let overlay: HTMLDivElement | null = null;
-  const appVersion = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "dev";
-
-  const describeActiveElement = (): string => {
-    const el = document.activeElement as HTMLElement | null;
-    if (!el) return "none";
-    const cls = String(el.className || "").split(" ")[0];
-    return `${el.tagName.toLowerCase()}${cls ? `.${cls}` : ""}`;
-  };
-
-  const storageSnapshot = (): string[] => {
-    const lines: string[] = [];
-    try {
-      const playlistsRaw = localStorage.getItem("iptvmate_playlists");
-      lines.push(`ls playlists: ${playlistsRaw === null ? "null" : `${playlistsRaw.length} chars`}`);
-      const channelsRaw = localStorage.getItem("iptvmate_channels_cache");
-      lines.push(`ls channels: ${channelsRaw === null ? "null" : `${channelsRaw.length} chars`}`);
-      lines.push(`ls keys: ${localStorage.length}`);
-    } catch (err) {
-      lines.push(`localStorage ERROR: ${err}`);
-    }
-    lines.push(`webOS.service: ${!!(window as Window & { webOS?: { service?: unknown } }).webOS?.service}`);
-    lines.push(`indexedDB: ${typeof indexedDB !== "undefined"}`);
-    lines.push(`focus: ${describeActiveElement()}`);
-    return lines;
-  };
-
-  const renderOverlay = () => {
-    if (!overlay) return;
-    overlay.textContent = "";
-
-    const header = document.createElement("div");
-    header.style.cssText = "color:#fff;font-weight:bold;margin-bottom:4px;";
-    header.textContent = `Toms IPTVmate v${appVersion} — diagnostics (5x UP closes)`;
-    overlay.appendChild(header);
-
-    for (const line of storageSnapshot()) {
-      const div = document.createElement("div");
-      div.style.color = "#9ad1ff";
-      div.textContent = line;
-      overlay.appendChild(div);
-    }
-
-    for (const line of buffer.slice(-40)) {
-      const div = document.createElement("div");
-      div.textContent = line;
-      overlay.appendChild(div);
-    }
-
-    overlay.scrollTop = overlay.scrollHeight;
-  };
-
-  const record = (msg: string) => {
-    const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
-    buffer.push(line);
-    if (buffer.length > MAX_LINES) buffer.shift();
-    console.log("[webos-debug]", msg);
-    renderOverlay();
-  };
-
-  (window as Window & { webosDebugLog?: (msg: string) => void }).webosDebugLog = record;
-
-  window.addEventListener("error", (event) => {
-    const err = event as ErrorEvent;
-    record(`ERROR: ${err.message || "unknown"} @${err.filename || "?"}:${err.lineno || 0}`);
-  });
-  window.addEventListener("unhandledrejection", (event) => {
-    const reason = String((event as PromiseRejectionEvent).reason || "");
-    record(`REJECTION: ${reason.slice(0, 200)}`);
-  });
-
-  const toggleOverlay = () => {
-    if (overlay) {
-      overlay.remove();
-      overlay = null;
-      return;
-    }
-    overlay = document.createElement("div");
-    overlay.id = "webos-diagnostics-overlay";
-    overlay.style.cssText =
-      "position:fixed;top:10px;left:10px;right:10px;max-height:70%;background:rgba(0,0,0,0.85);color:#0f0;font-family:monospace;font-size:13px;padding:10px;z-index:999999;overflow:auto;pointer-events:none;white-space:pre-wrap;";
-    (document.body || document.documentElement).appendChild(overlay);
-    renderOverlay();
-  };
-
-  let upPressTimes: number[] = [];
-  window.addEventListener(
-    "keydown",
-    (event) => {
-      if (Number(event.keyCode || 0) === 403 || event.key === "F2") {
-        toggleOverlay();
-        return;
-      }
-
-      const isUp = event.key === "ArrowUp" || event.key === "Up" || Number(event.keyCode || 0) === 38;
-      if (!isUp) return;
-      const now = Date.now();
-      upPressTimes = upPressTimes.filter((t) => now - t < 2500);
-      upPressTimes.push(now);
-      if (upPressTimes.length >= 5) {
-        upPressTimes = [];
-        toggleOverlay();
-      }
-    },
-    true
-  );
-
-  let rawKeyLogCount = 0;
-  window.addEventListener(
-    "keydown",
-    (event) => {
-      if (rawKeyLogCount >= 30) return;
-      rawKeyLogCount += 1;
-      record(`key: "${event.key}" code=${event.keyCode}`);
-    },
-    true
-  );
-
-  let pointerLogCount = 0;
-  const describeTarget = (target: EventTarget | null): string => {
-    const el = target as HTMLElement | null;
-    if (!el || !el.tagName) return "?";
-    const cls = String(el.className || "").split(" ")[0];
-    return `${el.tagName.toLowerCase()}${cls ? `.${cls}` : ""}`;
-  };
-  (["mousedown", "mouseup", "click"] as const).forEach((type) => {
-    window.addEventListener(
-      type,
-      (event) => {
-        if (pointerLogCount >= 45) return;
-        pointerLogCount += 1;
-        record(`${type}: ${describeTarget(event.target)}`);
-      },
-      true
-    );
-  });
-
-  record(`boot v${appVersion} UA:${navigator.userAgent.slice(0, 60)}`);
 }
 
 async function readBridgePlaylistsFromIndexedDb(): Promise<unknown[]> {
@@ -574,7 +493,6 @@ export function initRuntimeSetup() {
   if (runtimeInitialized) return;
   runtimeInitialized = true;
 
-  initHiddenDiagnostics();
   normalizeRemoteKeyEvents();
   enablePopupPlaylistExporter();
   enableLocalPlaylistBridgeResponder();

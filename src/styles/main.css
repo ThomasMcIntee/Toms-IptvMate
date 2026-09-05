@@ -533,17 +533,14 @@ body.theme-light .app-login-input {
   padding: 22px 10px 8px;
   box-sizing: border-box;
   opacity: 1;
-  transition: opacity 0.18s ease;
+  visibility: visible;
+  transition: opacity 0.18s ease, visibility 0.18s ease;
 }
 
 .player-control-bar.player-control-bar-hidden {
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
-}
-
-.player-control-bar.player-control-bar-hidden:focus-within {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 body.is-capacitor.native-exo-active .player-control-bar {
@@ -593,10 +590,14 @@ body.is-capacitor.native-exo-active .player-control-bar {
   height: 100%;
 }
 
-.player-control-bar-btn:hover,
-.player-control-bar-btn:focus-visible {
-  background: rgba(255, 255, 255, 0.16);
-  outline: none;
+.player-control-bar-btn.is-favorite {
+  color: #ffd45c;
+}
+
+.live-preview-shell-fullscreen ~ .epg-favorite-btn,
+.live-preview-shell-fullscreen ~ .epg-grid,
+.live-preview-shell-fullscreen ~ .epg-grid-preview-window {
+  display: none !important;
 }
 
 .player-control-bar-time {
@@ -668,6 +669,18 @@ body.is-capacitor.native-exo-active .player-control-bar {
   color: #fff;
   font: inherit;
   cursor: pointer;
+  opacity: 1;
+  transition: opacity 0.18s ease;
+}
+
+.vod-exit-btn.vod-exit-btn-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.vod-exit-btn.vod-exit-btn-hidden:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .vod-exit-btn:focus-visible {
@@ -1020,6 +1033,22 @@ input {
   margin: 0 0 8px;
 }
 
+.playlist-account-meta {
+  display: inline;
+  margin-left: 8px;
+}
+
+.playlist-account-meta-block {
+  display: block;
+  margin-left: 0;
+  margin-top: 4px;
+  margin-bottom: 6px;
+}
+
+.playlist-account-meta-expired {
+  color: #ffb4b4;
+}
+
 .playlist-loaded-badge {
   align-self: center;
   padding: 3px 8px;
@@ -1179,6 +1208,7 @@ body.is-capacitor .app-root.is-playlist-manager .playlist-manager-parental-actio
 .app-root.is-playlist-manager .playlist-loaded-summary,
 .app-root.is-playlist-manager .playlist-item-type,
 .app-root.is-playlist-manager .playlist-meta,
+.app-root.is-playlist-manager .playlist-account-meta,
 .app-root.is-playlist-manager .playlist-status-banner,
 .app-root.is-playlist-manager .master-min-list-empty {
   font-size: 11px;
@@ -1193,6 +1223,43 @@ body.is-capacitor .app-root.is-playlist-manager .playlist-manager-parental-actio
 .app-root.is-playlist-manager .playlist-edit-form strong,
 .app-root.is-playlist-manager .playlist-edit-form label {
   font-size: 11px;
+}
+
+body.is-webos video.player-main {
+  pointer-events: none;
+}
+
+body.is-webos button:focus,
+body.is-webos [role="button"]:focus,
+body.is-webos input:focus,
+body.is-webos select:focus,
+body.is-webos .opening-btn:focus,
+body.is-webos .channel-select-btn:focus,
+body.is-webos .group-select-btn:focus,
+body.is-webos .channel-icon-btn:focus,
+body.is-webos .player-control-bar-btn:focus {
+  outline: 3px solid #4da3ff !important;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px rgba(77, 163, 255, 0.35);
+}
+
+body.is-webos .app-root.is-playlist-manager .playlist-loaded-summary,
+body.is-webos .app-root.is-playlist-manager .playlist-item-type,
+body.is-webos .app-root.is-playlist-manager .playlist-meta,
+body.is-webos .app-root.is-playlist-manager .playlist-account-meta,
+body.is-webos .app-root.is-playlist-manager .playlist-status-banner,
+body.is-webos .app-root.is-playlist-manager .master-min-list-empty {
+  opacity: 1;
+  color: #fff;
+}
+
+body.is-webos .app-root.is-playlist-manager .playlist-account-meta-expired {
+  color: #ffb4b4;
+}
+
+body.is-webos .app-root.is-playlist-manager .playlist-type,
+body.is-webos .app-root.is-playlist-manager .playlist-edit-form label {
+  color: #f2f8ff;
 }
 
 .app-root.is-playlist-manager .btn-primary,
@@ -2905,8 +2972,14 @@ body.theme-light .recording-setup-btn {
   transition: transform 0.12s ease, background 0.2s ease;
 }
 
-.opening-btn:hover {
+.opening-btn:hover,
+.opening-btn:focus {
   transform: translateY(-1px);
+}
+
+.opening-btn:focus {
+  outline: 3px solid #7ec8ff;
+  outline-offset: 3px;
 }
 
 .opening-btn-primary {

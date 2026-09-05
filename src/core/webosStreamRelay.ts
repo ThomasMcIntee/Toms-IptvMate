@@ -1,3 +1,5 @@
+import { isWebOsSimulator } from "./player/platformDetection";
+
 const SERVICE_URI = "luna://tv.toms.iptvmate.relay";
 const START_TIMEOUT_MS = 4000;
 const DOWNLOAD_TIMEOUT_MS = 20000;
@@ -49,12 +51,9 @@ type PalmServiceBridgeCtor = new () => {
 let cachedOrigin: string | null = null;
 let startPromise: Promise<string | null> | null = null;
 let jsServiceMissing = false;
+let lunaUnavailable = false;
 
-function debugLog(message: string): void {
-  const log = (window as { webosDebugLog?: (msg: string) => void }).webosDebugLog;
-  if (log) log(message);
-  console.log(`[webos-relay] ${message}`);
-}
+function debugLog(_message: string): void {}
 
 function getLunaService(): NonNullable<WebOsServiceBridge["service"]> | null {
   if (typeof window === "undefined") return null;
@@ -221,7 +220,9 @@ function lunaFetchViaService(url: string): Promise<WebOsRemoteFetchResult | null
             finish(null);
           },
           onFailure: (res) => {
-            debugLog(`FETCH: luna-service failed ${summarizeLuna(res)}`);
+            const reason = summarizeLuna(res);
+            markLunaUnavailable(reason);
+            debugLog(`FETCH: luna-service failed ${reason}`);
             finish(null);
           }
         });
@@ -404,10 +405,34 @@ function targetCandidates(url: string): string[] {
     seen.add(next);
     out.push(next);
   };
-  // HTTP first: old webOS TLS often hangs on https:// instead of failing fast.
-  push(rewriteHttpsToHttp(url));
-  push(url);
+  if (isWebOsSimulator()) {
+    push(url);
+    push(rewriteHttpsToHttp(url));
+    if (/^http:\/\//i.test(url) && /vod\d+\.|ip1-st/i.test(url)) {
+      push(url.replace(/^http:\/\//i, "https://"));
+    }
+  } else {
+    // HTTP first: old webOS TLS often hangs on https:// instead of failing fast.
+    push(rewriteHttpsToHttp(url));
+    push(url);
+  }
   return out;
+}
+
+function isVirtualLanOrigin(origin: string): boolean {
+  try {
+    const host = new URL(origin).hostname;
+    const parts = host.split(".").map((part) => Number(part));
+    return parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31;
+  } catch {
+    return false;
+  }
+}
+
+function markLunaUnavailable(reason: string): void {
+  if (/does not exist|not exist|Service does not exist/i.test(reason)) {
+    lunaUnavailable = true;
+  }
 }
 
 function pcRelayOrigins(): string[] {
@@ -415,7 +440,9 @@ function pcRelayOrigins(): string[] {
   const found: string[] = [];
   const push = (value: string | null | undefined) => {
     const origin = String(value || "").trim().replace(/\/$/, "");
-    if (/^https?:\/\//i.test(origin) && !found.includes(origin)) found.push(origin);
+    if (!/^https?:\/\//i.test(origin) || found.includes(origin)) return;
+    if (isVirtualLanOrigin(origin)) return;
+    found.push(origin);
   };
   try {
     push(window.localStorage.getItem(WEBOS_PC_RELAY_ORIGIN_KEY));
@@ -514,17 +541,12 @@ async function fetchWebOsRemoteUncached(url: string): Promise<WebOsRemoteFetchRe
     if (direct) return direct;
   }
 
-  const origin = await ensureWebOsStreamRelay();
+  const origin = isWebOsSimulator() ? null : await ensureWebOsStreamRelay();
   if (origin) {
     for (const candidate of candidates) {
       const relayed = await tryTextUrl(toWebOsRelayUrl(origin, candidate), candidate, "relay");
       if (relayed) return relayed;
     }
-  }
-
-  for (const candidate of candidates) {
-    const viaLunaFetch = await lunaFetchViaService(candidate);
-    if (viaLunaFetch) return viaLunaFetch;
   }
 
   for (const pcOrigin of pcRelayOrigins()) {
@@ -535,16 +557,26 @@ async function fetchWebOsRemoteUncached(url: string): Promise<WebOsRemoteFetchRe
     }
   }
 
-  for (const candidate of candidates) {
-    try {
-      const luna = await fetchWebOsViaLuna(candidate, true);
-      const text = String(luna.data || "");
-      if (text) {
-        debugLog(`FETCH: luna ok ${redactUrl(candidate)}`);
-        return { ok: true, status: 200, url: luna.finalUrl || candidate, text };
+  if (!isWebOsSimulator() && !lunaUnavailable) {
+    for (const candidate of candidates) {
+      const viaLunaFetch = await lunaFetchViaService(candidate);
+      if (viaLunaFetch) return viaLunaFetch;
+    }
+
+    for (const candidate of candidates) {
+      try {
+        const luna = await fetchWebOsViaLuna(candidate, true);
+        const text = String(luna.data || "");
+        if (text) {
+          debugLog(`FETCH: luna ok ${redactUrl(candidate)}`);
+          return { ok: true, status: 200, url: luna.finalUrl || candidate, text };
+        }
+      } catch (err) {
+        const reason = String((err as Error)?.message || err);
+        markLunaUnavailable(reason);
+        debugLog(`FETCH: luna fail ${reason.substring(0, 80)}`);
+        if (lunaUnavailable) break;
       }
-    } catch (err) {
-      debugLog(`FETCH: luna fail ${String((err as Error)?.message || err).substring(0, 80)}`);
     }
   }
 
@@ -591,6 +623,9 @@ export async function fetchWebOsViaLuna(
   url: string,
   asText: boolean
 ): Promise<{ finalUrl: string; data: string | ArrayBuffer }> {
+  if (isWebOsSimulator() || lunaUnavailable) {
+    throw new Error("luna download skipped");
+  }
   let lastError: Error | null = null;
   for (const serviceUri of DOWNLOAD_URIS) {
     try {
@@ -609,7 +644,10 @@ export async function fetchWebOsViaLuna(
       return { finalUrl, data };
     } catch (err) {
       lastError = err as Error;
-      debugLog(`PLAYER: luna download failed ${String((err as Error).message || err).substring(0, 100)}`);
+      const reason = String((err as Error).message || err);
+      markLunaUnavailable(reason);
+      debugLog(`PLAYER: luna download failed ${reason.substring(0, 100)}`);
+      if (lunaUnavailable) break;
     }
   }
   throw lastError || new Error("luna download failed");

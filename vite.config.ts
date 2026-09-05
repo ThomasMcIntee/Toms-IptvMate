@@ -9,6 +9,7 @@ import path from "node:path";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 const RELAY_PATH = "/__stream";
+const PING_PATH = "/__iptv_ping";
 const TRANSCODE_PATH = "/__transcode";
 const REDIRECT_LIMIT = 5;
 const CURRENT_TRANSCODE_PROFILE = "mpegts-v18";
@@ -40,6 +41,7 @@ type TranscodeSession = {
   audioMode: AudioMode;
   selectedAudioStreamOrder: number | null;
   audioPipeline: "aac-transcode" | "aac-copy" | "mp3-transcode" | null;
+  webosClient: boolean;
   profile: string;
   baseDir: string;
   dir: string;
@@ -86,13 +88,15 @@ function getTranscodeSessionId(
   sourceUrl: string,
   audioEnabled: boolean,
   audioMode: AudioMode,
-  selectedAudioStreamOrder: number | null
+  selectedAudioStreamOrder: number | null,
+  webosClient = false
 ): string {
   const avLabel = audioEnabled ? "av" : "video-only";
   const audioStreamLabel = audioEnabled && selectedAudioStreamOrder !== null ? `aidx:${selectedAudioStreamOrder}` : "aidx:auto";
+  const clientLabel = webosClient ? "webos-copy" : "std";
   return crypto
     .createHash("sha1")
-    .update(`${CURRENT_TRANSCODE_PROFILE}|${avLabel}|${audioEnabled ? audioMode : "na"}|${audioStreamLabel}|${sourceUrl}`)
+    .update(`${CURRENT_TRANSCODE_PROFILE}|${avLabel}|${audioEnabled ? audioMode : "na"}|${audioStreamLabel}|${clientLabel}|${sourceUrl}`)
     .digest("hex")
     .slice(0, 16);
 }
@@ -148,6 +152,10 @@ function probeSourceStreamInfo(inputUrl: string): SourceProbeInfo {
     [
       "-v",
       "error",
+      "-probesize",
+      "20000000",
+      "-analyzeduration",
+      "20000000",
       "-show_streams",
       "-of",
       "json",
@@ -155,7 +163,7 @@ function probeSourceStreamInfo(inputUrl: string): SourceProbeInfo {
     ],
     {
       encoding: "utf8",
-      timeout: 8000,
+      timeout: 20000,
       windowsHide: true
     }
   );
@@ -197,8 +205,13 @@ function probeSourceStreamInfo(inputUrl: string): SourceProbeInfo {
         if (stream.disposition?.default) score += 100;
         if (language === "eng" || language === "en") score += 20;
         if (stream.channels && stream.channels >= 2) score += 10;
-        if (stream.codec_name === "aac") score += 40;
-        if (stream.codec_name === "ac3" || stream.codec_name === "eac3") score += 2;
+        // Prefer HTML5-friendly tracks. 4K discs often mark TrueHD/DTS as default.
+        if (stream.codec_name === "aac") score += 80;
+        if (stream.codec_name === "mp3") score += 50;
+        if (stream.codec_name === "ac3") score += 8;
+        if (stream.codec_name === "eac3") score += 4;
+        if (stream.codec_name === "truehd" || stream.codec_name === "mlp") score -= 60;
+        if (stream.codec_name === "dts" || stream.codec_name === "dca") score -= 60;
         if (title.includes("main") || title.includes("original")) score += 12;
         if (title.includes("commentary") || title.includes("descriptive")) score -= 30;
 
@@ -347,8 +360,6 @@ function startTranscoder(session: TranscodeSession) {
     typeof session.selectedAudioStreamOrder === "number"
       ? session.selectedAudioStreamOrder
       : preferredAudioStreamOrder;
-  const audioMap =
-    typeof selectedAudioStreamOrder === "number" ? `0:a:${selectedAudioStreamOrder}?` : "0:a:0?";
   const sourceForModeCheck = (() => {
     try {
       return decodeURIComponent(session.sourceUrl);
@@ -358,10 +369,29 @@ function startTranscoder(session: TranscodeSession) {
   })();
   const isLiveLikeSource = /\/live\//i.test(sourceForModeCheck) || /%2Flive%2F/i.test(session.sourceUrl);
   const isVodLikeSource = /\/(movie|series)\//i.test(sourceForModeCheck) || /%2F(movie|series)%2F/i.test(session.sourceUrl);
-  const useFmp4Segments = session.audioEnabled && session.audioMode !== "safe" && !isLiveLikeSource;
+  const requireAudio = session.audioEnabled && (isVodLikeSource || session.webosClient);
+  const audioMap =
+    typeof selectedAudioStreamOrder === "number"
+      ? `0:a:${selectedAudioStreamOrder}${requireAudio ? "" : "?"}`
+      : `0:a:0${requireAudio ? "" : "?"}`;
+  const videoCodec = (session.probeInfo.videoCodecName || "").toLowerCase();
+  const shouldCopyVideo =
+    isVodLikeSource &&
+    (session.webosClient ||
+      videoCodec === "hevc" ||
+      videoCodec === "h264" ||
+      videoCodec === "avc1" ||
+      videoCodec === "mpeg2video" ||
+      videoCodec === "mpeg2");
+  const useTsHls = session.webosClient || shouldCopyVideo;
+  const useFmp4Segments = session.audioEnabled && session.audioMode !== "safe" && !isLiveLikeSource && !useTsHls;
   const segmentPattern = path.join(session.dir, useFmp4Segments ? "seg_%06d.m4s" : "seg_%06d.ts");
 
-  const shouldCopyAacAudio = false;
+  const shouldCopyAacAudio =
+    session.audioEnabled &&
+    session.audioMode !== "safe" &&
+    (session.probeInfo.audioCodecName || "").toLowerCase() === "aac" &&
+    (session.probeInfo.audioChannels || 2) <= 2;
   const shouldUseMp3Audio = session.audioEnabled && session.audioMode === "safe";
   session.audioPipeline = session.audioEnabled
     ? shouldUseMp3Audio
@@ -429,26 +459,36 @@ function startTranscoder(session: TranscodeSession) {
           "language=eng"
         ]
     : ["-an"];
-  const videoArgs = [
-    "-c:v",
-    "libx264",
-    "-profile:v",
-    "main",
-    "-level:v",
-    "4.0",
-    "-pix_fmt",
-    "yuv420p",
-    "-g",
-    "60",
-    "-keyint_min",
-    "60",
-    "-sc_threshold",
-    "0",
-    "-preset",
-    "veryfast",
-    "-tune",
-    "zerolatency"
-  ];
+  const videoArgs = shouldCopyVideo
+    ? [
+        "-c:v",
+        "copy",
+        ...(!useFmp4Segments && (videoCodec === "hevc" || videoCodec === "h265")
+          ? ["-bsf:v", "hevc_mp4toannexb"]
+          : !useFmp4Segments && (videoCodec === "h264" || videoCodec === "avc1")
+            ? ["-bsf:v", "h264_mp4toannexb"]
+            : [])
+      ]
+    : [
+        "-c:v",
+        "libx264",
+        "-profile:v",
+        "main",
+        "-level:v",
+        "4.0",
+        "-pix_fmt",
+        "yuv420p",
+        "-g",
+        "60",
+        "-keyint_min",
+        "60",
+        "-sc_threshold",
+        "0",
+        "-preset",
+        "veryfast",
+        "-tune",
+        "zerolatency"
+      ];
   const transportArgs =
     effectiveInputMode === "direct"
       ? [
@@ -511,9 +551,9 @@ function startTranscoder(session: TranscodeSession) {
     "Mozilla/5.0 IPTVmate Relay",
     ...transportArgs,
     "-analyzeduration",
-    "2000000",
+    isVodLikeSource ? "10000000" : "2000000",
     "-probesize",
-    "2000000",
+    isVodLikeSource ? "10000000" : "2000000",
     "-err_detect",
     "ignore_err",
     "-fflags",
@@ -523,8 +563,7 @@ function startTranscoder(session: TranscodeSession) {
     "-map",
     "0:v:0",
     ...audioArgs,
-    "-vf",
-    "setpts=PTS-STARTPTS",
+    ...(shouldCopyVideo ? [] : ["-vf", "setpts=PTS-STARTPTS"]),
     ...videoArgs,
     "-avoid_negative_ts",
     "make_zero",
@@ -543,7 +582,7 @@ function startTranscoder(session: TranscodeSession) {
   const ffmpegExecutable = resolveFfmpegExecutable();
   if (session.audioEnabled) {
     console.log(
-      `[transcode] session=${session.id} amode=${session.audioMode} input=${effectiveInputMode} audioMap=${audioMap} sourceAudioOrd=${preferredAudioStreamOrder ?? "na"} sourceAudioCodec=${session.probeInfo.audioCodecName ?? "unknown"} sourceAudioRate=${session.probeInfo.audioSampleRate ?? "unknown"} audioPipeline=${session.audioPipeline ?? "none"} channels=${session.probeInfo.audioChannels ?? "unknown"}`
+      `[transcode] session=${session.id} amode=${session.audioMode} webos=${session.webosClient} copyVideo=${shouldCopyVideo} tsHls=${useTsHls} input=${effectiveInputMode} audioMap=${audioMap} sourceAudioOrd=${preferredAudioStreamOrder ?? "na"} sourceAudioCodec=${session.probeInfo.audioCodecName ?? "unknown"} sourceAudioRate=${session.probeInfo.audioSampleRate ?? "unknown"} audioPipeline=${session.audioPipeline ?? "none"} channels=${session.probeInfo.audioChannels ?? "unknown"} videoCodec=${session.probeInfo.videoCodecName ?? "unknown"}`
     );
   }
   let sawRelaySocketError = false;
@@ -683,18 +722,20 @@ function getOrCreateTranscodeSession(
   audioEnabled: boolean,
   audioMode: AudioMode,
   selectedAudioStreamOrder: number | null,
-  host: string | undefined
+  host: string | undefined,
+  webosClient = false
 ): TranscodeSession {
   sourceUrl = normalizeProblematicLiveSourceUrl(sourceUrl);
   const preferRelayInput = shouldPreferRelayInput(sourceUrl);
-  const id = getTranscodeSessionId(sourceUrl, audioEnabled, audioMode, selectedAudioStreamOrder);
+  const id = getTranscodeSessionId(sourceUrl, audioEnabled, audioMode, selectedAudioStreamOrder, webosClient);
   const existing = transcodeSessions.get(id);
   if (existing) {
     if (
       existing.profile !== CURRENT_TRANSCODE_PROFILE ||
       existing.audioEnabled !== audioEnabled ||
       existing.audioMode !== audioMode ||
-      existing.selectedAudioStreamOrder !== selectedAudioStreamOrder
+      existing.selectedAudioStreamOrder !== selectedAudioStreamOrder ||
+      existing.webosClient !== webosClient
     ) {
       if (existing.proc && !existing.proc.killed) {
         existing.proc.kill();
@@ -710,6 +751,7 @@ function getOrCreateTranscodeSession(
       existing.audioEnabled = audioEnabled;
       existing.audioMode = audioMode;
       existing.selectedAudioStreamOrder = selectedAudioStreamOrder;
+      existing.webosClient = webosClient;
     }
 
     // Re-apply input preference for resumed sessions.
@@ -741,6 +783,7 @@ function getOrCreateTranscodeSession(
     audioMode,
     selectedAudioStreamOrder,
     audioPipeline: null,
+    webosClient,
     profile: CURRENT_TRANSCODE_PROFILE,
     baseDir,
     dir,
@@ -783,11 +826,17 @@ function sessionHasPlayableOutput(session: TranscodeSession): boolean {
   }
 }
 
-function relayTargetUrl(targetUrl: string): string {
-  return `${RELAY_PATH}?url=${encodeURIComponent(targetUrl)}`;
+function flippedSchemeUrl(targetUrl: string): string | null {
+  if (/^https:\/\//i.test(targetUrl)) return `http://${targetUrl.slice("https://".length)}`;
+  if (/^http:\/\//i.test(targetUrl)) return `https://${targetUrl.slice("http://".length)}`;
+  return null;
 }
 
-function rewriteManifestLine(line: string, manifestUrl: string): string {
+function relayTargetUrl(targetUrl: string, relayOrigin = ""): string {
+  return `${relayOrigin}${RELAY_PATH}?url=${encodeURIComponent(targetUrl)}`;
+}
+
+function rewriteManifestLine(line: string, manifestUrl: string, relayOrigin = ""): string {
   const trimmed = line.trim();
   if (!trimmed) return line;
 
@@ -796,7 +845,7 @@ function rewriteManifestLine(line: string, manifestUrl: string): string {
       return line.replace(/URI="([^"]+)"/, (_, uri: string) => {
         try {
           const absolute = new URL(uri, manifestUrl).toString();
-          return `URI="${relayTargetUrl(absolute)}"`;
+          return `URI="${relayTargetUrl(absolute, relayOrigin)}"`;
         } catch {
           return `URI="${uri}"`;
         }
@@ -807,10 +856,38 @@ function rewriteManifestLine(line: string, manifestUrl: string): string {
 
   try {
     const absolute = new URL(trimmed, manifestUrl).toString();
-    return relayTargetUrl(absolute);
+    return relayTargetUrl(absolute, relayOrigin);
   } catch {
     return line;
   }
+}
+
+const relayCookieJar = new Map<string, Map<string, string>>();
+
+function rememberRelayCookies(hostname: string, setCookie: string | string[] | undefined): void {
+  if (!setCookie) return;
+  const list = Array.isArray(setCookie) ? setCookie : [setCookie];
+  let jar = relayCookieJar.get(hostname);
+  if (!jar) {
+    jar = new Map();
+    relayCookieJar.set(hostname, jar);
+  }
+  for (const header of list) {
+    const part = String(header || "").split(";")[0];
+    const eq = part.indexOf("=");
+    if (eq <= 0) continue;
+    const name = part.slice(0, eq).trim();
+    const value = part.slice(eq + 1).trim();
+    if (name) jar.set(name, value);
+  }
+}
+
+function relayCookieHeader(hostname: string): string | undefined {
+  const jar = relayCookieJar.get(hostname);
+  if (!jar || jar.size === 0) return undefined;
+  return Array.from(jar.entries())
+    .map(([name, value]) => `${name}=${value}`)
+    .join("; ");
 }
 
 function isLikelyManifest(contentType: string | string[] | undefined, targetUrl: string): boolean {
@@ -865,11 +942,22 @@ function parseMovieVariant(targetUrl: string): { basePath: string; ext: string; 
   }
 }
 
+function contentTypeForRelayedUrl(targetUrl: string): string | null {
+  if (/\.m3u8(?:\?|$)/i.test(targetUrl)) return "application/vnd.apple.mpegurl";
+  if (/\.mp4(?:\?|$)/i.test(targetUrl)) return "video/mp4";
+  if (/\.mkv(?:\?|$)/i.test(targetUrl)) return "video/x-matroska";
+  if (/\.ts(?:\?|$)/i.test(targetUrl)) return "video/mp2t";
+  return null;
+}
+
 async function fetchAndRelay(
   targetUrl: string,
   res: http.ServerResponse,
   redirectDepth = 0,
-  attemptedUrls = new Set<string>()
+  attemptedUrls = new Set<string>(),
+  relayOrigin = "",
+  clientHeaders?: http.IncomingHttpHeaders,
+  requestMethod = "GET"
 ): Promise<void> {
   if (attemptedUrls.has(targetUrl)) {
     res.statusCode = 502;
@@ -908,7 +996,7 @@ async function fetchAndRelay(
       cachedUrl.pathname = `${movieVariant.basePath}.${cachedExt}`;
       const cachedTarget = cachedUrl.toString();
       if (!attemptedUrls.has(cachedTarget)) {
-        void fetchAndRelay(cachedTarget, res, redirectDepth, attemptedUrls);
+        void fetchAndRelay(cachedTarget, res, redirectDepth, attemptedUrls, relayOrigin, clientHeaders);
         return;
       }
     }
@@ -920,37 +1008,50 @@ async function fetchAndRelay(
       protocol: parsed.protocol,
       hostname: parsed.hostname,
       port: parsed.port || undefined,
-      method: "GET",
+      method: requestMethod === "HEAD" ? "HEAD" : "GET",
       path: `${parsed.pathname}${parsed.search}`,
       rejectUnauthorized: false,
       minVersion: "TLSv1",
-      // Some IPTV providers still require legacy cipher suites.
-      ciphers: "DEFAULT:@SECLEVEL=0",
+      maxVersion: "TLSv1.3",
+      // Some IPTV CDNs only speak obsolete TLS/ciphers.
+      ciphers: "ALL:@SECLEVEL=0",
       secureOptions: crypto.constants.SSL_OP_LEGACY_SERVER_CONNECT,
       servername: parsed.hostname,
       headers: {
-        "user-agent": "Mozilla/5.0 IPTVmate Relay",
-        accept: "*/*"
+        "user-agent": "TiviMate/4.7.0 (Linux; Android 9; AFTKM Build/PS7279)",
+        accept: "*/*",
+        referer: `${parsed.origin}/`,
+        origin: parsed.origin,
+        ...(clientHeaders?.range ? { range: String(clientHeaders.range) } : {}),
+        ...(relayCookieHeader(parsed.hostname) ? { cookie: relayCookieHeader(parsed.hostname) as string } : {})
       }
     },
     (upstreamRes) => {
       const status = upstreamRes.statusCode || 502;
       const location = upstreamRes.headers.location;
+      rememberRelayCookies(parsed.hostname, upstreamRes.headers["set-cookie"]);
 
       if (status >= 300 && status < 400 && location) {
         const nextUrl = new URL(location, parsed.toString()).toString();
-        void fetchAndRelay(nextUrl, res, redirectDepth + 1, attemptedUrls);
+        void fetchAndRelay(nextUrl, res, redirectDepth + 1, attemptedUrls, relayOrigin, clientHeaders);
         upstreamRes.resume();
         return;
       }
 
-      if (status >= 500) {
+      if (status === 403 || status === 404 || status === 551 || status >= 500) {
+        const flipped = flippedSchemeUrl(parsed.toString());
+        if (flipped && !attemptedUrls.has(flipped)) {
+          console.warn(`[relay] upstream ${status} for ${parsed.toString()} -> retrying ${flipped.slice(0, 12)}`);
+          upstreamRes.resume();
+          void fetchAndRelay(flipped, res, redirectDepth, attemptedUrls, relayOrigin, clientHeaders);
+          return;
+        }
         const fallbacks = getMovieVariantFallbackUrls(parsed.toString());
         const nextFallback = fallbacks.find((candidate) => !attemptedUrls.has(candidate));
         if (nextFallback) {
           console.warn(`[relay] upstream ${status} for ${parsed.toString()} -> retrying ${nextFallback}`);
           upstreamRes.resume();
-          void fetchAndRelay(nextFallback, res, redirectDepth, attemptedUrls);
+          void fetchAndRelay(nextFallback, res, redirectDepth, attemptedUrls, relayOrigin, clientHeaders);
           return;
         }
       }
@@ -968,10 +1069,19 @@ async function fetchAndRelay(
       res.statusCode = status;
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Headers", "*");
-      res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+      res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+      res.setHeader("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range, Content-Type");
+      res.setHeader("Accept-Ranges", String(upstreamRes.headers["accept-ranges"] || "bytes"));
+      if (upstreamRes.headers["content-range"]) {
+        res.setHeader("Content-Range", String(upstreamRes.headers["content-range"]));
+      }
+      if (upstreamRes.headers["content-length"]) {
+        res.setHeader("Content-Length", String(upstreamRes.headers["content-length"]));
+      }
 
-      if (contentType) {
-        res.setHeader("Content-Type", contentType);
+      const resolvedType = contentType || contentTypeForRelayedUrl(parsed.toString());
+      if (resolvedType) {
+        res.setHeader("Content-Type", resolvedType);
       }
 
       if (!shouldRewriteManifest) {
@@ -987,7 +1097,7 @@ async function fetchAndRelay(
       upstreamRes.on("end", () => {
         const rewritten = manifest
           .split(/\r?\n/)
-          .map((line) => rewriteManifestLine(line, parsed.toString()))
+          .map((line) => rewriteManifestLine(line, parsed.toString(), relayOrigin))
           .join("\n");
         res.end(rewritten);
       });
@@ -995,6 +1105,12 @@ async function fetchAndRelay(
   );
 
   upstream.on("error", (err) => {
+    const flipped = flippedSchemeUrl(parsed.toString());
+    if (flipped && !attemptedUrls.has(flipped) && !res.headersSent) {
+      console.warn(`[relay] upstream error ${err.message} for ${parsed.toString()} -> retrying ${flipped.slice(0, 12)}`);
+      void fetchAndRelay(flipped, res, redirectDepth, attemptedUrls, relayOrigin, clientHeaders);
+      return;
+    }
     if (!res.headersSent) {
       res.statusCode = 502;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -1006,6 +1122,26 @@ async function fetchAndRelay(
   });
 
   upstream.end();
+}
+
+function pingMiddleware(req: http.IncomingMessage, res: http.ServerResponse, next: () => void) {
+  if (!req.url) {
+    next();
+    return;
+  }
+
+  const requestUrl = new URL(req.url, "http://localhost");
+  if (requestUrl.pathname !== PING_PATH) {
+    next();
+    return;
+  }
+
+  res.statusCode = 204;
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+  res.setHeader("Cache-Control", "no-store");
+  res.end();
 }
 
 function streamRelayMiddleware(req: http.IncomingMessage, res: http.ServerResponse, next: () => void) {
@@ -1028,7 +1164,7 @@ function streamRelayMiddleware(req: http.IncomingMessage, res: http.ServerRespon
     res.statusCode = 204;
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
     res.end();
     return;
   }
@@ -1040,7 +1176,9 @@ function streamRelayMiddleware(req: http.IncomingMessage, res: http.ServerRespon
     return;
   }
 
-  void fetchAndRelay(targetUrl, res);
+  const host = String(req.headers.host || "").trim();
+  const relayOrigin = host ? `http://${host}` : "";
+  void fetchAndRelay(targetUrl, res, 0, new Set(), relayOrigin, req.headers, req.method);
 }
 
 function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse, next: () => void) {
@@ -1106,12 +1244,14 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
       return;
     }
 
+    const webosClient = requestUrl.searchParams.get("webos") === "1";
     const session = getOrCreateTranscodeSession(
       sourceUrl,
       audioEnabled,
       audioMode,
       selectedAudioStreamOrder,
-      req.headers.host
+      req.headers.host,
+      webosClient
     );
     if (shouldPreferRelayInput(sourceUrl)) {
       session.inputMode = "relay";
@@ -1270,10 +1410,12 @@ export default defineConfig({
     {
       name: "iptvmate-stream-relay",
       configureServer(server) {
+        server.middlewares.use(pingMiddleware);
         server.middlewares.use(streamRelayMiddleware);
         server.middlewares.use(transcodeMiddleware);
       },
       configurePreviewServer(server) {
+        server.middlewares.use(pingMiddleware);
         server.middlewares.use(streamRelayMiddleware);
         server.middlewares.use(transcodeMiddleware);
       }
@@ -1306,9 +1448,23 @@ export default defineConfig({
     outDir: "dist"
   },
   server: {
-    host: "0.0.0.0"
+    host: "0.0.0.0",
+    port: 5173,
+    strictPort: true,
+    allowedHosts: true,
+    cors: true,
+    watch: {
+      ignored: [
+        "**/release/**",
+        "**/webos/**",
+        "**/android/app/build/**",
+        "**/android/app/src/main/assets/public/**"
+      ]
+    }
   },
   preview: {
-    host: "0.0.0.0"
+    host: "0.0.0.0",
+    allowedHosts: true,
+    cors: true
   }
 });
