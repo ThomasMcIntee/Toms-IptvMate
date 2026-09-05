@@ -1,0 +1,17 @@
+{
+  "id": "tv.toms.iptvmate.relay",
+  "description": "Local HTTP relay for live IPTV TLS workarounds",
+  "engine": "node",
+  "executable": "relay.js",
+  "services": [
+    {
+      "name": "tv.toms.iptvmate.relay",
+      "description": "Fetch redirected live playlists and segments over HTTP localhost",
+      "commands": [
+        { "name": "start", "description": "Start localhost HTTP relay", "public": true },
+        { "name": "ping", "description": "Keep relay alive", "public": true },
+        { "name": "fetch", "description": "Download a remote URL and return the body", "public": true }
+      ]
+    }
+  ]
+}

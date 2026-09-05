@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:background="@android:color/black">
+
+    <!--
+      Must NOT be named exo_player_view.xml. PlayerView inflates that layout name
+      as its internals; a PlayerView root there recursively constructs forever
+      and ANRs Fire TV on the main thread.
+    -->
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/native_exo_player_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:keep_content_on_player_reset="false"
+        app:shutter_background_color="@android:color/black"
+        app:surface_type="texture_view"
+        app:use_controller="false" />
+
+    <LinearLayout
+        android:id="@+id/native_exo_controls"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="@drawable/native_exo_controls_bg"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:paddingLeft="8dp"
+        android:paddingRight="8dp"
+        android:paddingBottom="8dp"
+        android:paddingTop="18dp">
+
+        <ProgressBar
+            android:id="@+id/native_exo_progress"
+            style="@style/Widget.AppCompat.ProgressBar.Horizontal"
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:layout_marginLeft="6dp"
+            android:layout_marginRight="6dp"
+            android:layout_marginBottom="8dp"
+            android:max="1000"
+            android:progress="0"
+            android:progressTint="#1E90FF"
+            android:progressBackgroundTint="#47FFFFFF" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/native_exo_play"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@android:color/transparent"
+                android:contentDescription="@string/native_exo_play"
+                android:padding="6dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_player_pause"
+                android:tint="#FFFFFFFF" />
+
+            <TextView
+                android:id="@+id/native_exo_time"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="4dp"
+                android:layout_marginRight="8dp"
+                android:text="Live"
+                android:textColor="#D0FFFFFF"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/native_exo_title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#FFFFFFFF"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/native_exo_live"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="8dp"
+                android:layout_marginRight="4dp"
+                android:background="@drawable/native_exo_live_badge"
+                android:paddingLeft="6dp"
+                android:paddingRight="6dp"
+                android:paddingTop="2dp"
+                android:paddingBottom="2dp"
+                android:text="LIVE"
+                android:textColor="#FFFFFFFF"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+
+            <ImageButton
+                android:id="@+id/native_exo_mute"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@android:color/transparent"
+                android:contentDescription="@string/native_exo_mute"
+                android:padding="6dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_player_volume_on"
+                android:tint="#FFFFFFFF" />
+
+            <ImageButton
+                android:id="@+id/native_exo_fullscreen"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@android:color/transparent"
+                android:contentDescription="@string/native_exo_fullscreen"
+                android:padding="6dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_player_fullscreen"
+                android:tint="#FFFFFFFF" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

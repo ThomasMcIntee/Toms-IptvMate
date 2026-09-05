@@ -9,6 +9,8 @@
 
 const KEYCODE_MAP: Record<number, string> = {
   13: "Enter",
+  23: "Enter",
+  66: "Enter",
   37: "ArrowLeft",
   38: "ArrowUp",
   39: "ArrowRight",
@@ -35,4 +37,31 @@ export function normalizeRemoteNavKey(event: KeyboardEvent): string {
   if (KEY_ALIASES[raw]) return KEY_ALIASES[raw];
   if (raw && raw !== "Unidentified") return raw;
   return KEYCODE_MAP[Number(event.keyCode || 0)] || raw;
+}
+
+const MEDIA_KEYCODE_MAP: Record<number, string> = {
+  19: "MediaPause",
+  412: "MediaRewind",
+  413: "MediaStop",
+  415: "MediaPlay",
+  417: "MediaFastForward",
+  463: "MediaPlayPause",
+  10252: "MediaPlayPause"
+};
+
+const MEDIA_KEY_ALIASES: Record<string, string> = {
+  Play: "MediaPlay",
+  Pause: "MediaPause",
+  PlayPause: "MediaPlayPause",
+  Rewind: "MediaRewind",
+  FastForward: "MediaFastForward",
+  FastFwd: "MediaFastForward",
+  Stop: "MediaStop"
+};
+
+export function normalizeRemoteMediaKey(event: KeyboardEvent): string | null {
+  const raw = String(event.key || "");
+  if (MEDIA_KEY_ALIASES[raw]) return MEDIA_KEY_ALIASES[raw];
+  if (raw.startsWith("Media")) return raw;
+  return MEDIA_KEYCODE_MAP[Number(event.keyCode || 0)] || null;
 }

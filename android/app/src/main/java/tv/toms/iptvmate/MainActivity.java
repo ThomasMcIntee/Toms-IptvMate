@@ -1,5 +1,9 @@
 package tv.toms.iptvmate;
 
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Color;
 import android.net.Uri;
 import android.net.http.SslError;
@@ -33,8 +37,14 @@ public class MainActivity extends BridgeActivity {
     // Universal TiviMate identity - The absolute most trusted identity for IPTV providers.
     private static final String APP_USER_AGENT = "TiviMate/4.7.0 (Linux; Android 9; AFTKM Build/PS7279)";
 
+    private ExoPlayerManager exoPlayerManager;
+    private boolean webViewConfigured = false;
+    private BroadcastReceiver nativePlayerReceiver;
+    private boolean nativePlayerReceiverRegistered = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        registerPlugin(NativePlayerPlugin.class);
         super.onCreate(savedInstanceState);
         
         // Force the entire system to use the TiviMate identity.
@@ -42,8 +52,20 @@ public class MainActivity extends BridgeActivity {
         System.setProperty("http.agent", APP_USER_AGENT);
 
         
-        WebView.setWebContentsDebuggingEnabled(true);
+        // Chrome remote debugging keeps a socket and metrics process alive.
+        WebView.setWebContentsDebuggingEnabled(false);
         disableSSLVerification();
+    }
+
+    @Override
+    public void onDestroy() {
+        unregisterNativePlayerReceiver();
+        if (exoPlayerManager != null) {
+            exoPlayerManager.release();
+            exoPlayerManager = null;
+        }
+        webViewConfigured = false;
+        super.onDestroy();
     }
 
     private void disableSSLVerification() {
@@ -69,43 +91,129 @@ public class MainActivity extends BridgeActivity {
     public void onStart() {
         super.onStart();
         setupWebViewFocus();
+        registerNativePlayerReceiver();
     }
 
     @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
-        super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) {
-            setupWebViewFocus();
+    public void onPause() {
+        pauseWebView();
+        super.onPause();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        resumeWebView();
+    }
+
+    @Override
+    public void onStop() {
+        unregisterNativePlayerReceiver();
+        super.onStop();
+    }
+
+    private WebView getActivityWebView() {
+        try {
+            if (getBridge() == null) return null;
+            return getBridge().getWebView();
+        } catch (Exception ignored) {
+            return null;
         }
+    }
+
+    private void pauseWebView() {
+        WebView webView = getActivityWebView();
+        if (webView != null) {
+            webView.onPause();
+        }
+    }
+
+    private void resumeWebView() {
+        WebView webView = getActivityWebView();
+        if (webView != null) {
+            webView.onResume();
+        }
+    }
+
+    private void registerNativePlayerReceiver() {
+        if (nativePlayerReceiverRegistered) return;
+
+        nativePlayerReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent == null || exoPlayerManager == null) return;
+
+                String action = intent.getAction();
+                if (NativePlayerEvents.ACTION_READY.equals(action)) {
+                    exoPlayerManager.handleNativePlaybackReady();
+                } else if (NativePlayerEvents.ACTION_ERROR.equals(action)) {
+                    exoPlayerManager.handleNativePlaybackError(
+                        intent.getStringExtra(NativePlayerEvents.EXTRA_MESSAGE)
+                    );
+                } else if (NativePlayerEvents.ACTION_STOPPED.equals(action)) {
+                    exoPlayerManager.handleNativePlaybackStopped();
+                }
+            }
+        };
+
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(NativePlayerEvents.ACTION_READY);
+        filter.addAction(NativePlayerEvents.ACTION_ERROR);
+        filter.addAction(NativePlayerEvents.ACTION_STOPPED);
+        registerReceiver(nativePlayerReceiver, filter);
+        nativePlayerReceiverRegistered = true;
+    }
+
+    private void unregisterNativePlayerReceiver() {
+        if (!nativePlayerReceiverRegistered || nativePlayerReceiver == null) return;
+        try {
+            unregisterReceiver(nativePlayerReceiver);
+        } catch (Exception ignored) {
+            // Receiver may already be unregistered.
+        }
+        nativePlayerReceiver = null;
+        nativePlayerReceiverRegistered = false;
     }
 
     private void setupWebViewFocus() {
         WebView webView = getBridge().getWebView();
-        if (webView != null) {
-            webView.setFocusable(true);
-            webView.setFocusableInTouchMode(true);
-            webView.setClickable(true);
-            webView.setDescendantFocusability(WebView.FOCUS_AFTER_DESCENDANTS);
-            
-            // Required for 4K video hardware layering
-            webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
-            webView.setBackgroundColor(Color.TRANSPARENT);
+        if (webView == null) return;
 
-            WebSettings settings = webView.getSettings();
-            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-            settings.setJavaScriptEnabled(true);
-            settings.setDomStorageEnabled(true);
-            settings.setDatabaseEnabled(true);
-            settings.setAllowUniversalAccessFromFileURLs(true);
-            settings.setAllowFileAccessFromFileURLs(true);
-            settings.setMediaPlaybackRequiresUserGesture(false);
-            
-            settings.setUserAgentString(APP_USER_AGENT);
+        webView.setFocusable(true);
+        webView.setFocusableInTouchMode(true);
+        webView.setClickable(true);
+        webView.setDescendantFocusability(WebView.FOCUS_AFTER_DESCENDANTS);
 
-            // Setup the Native Proxy Relay
-            webView.setWebViewClient(new BridgeWebViewClient(getBridge()) {
-                @Override
-                public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+        WebSettings settings = webView.getSettings();
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        settings.setOffscreenPreRaster(false);
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+        settings.setAllowUniversalAccessFromFileURLs(true);
+        settings.setAllowFileAccessFromFileURLs(true);
+        settings.setMediaPlaybackRequiresUserGesture(true);
+        settings.setUserAgentString(APP_USER_AGENT);
+
+        if (webViewConfigured) {
+            return;
+        }
+        webViewConfigured = true;
+
+        // NONE during boot uses less GPU memory on Fire TV.
+        webView.setLayerType(View.LAYER_TYPE_NONE, null);
+        webView.setBackgroundColor(Color.BLACK);
+
+        // Setup the Native Proxy Relay once — re-attaching on every focus change leaks memory.
+        webView.setWebViewClient(new BridgeWebViewClient(getBridge()) {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+            }
+
+            @Override
+            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
                     handler.proceed();
                 }
 
@@ -114,6 +222,56 @@ public class MainActivity extends BridgeActivity {
                     Uri uri = request.getUrl();
                     String path = uri.getPath();
                     
+                    if (path != null && path.contains("/__api")) {
+                        String targetUrl = uri.getQueryParameter("url");
+                        if (targetUrl == null) return null;
+                        try {
+                            HttpURLConnection conn = (HttpURLConnection) new URL(targetUrl).openConnection();
+                            conn.setRequestMethod("GET");
+                            conn.setInstanceFollowRedirects(true);
+                            conn.setConnectTimeout(20000);
+                            conn.setReadTimeout(90000);
+                            conn.setRequestProperty("User-Agent", APP_USER_AGENT);
+                            conn.setRequestProperty("Accept", "application/json,text/plain,*/*");
+
+                            int status = conn.getResponseCode();
+                            int redirects = 0;
+                            while ((status == 301 || status == 302 || status == 303 || status == 307 || status == 308) && redirects < 5) {
+                                String loc = conn.getHeaderField("Location");
+                                if (loc == null) break;
+                                conn.disconnect();
+                                conn = (HttpURLConnection) new URL(loc).openConnection();
+                                conn.setRequestMethod("GET");
+                                conn.setRequestProperty("User-Agent", APP_USER_AGENT);
+                                conn.setRequestProperty("Accept", "application/json,text/plain,*/*");
+                                status = conn.getResponseCode();
+                                redirects++;
+                            }
+
+                            InputStream stream = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
+                            byte[] raw = XtreamCatalogSlimmer.readLimited(stream, 48 * 1024 * 1024);
+                            if (raw == null) {
+                                Log.w(TAG, "API body too large");
+                                return null;
+                            }
+                            byte[] body = XtreamCatalogSlimmer.slimIfCatalog(raw, targetUrl);
+                            String contentType = "application/json";
+                            WebResourceResponse response = new WebResourceResponse(
+                                contentType,
+                                "UTF-8",
+                                new ByteArrayInputStream(body)
+                            );
+                            Map<String, String> headers = new HashMap<>();
+                            headers.put("Access-Control-Allow-Origin", "*");
+                            response.setResponseHeaders(headers);
+                            response.setStatusCodeAndReasonPhrase(status, status >= 200 && status < 300 ? "OK" : "Error");
+                            return response;
+                        } catch (Exception e) {
+                            Log.e(TAG, "API Proxy Error", e);
+                            return null;
+                        }
+                    }
+
                     if (path != null && (path.contains("/__stream") || path.contains("/__playlist"))) {
                         String targetUrl = uri.getQueryParameter("url");
                         if (targetUrl == null) return null;
@@ -123,13 +281,19 @@ public class MainActivity extends BridgeActivity {
                                 Log.i(TAG, "Relay: Virtual HLS for: " + targetUrl);
                                 // Stay on the 'app' hostname to avoid cross-origin protocol blocks
                                 String segmentUrl = "http://app/__stream?url=" + Uri.encode(targetUrl);
+                                boolean isLiveTs = targetUrl.toLowerCase().contains(".ts");
                                 String manifest = "#EXTM3U\n" +
                                                  "#EXT-X-VERSION:3\n" +
                                                  "#EXT-X-TARGETDURATION:60\n" +
-                                                 "#EXT-X-MEDIA-SEQUENCE:0\n" +
-                                                 "#EXTINF:60.0,\n" +
-                                                 segmentUrl + "\n" +
-                                                 "#EXT-X-ENDLIST";
+                                                 "#EXT-X-MEDIA-SEQUENCE:0\n";
+                                if (isLiveTs) {
+                                    manifest += "#EXT-X-PLAYLIST-TYPE:EVENT\n";
+                                }
+                                manifest += "#EXTINF:60.0,\n" +
+                                            segmentUrl + "\n";
+                                if (!isLiveTs) {
+                                    manifest += "#EXT-X-ENDLIST";
+                                }
                                 
                                 InputStream is = new ByteArrayInputStream(manifest.getBytes("UTF-8"));
                                 WebResourceResponse resp = new WebResourceResponse("application/vnd.apple.mpegurl", "UTF-8", is);
@@ -207,21 +371,55 @@ public class MainActivity extends BridgeActivity {
                     return super.shouldInterceptRequest(view, request);
                 }
             });
+    }
+
+    public ExoPlayerManager getOrCreateExoPlayerManager() {
+        if (exoPlayerManager == null) {
+            WebView webView = getBridge().getWebView();
+            exoPlayerManager = new ExoPlayerManager(
+                this,
+                APP_USER_AGENT,
+                script -> {
+                    if (webView != null) {
+                        webView.post(() -> webView.evaluateJavascript(script, null));
+                    }
+                }
+            );
         }
+        return exoPlayerManager;
+    }
+
+    private long lastBackDispatchMs = 0;
+
+    private void dispatchBackKeyToWebApp() {
+        long now = System.currentTimeMillis();
+        if (now - lastBackDispatchMs < 250) return;
+        lastBackDispatchMs = now;
+
+        WebView webView = getBridge().getWebView();
+        if (webView == null) return;
+
+        webView.post(() -> webView.evaluateJavascript(
+            "(function(){" +
+            "var e=new KeyboardEvent('keydown',{" +
+            "key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true" +
+            "});" +
+            "window.dispatchEvent(e);" +
+            "})();",
+            null
+        ));
+    }
+
+    @Override
+    public void onBackPressed() {
+        dispatchBackKeyToWebApp();
     }
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-            WebView webView = getBridge().getWebView();
-            if (webView != null) {
-                String url = webView.getUrl();
-                // Standard Exit: If we are on the main menu, close the app immediately.
-                if (url != null && (url.endsWith("/") || url.contains("index.html") || url.contains("/#"))) {
-                    finish();
-                    return true;
-                }
-            }
+            dispatchBackKeyToWebApp();
+            return true;
         }
         return super.dispatchKeyEvent(event);
     }

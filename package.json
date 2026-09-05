@@ -1,6 +1,6 @@
 {
   "name": "toms-iptvmate",
-  "version": "1.4.4",
+  "version": "1.5.18",
   "main": "electron/main.cjs",
   "files": [
     "dist",
@@ -13,37 +13,39 @@
     "prepack": "npm run build",
     "preview": "vite preview",
     "cap:sync": "npx cap sync",
+    "cap:sync:android": "node scripts/sync-android-web.cjs",
     "cap:android": "npx cap open android",
     "cap:ios": "npx cap open ios",
     "android:build": "node scripts/build-android.cjs",
+    "android:log": "node scripts/android-log.cjs",
     "ios:build": "node scripts/build-ios.cjs",
     "desktop:package": "node scripts/repair-electron-install.cjs && electron-builder --win nsis --config.electronDist=node_modules/electron/dist",
     "webos:version-sync": "node scripts/sync-webos-version.cjs",
     "webos:sync": "node scripts/sync-webos-build.cjs",
-    "webos:package": "npm run webos:version-sync && npm run build && npm run webos:sync && npx ares-package -n webos/",
-    "build:all": "npm run build && npx cap sync android && npm run android:build && npx cap sync ios && npm run ios:build && npm run webos:version-sync && npm run webos:sync && npx ares-package -n webos/ && npm run desktop:package",
+    "webos:package": "npm run webos:version-sync && npm run build && npm run webos:sync && npx ares-package webos/ webos-relay/tv.toms.iptvmate.relay",
+    "build:all": "npm run android:build && npm run webos:version-sync && npm run webos:sync && npx ares-package webos/ webos-relay/tv.toms.iptvmate.relay && npm run desktop:package",
     "postinstall": "node scripts/fix-webos-cli-rimraf.cjs"
   },
   "dependencies": {
-    "@capacitor/android": "^8.5.0",
-    "@capacitor/core": "^8.5.0",
-    "@capacitor/ios": "^8.5.0",
-    "hls.js": "^1.7.1",
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/core": "^8.5.1",
+    "@capacitor/ios": "^8.5.1",
+    "hls.js": "^1.7.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "shaka-player": "^5.2.6"
+    "shaka-player": "^5.2.9"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.4.2",
+    "@capacitor/cli": "^8.5.1",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
-    "@vitejs/plugin-react": "^6.1.0",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
     "@webos-tools/cli": "^3.2.3",
-    "electron": "^43.4.1",
-    "electron-builder": "^26.15.7",
+    "electron": "^44.2.0",
+    "electron-builder": "^26.16.0",
     "typescript": "^7.0.2",
     "vite": "^8.2.2",
-    "webpack-cli": "^7.2.2"
+    "webpack-cli": "^7.2.3"
   },
   "overrides": {
     "@webos-tools/cli": {

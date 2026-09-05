@@ -1,13 +1,29 @@
 /* @refresh reload */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ChannelList } from "./ui/ChannelList";
 import { EPGGrid } from "./ui/EPGGrid";
 import { PanelsHost } from "./ui/PanelsHost";
+import { firstGroupForMasterKey, MasterMinList } from "./ui/MasterMinList";
 import { useProfile } from "./profiles/ProfileContext";
 import { initNavigation } from "./core/navigation";
-import { normalizeRemoteNavKey } from "./core/remoteKeys";
+import { normalizeRemoteMediaKey, normalizeRemoteNavKey } from "./core/remoteKeys";
 import { initPlayerEngine, playUrl, stopPlayback } from "./core/playerEngine";
+import {
+  isNativePlayerAvailable,
+  isNativePlaybackMuted,
+  isNativePlaybackPaused,
+  noteNativePlaybackMuted,
+  noteNativePlaybackPaused,
+  pauseNativePlayback,
+  playNativeUrl,
+  resumeNativePlayback,
+  revealNativePlayerControls,
+  setNativeMuted,
+  stopNativePlayback,
+  syncNativePlayerBounds
+} from "./core/nativePlayerBridge";
+import { isCapacitorRuntime, isWebOsRuntime } from "./core/player/platformDetection";
 import { GroupList } from "./ui/GroupList";
 import { sortChannelsByName, type ItemSortDirection } from "./ui/groupSorting";
 import {
@@ -19,22 +35,47 @@ import {
   applyVisibilitySnapshotForCurrentChannels,
   getLastChannelWriteTrace,
   resetVisibilityForCurrentChannels,
+  restoreLiveVisibility,
   restoreChannelsCache,
+  hydrateCachedVodScope,
   setChannelFavoriteRecord,
   setChannelVisible,
   setChannels,
+  trimCapacitorChannelMemoryForLive,
+  releaseCapacitorMemoryForLivePlayback,
+  getCapacitorLiveGroupNames,
+  getCapacitorLiveGroupCounts,
+  loadCapacitorLiveGroupChannels,
+  loadCapacitorFavoriteChannels,
+  getCapacitorVodGroupNames,
+  getCapacitorVodGroupCounts,
+  loadCapacitorVodGroupChannels,
+  scheduleCapacitorLegacyCachePurge,
+  loadCapacitorVodScopeCache,
+  saveCapacitorVodScopeCache,
+  capCapacitorCatalogList,
+  pruneCapacitorVisibilityIfBloated,
   setRoleChannelWriteLock,
   setGroupVisible,
   setGroupsVisible,
-  setActiveVisibilityRole
+  setActiveVisibilityRole,
+  type ChannelVisibilitySnapshot
 } from "./core/channelStore";
 import NowNextOverlay from "./ui/NowNextOverlay";
-import { isPlaylistsHydrationPending, loadPlaylists } from "./core/playlistStore";
+import { PlayerControlBar, VodExitButton } from "./ui/PlayerControlBar";
+import { isPlaylistsHydrationPending, loadPlaylists, type PlaylistEntry } from "./core/playlistStore";
 import { loadEPGForPlaylist } from "./core/loaders/epgLoader";
 import { getEPG, getEPGForChannel, getIndexedEPGForChannel, setEPG } from "./core/epgStore";
+import {
+  extractMasterBouquetKey,
+  getMasterMinListVersion,
+  groupMatchesMasterMinList,
+  hasMasterMinList,
+  subscribeMasterMinList
+} from "./core/masterMinList";
 import { loadRecordings } from "./core/recordingEngine";
 import MainMenuScreen from "./ui/MainMenuScreen";
-import { loadChannelsForPlaylist, loadFromAnyPlaylist } from "./core/loaders/playlistLoader";
+import { loadChannelsForPlaylist } from "./core/loaders/playlistLoader";
 import { loadXtream, loadXtreamSeriesEpisodesFromChannel } from "./core/loaders/xtreamLoader";
 import { loadXtreamEPGForStream } from "./core/loaders/xtreamEPG";
 import SeriesEpisodePicker from "./ui/SeriesEpisodePicker";
@@ -89,10 +130,24 @@ function writeStoredItem(key: string, value: string): void {
   }
 }
 
-function isWebOsRuntime(): boolean {
-  const agent = String(navigator?.userAgent || "");
-  const runtime = (window as Window & { webOS?: unknown; PalmServiceBridge?: unknown }).webOS;
-  return /WebOSTV|webOS|LG WebOS/i.test(agent) || Boolean(runtime) || Boolean((window as Window & { PalmServiceBridge?: unknown }).PalmServiceBridge);
+function resolveStoredPlaylistId(playlists: PlaylistEntry[] = loadPlaylists()): string {
+  const stored = (
+    readStoredItem(SHARED_PLAYLIST_ID_KEY) ||
+    readStoredItem(ADULT_PLAYLIST_ID_KEY) ||
+    readStoredItem(CHILD_PLAYLIST_ID_KEY) ||
+    ""
+  ).trim();
+  if (stored && (playlists.length === 0 || playlists.some((playlist) => playlist.id === stored))) {
+    return stored;
+  }
+  return playlists[0]?.id || stored || "";
+}
+
+function isTextEntryActive(target: EventTarget | null = document.activeElement): boolean {
+  if (typeof document !== "undefined" && document.body?.dataset?.webosKeyboard === "open") {
+    return true;
+  }
+  return isTextEntryTarget(target) || isTextEntryTarget(document.activeElement);
 }
 
 function isBackKeyEvent(event: KeyboardEvent): boolean {
@@ -110,14 +165,14 @@ function isBackKeyEvent(event: KeyboardEvent): boolean {
   }
 
   const keyCode = Number((event as unknown as { keyCode?: number }).keyCode || 0);
-  return keyCode === 8 || keyCode === 27 || keyCode === 461 || keyCode === 10009;
+  return keyCode === 4 || keyCode === 8 || keyCode === 27 || keyCode === 461 || keyCode === 10009;
 }
 
-export function App() {
+export function App({ bootAction = null }: { bootAction?: string | null } = {}) {
   useEffect(() => {
-    const debugLog = (window as any).webosDebugLog;
-    if (debugLog) debugLog('React App mounted!');
-    loadRecordings();
+    if (!isCapacitorRuntime()) {
+      loadRecordings();
+    }
   }, []);
 
   const { profile } = useProfile();
@@ -129,16 +184,18 @@ export function App() {
   const [playerWarning, setPlayerWarning] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<string | null>(null);
   const [showNowNext, setShowNowNext] = useState(false);
-  const [showOpeningScreen, setShowOpeningScreen] = useState(true);
+  const [showOpeningScreen, setShowOpeningScreen] = useState(!bootAction);
   const [categoryRefreshTick, setCategoryRefreshTick] = useState(0);
   const [channelUpdateTick, setChannelUpdateTick] = useState(0);  // Track channel data changes separately
   const [favoritesRefreshTick, setFavoritesRefreshTick] = useState(0);
   const [activeGroup, setActiveGroup] = useState(ROOT_GROUP);
+  const [selectedMasterKey, setSelectedMasterKey] = useState<string | null>(null);
   const [contentMode, setContentMode] = useState<"tv" | "movies" | "series">("tv");
   const [showLiveMenu, setShowLiveMenu] = useState(true);
   const [hasSelectedLiveChannel, setHasSelectedLiveChannel] = useState(false);
   const [isFullscreenActive, setIsFullscreenActive] = useState(false);
   const [isLiveFullscreenRequested, setIsLiveFullscreenRequested] = useState(false);
+  const [playerUiTick, setPlayerUiTick] = useState(0);
   const [isSeriesPickerVisible, setIsSeriesPickerVisible] = useState(false);
   const [seriesPickerLoading, setSeriesPickerLoading] = useState(false);
   const [seriesPickerError, setSeriesPickerError] = useState<string | null>(null);
@@ -165,6 +222,7 @@ export function App() {
   const [activePlaylistId, setActivePlaylistId] = useState("");
   const [hasPlaylists, setHasPlaylists] = useState(false);
   const [playlistsRevision, setPlaylistsRevision] = useState(0);
+  const activePlaylistIdRef = useRef(activePlaylistId);
   const accessLevelRef = useRef<AccessLevel>(accessLevel);
   const autoLoadTokenRef = useRef(0);
   const liveRoleRestoreAttemptRef = useRef("");
@@ -177,9 +235,9 @@ export function App() {
   const isPlaylistManagerSeriesMode = isPlaylistManagerPage && contentMode === "series";
   const isMainMoviesScreen = !showOpeningScreen && isMoviesPage;
   const isMainSeriesScreen =
-    !showOpeningScreen && (isSeriesPage || isPlaylistManagerSeriesMode) && !isSeriesPickerVisible;
+    !showOpeningScreen && isSeriesPage && !isSeriesPickerVisible;
   const isEpgSearchPanelOpen = activePanel === "epgSearch";
-  const isContentIconsView = isMoviesPage || isSeriesPage || isPlaylistManagerMoviesMode || isPlaylistManagerSeriesMode;
+  const isContentIconsView = isMoviesPage || isSeriesPage;
   const isPlaylistInputPanelOpen = activePanel === "playlist";
   const isMovieOrSeriesSelected =
     !!currentChannel &&
@@ -197,7 +255,11 @@ export function App() {
   const isLivePreviewFullscreen =
     isEffectiveLiveFullscreen && contentPage === "live" && hasSelectedLiveChannel && !!currentChannel;
   const forceLivePreviewLayout = !showOpeningScreen && contentPage === "live" && !hasSelectedLiveChannel;
-  const shouldRenderMainVideo = !isPlaylistInputPanelOpen && !isEpgSearchPanelOpen;
+  const shouldRenderMainVideo =
+    !showOpeningScreen &&
+    !isPlaylistInputPanelOpen &&
+    !isEpgSearchPanelOpen &&
+    (!!currentChannel || hasSelectedLiveChannel);
   const useLivePreviewShell = shouldRenderMainVideo && contentPage === "live";
   const isLiveChannelPlaying =
     !showOpeningScreen &&
@@ -212,6 +274,13 @@ export function App() {
     url: null,
     at: 0
   });
+  const playChannelRef = useRef<(ch: any, options?: { forceRestart?: boolean }) => void>(() => {});
+  const scheduleLiveReconnectRef = useRef<(reason: string) => void>(() => {});
+  const liveReconnectTimerRef = useRef<number | null>(null);
+  const liveReconnectAttemptRef = useRef(0);
+  const hadLivePlayingRef = useRef(false);
+  const lastFavoriteToggleAtRef = useRef(0);
+  const lastBackHandledAtRef = useRef(0);
   const seriesAutoAdvanceTokenRef = useRef(0);
   const lastSeriesEndedRef = useRef<{ url: string | null; at: number }>({
     url: null,
@@ -234,12 +303,44 @@ export function App() {
   }, [shouldShowOpeningMenu, activePanel]);
 
   useEffect(() => {
+    if (
+      activePanel === "recordings" ||
+      activePanel === "recordingPlayback" ||
+      activePanel === "recordingStorage"
+    ) {
+      loadRecordings();
+    }
+  }, [activePanel]);
+
+  useEffect(() => {
+    activePlaylistIdRef.current = activePlaylistId;
+  }, [activePlaylistId]);
+
+  useEffect(() => {
     const refreshPlaylistsPresence = () => {
-      setHasPlaylists(loadPlaylists().length > 0);
+      const loaded = loadPlaylists();
+      setHasPlaylists(loaded.length > 0);
       setPlaylistsRevision((revision) => revision + 1);
+      if (!activePlaylistIdRef.current) {
+        const preferred = resolveStoredPlaylistId(loaded);
+        if (preferred) {
+          setActivePlaylistId(preferred);
+          writeStoredItem(SHARED_PLAYLIST_ID_KEY, preferred);
+        }
+      }
     };
 
-    refreshPlaylistsPresence();
+    if (isCapacitorRuntime()) {
+      const deferRefresh = () => window.setTimeout(refreshPlaylistsPresence, 400);
+      if (typeof requestIdleCallback === "function") {
+        requestIdleCallback(deferRefresh, { timeout: 2500 });
+      } else {
+        deferRefresh();
+      }
+    } else {
+      refreshPlaylistsPresence();
+    }
+
     window.addEventListener("playlistsChanged", refreshPlaylistsPresence);
     window.addEventListener("playlistsHydrationComplete", refreshPlaylistsPresence);
     return () => {
@@ -291,7 +392,16 @@ export function App() {
     }
   }, [moviesSortDirection]);
 
+  const masterMinListVersion = useSyncExternalStore(
+    subscribeMasterMinList,
+    getMasterMinListVersion,
+    getMasterMinListVersion
+  );
+  const applyMasterMinList = accessLevel === "master" && hasMasterMinList();
 
+  useEffect(() => {
+    setSelectedMasterKey(null);
+  }, [contentMode]);
 
   useEffect(() => {
     if (accessLevel === "adult" || accessLevel === "child") {
@@ -301,6 +411,53 @@ export function App() {
 
     setRoleChannelWriteLock(null);
   }, [accessLevel]);
+
+  useEffect(() => {
+    if (!isCapacitorRuntime()) return;
+    const isLiveGroupContext =
+      contentPage === "live" || (contentPage === "playlistManager" && contentMode === "tv");
+    if (!isLiveGroupContext) return;
+    if (!activeGroup) return;
+    if (!showLiveMenu && hasSelectedLiveChannel) return;
+
+    let cancelled = false;
+    void (async () => {
+      if (activeGroup === ROOT_GROUP) {
+        await loadCapacitorFavoriteChannels();
+      } else {
+        await loadCapacitorLiveGroupChannels(activeGroup);
+      }
+      if (!cancelled) {
+        setChannelUpdateTick((tick) => tick + 1);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeGroup, contentPage, contentMode, showLiveMenu, hasSelectedLiveChannel]);
+
+  useEffect(() => {
+    if (!isCapacitorRuntime()) return;
+    if (contentMode !== "movies" && contentMode !== "series") return;
+    const onMoviesOrSeriesScreen =
+      contentPage === contentMode ||
+      (contentPage === "playlistManager" && (contentMode === "movies" || contentMode === "series"));
+    if (!onMoviesOrSeriesScreen) return;
+    if (!activeGroup || activeGroup === ROOT_GROUP) return;
+
+    let cancelled = false;
+    void (async () => {
+      await loadCapacitorVodGroupChannels(contentMode, activeGroup);
+      if (!cancelled) {
+        setChannelUpdateTick((tick) => tick + 1);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeGroup, contentPage, contentMode]);
 
   const allChannels = useMemo(() => {
     return getAllChannels().filter((channel) => isChannelRecord(channel));
@@ -329,16 +486,46 @@ export function App() {
     return channelsByMode[contentMode];
   }, [channelsByMode, contentMode]);
   const groups = useMemo(() => {
+    if (isCapacitorRuntime() && contentMode === "tv") {
+      // During native playback, avoid building a 2k+ group sidebar from catalog metadata.
+      if (currentChannel && matchesContentMode(currentChannel, "tv")) {
+        const groupSet = new Set<string>([ROOT_GROUP]);
+        contentChannels.forEach((channel) => {
+          const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+          groupSet.add(groupName);
+        });
+        return Array.from(groupSet);
+      }
+
+      const capacitorGroups = getCapacitorLiveGroupNames();
+      if (capacitorGroups.length > 0) {
+        return [ROOT_GROUP, ...capacitorGroups];
+      }
+    }
+
+    if (isCapacitorRuntime() && (contentMode === "movies" || contentMode === "series")) {
+      const vodGroups = getCapacitorVodGroupNames(contentMode);
+      if (vodGroups.length > 0) {
+        return [ROOT_GROUP, ...vodGroups];
+      }
+    }
+
     const groupSet = new Set<string>([ROOT_GROUP]);
     contentChannels.forEach((channel) => {
       const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
       groupSet.add(groupName);
     });
     return Array.from(groupSet);
-  }, [contentChannels]);
+  }, [contentChannels, contentMode, channelUpdateTick, currentChannel]);
   const visibleGroups = useMemo(() => {
-    return groups.filter((group) => isGroupVisible(group));
-  }, [groups, categoryRefreshTick]);
+    return groups.filter((group) => {
+      if (!isGroupVisible(group)) return false;
+      if (applyMasterMinList && contentMode === "tv") {
+        return groupMatchesMasterMinList(group);
+      }
+      return true;
+    });
+  }, [groups, categoryRefreshTick, applyMasterMinList, contentMode, masterMinListVersion]);
   const visibleChannelsByMode = useMemo(() => {
     const visibleBuckets: Record<"tv" | "movies" | "series", any[]> = {
       tv: [],
@@ -350,12 +537,16 @@ export function App() {
       visibleBuckets[mode] = channelsByMode[mode].filter((channel) => {
         if (!isChannelRecord(channel)) return false;
         const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
-        return isGroupVisible(groupName) && isChannelVisible(String(channel.id || ""));
+        return (
+          isGroupVisible(groupName) &&
+          isChannelVisible(String(channel.id || "")) &&
+          (!applyMasterMinList || mode !== "tv" || groupMatchesMasterMinList(groupName))
+        );
       });
     }
 
     return visibleBuckets;
-  }, [channelsByMode, categoryRefreshTick]);
+  }, [channelsByMode, categoryRefreshTick, applyMasterMinList, masterMinListVersion]);
   const visibleChannels = useMemo(() => {
     return visibleChannelsByMode[contentMode];
   }, [visibleChannelsByMode, contentMode]);
@@ -364,10 +555,53 @@ export function App() {
   const groupsForList = useMemo(() => {
     const useVisibleOnly =
       isLiveContentPage || isMainMoviesScreen || (isMainSeriesScreen && !isPlaylistManagerPage);
-    return useVisibleOnly ? visibleGroups : groups;
-  }, [isLiveContentPage, isMainMoviesScreen, isMainSeriesScreen, isPlaylistManagerPage, visibleGroups, groups]);
+    const source = useVisibleOnly ? visibleGroups : groups;
+    if (isPlaylistManagerPage && selectedMasterKey) {
+      return source.filter((group) => {
+        if (group === ROOT_GROUP) return true;
+        return extractMasterBouquetKey(group) === selectedMasterKey;
+      });
+    }
+    return source;
+  }, [
+    isLiveContentPage,
+    isMainMoviesScreen,
+    isMainSeriesScreen,
+    isPlaylistManagerPage,
+    visibleGroups,
+    groups,
+    selectedMasterKey
+  ]);
   const groupCounts = useMemo(() => {
     const counts: Record<string, number> = { [ROOT_GROUP]: 0 };
+
+    if (isCapacitorRuntime() && contentMode === "tv") {
+      if (!(currentChannel && matchesContentMode(currentChannel, "tv"))) {
+        const capacitorCounts = getCapacitorLiveGroupCounts();
+        Object.entries(capacitorCounts).forEach(([groupName, count]) => {
+          counts[groupName] = count;
+        });
+        for (const channel of contentChannels) {
+          if (!isChannelRecord(channel)) continue;
+          if (isFavoriteChannelRecord(channel)) counts[ROOT_GROUP] += 1;
+        }
+        return counts;
+      }
+    }
+
+    if (isCapacitorRuntime() && (contentMode === "movies" || contentMode === "series")) {
+      const vodCounts = getCapacitorVodGroupCounts(contentMode);
+      if (Object.keys(vodCounts).length > 0) {
+        Object.entries(vodCounts).forEach(([groupName, count]) => {
+          counts[groupName] = count;
+        });
+        for (const channel of contentChannels) {
+          if (!isChannelRecord(channel)) continue;
+          if (isFavoriteChannelRecord(channel)) counts[ROOT_GROUP] += 1;
+        }
+        return counts;
+      }
+    }
 
     for (const channel of contentChannels) {
       if (!isChannelRecord(channel)) continue;
@@ -378,7 +612,7 @@ export function App() {
     }
 
     return counts;
-  }, [contentChannels, favoritesRefreshTick]);
+  }, [contentChannels, contentMode, favoritesRefreshTick, channelUpdateTick, currentChannel]);
   const channelsForScope = useMemo(() => {
     return isLiveContentPage ? visibleChannels : contentChannels;
   }, [isLiveContentPage, visibleChannels, contentChannels]);
@@ -449,17 +683,22 @@ export function App() {
       return filteredChannels;
     }
 
-    const visibleSeriesChannels = filteredChannels.filter((channel) => {
-      if (!isChannelRecord(channel)) return false;
-      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
-      return isGroupVisible(groupName);
-    });
+    // The playlist manager must keep hidden groups' channels listed so their
+    // visibility can be toggled back on; the public series view hides them.
+    const visibleSeriesChannels = isPlaylistManagerPage
+      ? filteredChannels.filter((channel) => isChannelRecord(channel))
+      : filteredChannels.filter((channel) => {
+          if (!isChannelRecord(channel)) return false;
+          const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+          return isGroupVisible(groupName);
+        });
     const term = String(seriesMainSearchDebouncedTerm || "").trim().toLowerCase();
     if (!term) return visibleSeriesChannels;
     if (term.length < SERIES_SEARCH_MIN_TERM_LENGTH) return [];
 
     return (seriesMainSearchResults ?? []).filter((channel) => {
       if (!isChannelRecord(channel)) return false;
+      if (isPlaylistManagerPage) return true;
       const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
       return isGroupVisible(groupName);
     });
@@ -470,6 +709,7 @@ export function App() {
     activeGroup,
     categoryRefreshTick,
     isMainSeriesScreen,
+    isPlaylistManagerPage,
     filteredChannels,
     seriesMainSearchDebouncedTerm,
     seriesMainSearchResults,
@@ -735,13 +975,25 @@ export function App() {
         visibility?: unknown;
       };
 
-      if (!parsed || !Array.isArray(parsed.channels)) return null;
+      if (!parsed || (!Array.isArray(parsed.channels) && !parsed.visibility)) return null;
       const cachePlaylistId = String(parsed.playlistId || "").trim();
       if (!cachePlaylistId && !parsed.visibility) {
         return null;
       }
 
-      const channels = parsed.channels.filter((item) => isChannelRecord(item));
+      const channels = Array.isArray(parsed.channels)
+        ? parsed.channels.filter((item) => isChannelRecord(item))
+        : [];
+
+      if (isCapacitorRuntime()) {
+        if (!cachePlaylistId && channels.length === 0 && !parsed.visibility) return null;
+        return {
+          playlistId: cachePlaylistId || assignedPlaylistId,
+          channels,
+          visibility: parsed.visibility as ChannelVisibilitySnapshot | undefined
+        };
+      }
+
       if (channels.length === 0) return null;
 
       return {
@@ -782,7 +1034,16 @@ export function App() {
       setCategoryRefreshTick((tick) => tick + 1);
     };
 
-    const sharedPlaylistId = (activePlaylistId || readStoredItem(SHARED_PLAYLIST_ID_KEY) || loadPlaylists()[0]?.id || "").trim();
+    const rolePlaylistId = readStoredItem(
+      kind === "adult" ? ADULT_PLAYLIST_ID_KEY : CHILD_PLAYLIST_ID_KEY
+    );
+    const sharedPlaylistId = (
+      rolePlaylistId ||
+      activePlaylistId ||
+      readStoredItem(SHARED_PLAYLIST_ID_KEY) ||
+      loadPlaylists()[0]?.id ||
+      ""
+    ).trim();
 
     if (!sharedPlaylistId) {
       clearInheritedRoleContent();
@@ -798,10 +1059,36 @@ export function App() {
 
     try {
       const existingChannels = getAllChannels();
-      const channels =
+      let channels =
         fromCache?.channels && fromCache.channels.length > 0
           ? fromCache.channels
           : existingChannels;
+
+      if (isCapacitorRuntime()) {
+        const catalogGroups = getCapacitorLiveGroupNames();
+        if (catalogGroups.length > 0) {
+          if (!canApply()) return false;
+          prepareRoleContentSwitch();
+          if (fromCache?.visibility) {
+            applyVisibilitySnapshotForCurrentChannels(fromCache.visibility);
+          }
+          setActivePlaylistId(sharedPlaylist.id);
+          writeStoredItem(SHARED_PLAYLIST_ID_KEY, sharedPlaylist.id);
+          writeStoredItem(
+            kind === "adult" ? ADULT_PLAYLIST_ID_KEY : CHILD_PLAYLIST_ID_KEY,
+            sharedPlaylist.id
+          );
+          const targetGroup = catalogGroups[0];
+          await loadCapacitorLiveGroupChannels(targetGroup);
+          setChannelUpdateTick((t) => t + 1);
+          setActiveGroup(targetGroup);
+          setTimeout(() => setActiveVisibilityRole(kind), 0);
+          return true;
+        }
+
+        // No local catalog yet — Playlist Manager Load is the only provider fetch.
+        return false;
+      }
 
       if (!Array.isArray(channels) || channels.length === 0) {
         clearInheritedRoleContent();
@@ -816,6 +1103,10 @@ export function App() {
       setChannelUpdateTick((t) => t + 1);
       setActivePlaylistId(sharedPlaylist.id);
       writeStoredItem(SHARED_PLAYLIST_ID_KEY, sharedPlaylist.id);
+      writeStoredItem(
+        kind === "adult" ? ADULT_PLAYLIST_ID_KEY : CHILD_PLAYLIST_ID_KEY,
+        sharedPlaylist.id
+      );
       setActiveGroup(pickDefaultLiveGroup(channels));
       
       // Defer visibility role application to after initial render (avoids blocking on large playlists)
@@ -959,6 +1250,13 @@ export function App() {
     // stopPlayback also cancels in-flight retry/transcode chains even if channel state
     // is already null.
     stopPlayback();
+    document.querySelectorAll("video").forEach((element) => {
+      try {
+        (element as HTMLVideoElement).blur();
+      } catch {
+        // Ignore.
+      }
+    });
     if (currentChannel) {
       setCurrentChannel(null);
     }
@@ -1008,7 +1306,7 @@ export function App() {
       
       // Check if the clicked element or its parent has a program/channel name class
       const programElement = target.closest(
-        '.nn-program, .epg-grid-title, .epg-event-title, .epg-search-guide-programme-title, .channel-icon-label, .channel-row-btn'
+        ".nn-program, .epg-grid-title, .epg-event-title, .epg-search-guide-programme-title, .channel-icon-label"
       );
       
       if (!programElement) return;
@@ -1016,20 +1314,10 @@ export function App() {
       // Don't trigger if we're on the opening screen
       if (showOpeningScreen) return;
       
-      // For live TV, use the CSS-based fullscreen AND native fullscreen on video
+      // For live TV, use the CSS-based fullscreen so the custom control bar stays visible.
       if (contentPage === "live") {
         setIsLiveFullscreenRequested(true);
         setShowLiveMenu(false);
-        
-        // Also trigger native fullscreen on the video element
-        const video = document.querySelector('video');
-        if (video) {
-          if (video.requestFullscreen) {
-            void video.requestFullscreen().catch(() => {});
-          } else if ((video as any).webkitRequestFullscreen) {
-            void (video as any).webkitRequestFullscreen().catch(() => {});
-          }
-        }
         return;
       }
       
@@ -1054,9 +1342,32 @@ export function App() {
     if (showOpeningScreen || contentPage !== "live") return;
 
     const applyPinnedPreviewPosition = () => {
-      const margin = 20;
-      const compactWidth = window.innerWidth <= 1280 ? 560 : 720;
-      const compactHeight = window.innerWidth <= 1280 ? 315 : 405;
+      const shell = document.querySelector(".live-preview-shell") as HTMLElement | null;
+      const placeholder = document.querySelector(".live-preview-placeholder") as HTMLElement | null;
+
+      if (isLivePreviewFullscreen) {
+        if (shell) {
+          shell.style.position = "fixed";
+          shell.style.top = "0px";
+          shell.style.right = "0px";
+          shell.style.left = "0px";
+          shell.style.bottom = "0px";
+          shell.style.width = "100%";
+          shell.style.height = "100%";
+          shell.style.transform = "none";
+        }
+        if (isCapacitorRuntime()) {
+          syncNativePlayerBounds(true);
+        }
+        return;
+      }
+
+      const tvLayout = isCapacitorRuntime();
+      const margin = tvLayout ? 16 : 20;
+      const compactWidth = tvLayout
+        ? Math.max(280, Math.round(window.innerWidth * 0.38))
+        : window.innerWidth <= 1280 ? 560 : 720;
+      const compactHeight = Math.round((compactWidth * 9) / 16);
       document.documentElement.style.setProperty("--live-preview-top", `${margin}px`);
       document.documentElement.style.setProperty("--live-preview-right", `${margin}px`);
 
@@ -1064,9 +1375,6 @@ export function App() {
       // leak viewport-sized values back into compact preview mode.
       document.documentElement.style.setProperty("--live-preview-width", `${compactWidth}px`);
       document.documentElement.style.setProperty("--live-preview-height", `${compactHeight}px`);
-
-      const shell = document.querySelector(".live-preview-shell") as HTMLElement | null;
-      const placeholder = document.querySelector(".live-preview-placeholder") as HTMLElement | null;
 
       [shell, placeholder].forEach((el) => {
         if (!el) return;
@@ -1076,10 +1384,25 @@ export function App() {
         el.style.left = "auto";
         el.style.bottom = "auto";
         el.style.transform = "none";
+        el.style.width = `${compactWidth}px`;
+        el.style.height = `${compactHeight}px`;
       });
+
+      if (isCapacitorRuntime()) {
+        syncNativePlayerBounds(false);
+      }
     };
 
     applyPinnedPreviewPosition();
+    window.addEventListener("resize", applyPinnedPreviewPosition);
+
+    if (isCapacitorRuntime()) {
+      if (hasSelectedLiveChannel && currentChannel) {
+        window.requestAnimationFrame(() => syncNativePlayerBounds(true));
+      }
+      return () => window.removeEventListener("resize", applyPinnedPreviewPosition);
+    }
+
     const rafA = window.requestAnimationFrame(() => {
       const rafB = window.requestAnimationFrame(() => {
         applyPinnedPreviewPosition();
@@ -1087,14 +1410,19 @@ export function App() {
       void rafB;
     });
     const intervalId = window.setInterval(applyPinnedPreviewPosition, 500);
-    window.addEventListener("resize", applyPinnedPreviewPosition);
 
     return () => {
       window.cancelAnimationFrame(rafA);
       window.clearInterval(intervalId);
       window.removeEventListener("resize", applyPinnedPreviewPosition);
     };
-  }, [showOpeningScreen, contentPage, currentChannel?.id]);
+  }, [showOpeningScreen, contentPage, currentChannel?.id, isLivePreviewFullscreen]);
+
+  useEffect(() => {
+    if (!isCapacitorRuntime() || showOpeningScreen || !currentChannel) return;
+    const frame = window.requestAnimationFrame(() => syncNativePlayerBounds(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [showOpeningScreen, showLiveMenu, isLivePreviewFullscreen, contentPage, hasSelectedLiveChannel, currentChannel?.id]);
 
   useEffect(() => {
     // Re-bind to the current video element after major UI mode changes.
@@ -1117,57 +1445,87 @@ export function App() {
   }, [showOpeningScreen]);
 
   useEffect(() => {
-    // Apply the correct visibility filter whenever the login level changes.
-    // No login or adult login → adult visibility; child login → child visibility.
-    setActiveVisibilityRole(accessLevel === "child" ? "child" : "adult");
+    // Adult/child login restores that profile's saved hide/show. Master and
+    // no-login keep the live map so opening is instant like Smarters Pro.
+    if (accessLevel === "child") {
+      setActiveVisibilityRole("child");
+    } else if (accessLevel === "adult") {
+      setActiveVisibilityRole("adult");
+    } else {
+      restoreLiveVisibility();
+    }
     setCategoryRefreshTick((tick) => tick + 1);
   }, [accessLevel]);
 
   useEffect(() => {
-    const debugLog = (window as any).webosDebugLog || console.log.bind(console);
     const security = readSetupSecurity();
     
-    debugLog(`startup-check: show=${showOpeningScreen} completed=${startupCacheHydrationCompletedRef.current} login=${security.loginRequired} access=${accessLevel} inflight=${startupAutoLoadInFlightRef.current}`);
 
     if (!showOpeningScreen) {
-      debugLog('startup: SKIP - not on opening screen');
       return;
     }
+
+    // Fire TV: defer channel cache parse, but restore playlist IDs/metadata quickly.
+    if (isCapacitorRuntime()) {
+      if (startupCacheHydrationCompletedRef.current) {
+        return;
+      }
+      scheduleCapacitorLegacyCachePurge();
+      startupCacheHydrationCompletedRef.current = true;
+      setActivePanel(null);
+
+      const adultPlaylistId = readStoredItem(ADULT_PLAYLIST_ID_KEY);
+      const preferredPlaylistId = resolveStoredPlaylistId();
+      if (preferredPlaylistId) {
+        setActivePlaylistId(preferredPlaylistId);
+      }
+
+      window.setTimeout(() => {
+        const playlists = loadPlaylists();
+        setHasPlaylists(playlists.length > 0);
+        if (!activePlaylistIdRef.current) {
+          const deferredId = resolveStoredPlaylistId(playlists);
+          if (deferredId) {
+            setActivePlaylistId(deferredId);
+            writeStoredItem(SHARED_PLAYLIST_ID_KEY, deferredId);
+          }
+        }
+      }, 400);
+
+      // Fire TV/Android: do not prefetch the full movies/series catalog.
+      // Persisting ~180k VOD rows OOMs the Stick. Movies/Series load on
+      // entry and are capped before they touch memory or IndexedDB.
+      return;
+    }
+
     if (startupCacheHydrationCompletedRef.current) {
-      debugLog('startup: SKIP - already completed');
       return;
     }
     if (security.loginRequired && !accessLevel) {
-      debugLog('startup: SKIP - waiting for login');
       // Pre-warm the channel cache in the background so role login is instant.
       void restoreChannelsCache();
       return;
     }
     if (accessLevel === "adult" || accessLevel === "child") {
-      debugLog('startup: SKIP - has access level');
       return;
     }
     if (startupAutoLoadInFlightRef.current) {
-      debugLog('startup: SKIP - already in flight');
       return;
     }
 
     const playlists = loadPlaylists();
     const playlistsHydrationPending = isPlaylistsHydrationPending();
     
-    debugLog(`startup: playlists=${playlists.length} hydrationPending=${playlistsHydrationPending}`);
 
     // IndexedDB hydration may populate playlists shortly after startup.
     // Wait for hydration events instead of finalizing an empty auto-load path.
     if (playlists.length === 0 && playlistsHydrationPending) {
-      debugLog('startup: SKIP - waiting for playlist hydration');
       return;
     }
 
     // If channels are already in memory from a same-session load, keep the
     // opening menu visible and align shared playlist state.
     if (getAllChannels().length > 0) {
-      debugLog('startup: using existing in-memory channels');
       startupCacheHydrationCompletedRef.current = true;
       const storedPlaylistId = readStoredItem(SHARED_PLAYLIST_ID_KEY);
       if (storedPlaylistId) setActivePlaylistId(storedPlaylistId);
@@ -1180,22 +1538,17 @@ export function App() {
       return;
     }
 
-    debugLog('startup: PROCEEDING with cache load');
     let cancelled = false;
     startupAutoLoadInFlightRef.current = true;
 
     (async () => {
-      const debugLog = (window as any).webosDebugLog || console.log.bind(console);
-      debugLog('startup: restoring cache...');
       
       // 1. Try restoring from local cache for an instant start, but do not
       // block startup for a long time on slow IndexedDB/storage reads.
       const restored = await restoreChannelsCache();
-      debugLog(`startup: restored ${restored.length} channels`);
       if (cancelled) return;
 
       function applyPreparedContent(channelList: any[], playlistId: string, visibilityRole?: "adult" | "child") {
-        debugLog(`startup: applying ${channelList.length} channels`);
         if (playlistId) setActivePlaylistId(playlistId);
         // Always land on the main menu at startup, regardless of platform.
         // Content (group/mode) is preloaded so Live TV opens instantly once
@@ -1217,87 +1570,23 @@ export function App() {
       }
 
       if (restored.length > 0) {
+        if (isCapacitorRuntime()) {
+          trimCapacitorChannelMemoryForLive();
+        }
         startupCacheHydrationCompletedRef.current = true;
         const storedPlaylistId =
           readStoredItem(SHARED_PLAYLIST_ID_KEY) || playlists[0]?.id || "";
-        applyPreparedContent(restored, storedPlaylistId, "adult");
+        applyPreparedContent(restored, storedPlaylistId);
         setChannelUpdateTick((tick) => tick + 1);
         setCategoryRefreshTick((tick) => tick + 1);
-        debugLog('startup: cache applied successfully');
         return;
       }
 
-      debugLog('startup: no cache found, staying on menu');
-      // Keep startup local. An explicit content action can fetch a saved playlist
-      // when no channel cache exists, then persist it for future launches.
+      // Do not fetch from the provider here. Playlist Manager Load is the only
+      // download; the next open then restores this cache instantly.
       startupCacheHydrationCompletedRef.current = true;
       setActivePanel(null);
       setShowOpeningScreen(true);
-
-      // On webOS the TV may have purged every cache layer while the playlists
-      // survived (DB8). Fetch live channels in the background so content is
-      // ready by the time the user leaves the menu — "loads by itself".
-      if (isWebOsRuntime()) {
-        const savedPlaylists = loadPlaylists();
-        if (savedPlaylists.length > 0) {
-          debugLog('startup: auto-fetching live channels from saved playlist');
-          // Register on the shared auto-load token so any manual load (menu,
-          // playlist manager) supersedes this background fetch immediately.
-          const requestToken = autoLoadTokenRef.current + 1;
-          autoLoadTokenRef.current = requestToken;
-          const preferredId = (readStoredItem(SHARED_PLAYLIST_ID_KEY) || savedPlaylists[0]?.id || "").trim();
-          const orderedPlaylists = [
-            ...savedPlaylists.filter((playlist) => String(playlist.id) === preferredId),
-            ...savedPlaylists.filter((playlist) => String(playlist.id) !== preferredId)
-          ];
-
-          for (const playlist of orderedPlaylists) {
-            if (cancelled || autoLoadTokenRef.current !== requestToken) return;
-            try {
-              const liveChannels = await loadChannelsForPlaylist(playlist, "live");
-              if (cancelled || autoLoadTokenRef.current !== requestToken) return;
-              if (!Array.isArray(liveChannels) || liveChannels.length === 0) continue;
-
-              setActivePlaylistId(playlist.id);
-              writeStoredItem(SHARED_PLAYLIST_ID_KEY, playlist.id);
-              setChannels(liveChannels as any[], "startup-auto-fetch");
-              setChannelUpdateTick((tick) => tick + 1);
-              setCategoryRefreshTick((tick) => tick + 1);
-              debugLog(`startup: auto-fetched ${liveChannels.length} live channels`);
-
-              // Continue with the VOD catalogs in the background so Movies and
-              // Series open instantly instead of fetching on first entry.
-              // Delayed to let the UI settle; aborts if a manual load starts.
-              window.setTimeout(() => {
-                void (async () => {
-                  for (const scope of ["movies", "series"] as const) {
-                    if (cancelled || autoLoadTokenRef.current !== requestToken) return;
-                    try {
-                      const scopedChannels = await loadChannelsForPlaylist(playlist, scope);
-                      if (cancelled || autoLoadTokenRef.current !== requestToken) return;
-                      if (!Array.isArray(scopedChannels) || scopedChannels.length === 0) continue;
-
-                      const byId = new Map<string, any>();
-                      getAllChannels().forEach((channel) => byId.set(String(channel?.id || ""), channel));
-                      scopedChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
-                      setChannels(Array.from(byId.values()) as any[], "startup-auto-fetch");
-                      setChannelUpdateTick((tick) => tick + 1);
-                      setCategoryRefreshTick((tick) => tick + 1);
-                      debugLog(`startup: prefetched ${scopedChannels.length} ${scope}`);
-                    } catch {
-                      // Skip this scope; the lazy loader still covers it on entry.
-                    }
-                  }
-                })();
-              }, 4000);
-              return;
-            } catch {
-              // Try the next saved playlist.
-            }
-          }
-          debugLog('startup: auto-fetch got no live channels');
-        }
-      }
     })().finally(() => {
       if (!cancelled) {
         startupAutoLoadInFlightRef.current = false;
@@ -1373,6 +1662,14 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (isWebOsRuntime()) {
+      document.body.classList.add("is-webos");
+      return () => document.body.classList.remove("is-webos");
+    }
+    document.body.classList.remove("is-webos");
+  }, []);
+
+  useEffect(() => {
     const onPlayerError = (e: Event) => {
       if (suppressPlayerEventsRef.current) return;
       if (!currentChannelRef.current) return;
@@ -1382,6 +1679,9 @@ export function App() {
       setPlayerStatus(null);
       setPlayerWarning(null);
       setPlayerError(message);
+      if (matchesContentMode(currentChannelRef.current, "tv")) {
+        scheduleLiveReconnectRef.current("error");
+      }
     };
 
     const onPlayerPlaying = () => {
@@ -1397,6 +1697,11 @@ export function App() {
       }
 
       setPlayerStatus(null);
+      setPlayerUiTick((tick) => tick + 1);
+      hadLivePlayingRef.current = matchesContentMode(currentChannelRef.current, "tv");
+      liveReconnectAttemptRef.current = 0;
+
+      // Native ExoPlayer on Capacitor is fullscreen — bounds sync not needed.
     };
 
     const onPlayerTranscoding = (e: Event) => {
@@ -1421,7 +1726,104 @@ export function App() {
       window.removeEventListener("playerPlaying", onPlayerPlaying);
       window.removeEventListener("playerTranscoding", onPlayerTranscoding as EventListener);
     };
-  }, [playerStatus]);
+  }, []);
+
+  useEffect(() => {
+    const clearTimer = () => {
+      if (liveReconnectTimerRef.current !== null) {
+        window.clearTimeout(liveReconnectTimerRef.current);
+        liveReconnectTimerRef.current = null;
+      }
+    };
+
+    const schedule = (reason: string) => {
+      const ch = currentChannelRef.current;
+      if (!ch || !matchesContentMode(ch, "tv")) return;
+      if (liveReconnectTimerRef.current !== null) return;
+      const delay = Math.min(20000, Math.round(2500 * Math.pow(1.6, Math.min(liveReconnectAttemptRef.current, 8))));
+      setPlayerStatus("Connection lost, reconnecting...");
+      liveReconnectTimerRef.current = window.setTimeout(() => {
+        liveReconnectTimerRef.current = null;
+        const next = currentChannelRef.current;
+        if (!next || !matchesContentMode(next, "tv")) return;
+        if (document.visibilityState === "hidden") {
+          schedule("hidden");
+          return;
+        }
+        liveReconnectAttemptRef.current += 1;
+        lastPlayRequestRef.current = { id: null, url: null, at: 0 };
+        playChannelRef.current(next, { forceRestart: true });
+      }, delay);
+    };
+
+    scheduleLiveReconnectRef.current = schedule;
+
+    const onReconnect = (event: Event) => {
+      if (suppressPlayerEventsRef.current) return;
+      const message = (event as CustomEvent<{ message?: string }>).detail?.message || "reconnect";
+      schedule(message);
+    };
+
+    const onOffline = () => {
+      if (!matchesContentMode(currentChannelRef.current, "tv")) return;
+      setPlayerStatus("Connection lost, waiting to reconnect...");
+    };
+
+    const onOnline = () => {
+      clearTimer();
+      liveReconnectAttemptRef.current = 0;
+      schedule("online");
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!matchesContentMode(currentChannelRef.current, "tv")) return;
+      clearTimer();
+      schedule("visible");
+    };
+
+    const onWaiting = (event: Event) => {
+      const video = event.target as HTMLVideoElement | null;
+      if (!video || video.id !== "player-main") return;
+      if (!hadLivePlayingRef.current) return;
+      if (!matchesContentMode(currentChannelRef.current, "tv")) return;
+      if (liveReconnectTimerRef.current !== null) return;
+      window.setTimeout(() => {
+        const current = document.getElementById("player-main") as HTMLVideoElement | null;
+        if (!current || current.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return;
+        if (!hadLivePlayingRef.current) return;
+        schedule("stall");
+      }, 8000);
+    };
+
+    const onEnded = (event: Event) => {
+      const video = event.target as HTMLVideoElement | null;
+      if (!video || video.id !== "player-main") return;
+      if (!hadLivePlayingRef.current) return;
+      if (!matchesContentMode(currentChannelRef.current, "tv")) return;
+      schedule("ended");
+    };
+
+    window.addEventListener("playerReconnect", onReconnect as EventListener);
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
+    document.addEventListener("visibilitychange", onVisible);
+    document.addEventListener("waiting", onWaiting, true);
+    document.addEventListener("stalled", onWaiting, true);
+    document.addEventListener("ended", onEnded, true);
+
+    return () => {
+      scheduleLiveReconnectRef.current = () => {};
+      clearTimer();
+      window.removeEventListener("playerReconnect", onReconnect as EventListener);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
+      document.removeEventListener("visibilitychange", onVisible);
+      document.removeEventListener("waiting", onWaiting, true);
+      document.removeEventListener("stalled", onWaiting, true);
+      document.removeEventListener("ended", onEnded, true);
+    };
+  }, []);
 
   useEffect(() => {
     const onPlayerEnded = () => {
@@ -1481,7 +1883,9 @@ export function App() {
   useEffect(() => {
     // Helper to handle Back navigation (shared by webosBackKey and keydown)
     const handleBackNavigation = () => {
-      const debugLog = (window as any).webosDebugLog;
+      const now = Date.now();
+      if (now - lastBackHandledAtRef.current < 350) return true;
+      lastBackHandledAtRef.current = now;
       
       // Handle Back navigation
       if (isSeriesPickerVisible) {
@@ -1507,7 +1911,6 @@ export function App() {
 
         if (isWebOS) {
 
-          if (debugLog) debugLog(`APP: Back -> exit app (webOS)`);
           try {
             if ((window as any).webOS?.platformBack) {
               (window as any).webOS.platformBack();
@@ -1515,10 +1918,8 @@ export function App() {
               window.close();
             }
           } catch (e) {
-            if (debugLog) debugLog(`APP: exit failed: ${e}`);
           }
         } else if (isCap) {
-          if (debugLog) debugLog(`APP: Back -> exit app (Capacitor)`);
           try {
             // Use the Capacitor global to access plugins
             const AppPlugin = (window as any).Capacitor?.Plugins?.App;
@@ -1546,6 +1947,9 @@ export function App() {
           setActivePanel(null);
         } else {
           setActivePanel(null);
+          // Reset the page state so a stale "playlistManager"/"movies"/"series"
+          // page cannot leak onto the next screen opened from the main menu.
+          setContentPage("live");
           setShowOpeningScreen(true);
         }
         return true;
@@ -1555,8 +1959,10 @@ export function App() {
         } else if (currentChannel && (contentPage === "movies" || contentPage === "series" || contentPage === "playlistManager")) {
           stopCurrentVodPlaybackIfNeeded();
           setCurrentChannel(null);
+          setContentPage("live");
           setShowOpeningScreen(true);
         } else {
+          setContentPage("live");
           setShowOpeningScreen(true);
         }
         return true;
@@ -1565,40 +1971,101 @@ export function App() {
 
     // Listen for custom webosBackKey event (dispatched by webOS SDK)
     const handleWebosBack = () => {
-      const debugLog = (window as any).webosDebugLog;
-      if (debugLog) debugLog(`APP: webosBackKey event received`);
+      if (isTextEntryActive()) {
+        return;
+      }
       handleBackNavigation();
     };
     
     window.addEventListener('webosBackKey', handleWebosBack);
+
+    const onKeyboardStateChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ visibility?: boolean | string; state?: string }>).detail;
+      const visible =
+        detail?.visibility === true ||
+        detail?.visibility === "visible" ||
+        detail?.state === "opened" ||
+        detail?.state === "visible";
+      if (document.body) {
+        document.body.dataset.webosKeyboard = visible ? "open" : "closed";
+      }
+    };
+    document.addEventListener("keyboardStateChange", onKeyboardStateChange);
     
     // Regular keydown handler
     const onKeyDown = (e: KeyboardEvent) => {
-      const debugLog = (window as any).webosDebugLog;
-      
-      // Log every keydown that reaches this handler
-      if (debugLog) {
-        debugLog(`APP-HANDLER: key=${e.key} code=${e.keyCode}`);
-      }
-      
       const isBack = isBackKeyEvent(e);
       
-      // On webOS, Back is handled by webOS SDK + webosBackKey event
-      // On other platforms, handle Back here directly
-      const isWebOS = (window as any).webOS?.libVersion;
+      if (isBack && isTextEntryActive(e.target)) {
+        return;
+      }
       
       if (isBack) {
-        if (isWebOS) {
-          // webOS SDK will dispatch webosBackKey event
-          return;
-        }
-        // Non-webOS: handle Back directly
+        // Handle Back here even on webOS. The SDK may also dispatch webosBackKey;
+        // handleBackNavigation debounces the duplicate.
         e.preventDefault();
         handleBackNavigation();
         return;
       }
       
       if (isTextEntryTarget(e.target)) return;
+
+      const navKey = normalizeRemoteNavKey(e);
+      if (navKey === "Enter" && isFavoriteFocusTarget(document.activeElement)) {
+        e.preventDefault();
+        e.stopPropagation();
+        document.activeElement.click();
+        return;
+      }
+
+      const mediaKey = normalizeRemoteMediaKey(e);
+      if (mediaKey && currentChannel) {
+        e.preventDefault();
+        e.stopPropagation();
+        window.dispatchEvent(new Event("playerRevealControls"));
+        if (mediaKey === "MediaPlayPause") {
+          togglePlayPause();
+        } else if (mediaKey === "MediaPlay") {
+          playPlayback();
+        } else if (mediaKey === "MediaPause" || mediaKey === "MediaStop") {
+          pausePlayback();
+        } else if (mediaKey === "MediaRewind") {
+          seekPlayback(-15);
+        } else if (mediaKey === "MediaFastForward") {
+          seekPlayback(15);
+        }
+        return;
+      }
+
+      if (isVodPlaybackFullscreen) {
+        window.dispatchEvent(new Event("playerRevealControls"));
+        if (navKey === "ArrowLeft") {
+          e.preventDefault();
+          seekPlayback(-15);
+          return;
+        }
+        if (navKey === "ArrowRight") {
+          e.preventDefault();
+          seekPlayback(15);
+          return;
+        }
+      }
+
+      if (
+        currentChannel &&
+        (e.key === " " ||
+          e.key === "Enter" ||
+          e.key === "Select" ||
+          e.keyCode === 23 ||
+          e.key === "f" ||
+          e.key === "F" ||
+          e.key === "m" ||
+          e.key === "M" ||
+          (isLivePreviewFullscreen && (navKey === "ArrowDown" || navKey === "ArrowUp")))
+      ) {
+        revealNativePlayerControls();
+        window.dispatchEvent(new Event("playerRevealControls"));
+      }
 
       if (e.key === "f" || e.key === "F") {
         e.preventDefault();
@@ -1620,9 +2087,28 @@ export function App() {
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
       window.removeEventListener('webosBackKey', handleWebosBack);
+      document.removeEventListener("keyboardStateChange", onKeyboardStateChange);
       window.removeEventListener("keydown", onKeyDown, true);
     };
   }, [activePanel, isVodPlaybackFullscreen, currentChannel, isSeriesPickerVisible, contentPage, isEffectiveLiveFullscreen, showOpeningScreen, hasPlaylists]);
+
+  useEffect(() => {
+    const onNativeCommand = (event: Event) => {
+      const action = (event as CustomEvent<{ action?: string; paused?: boolean; muted?: boolean }>).detail?.action;
+      const detail = (event as CustomEvent<{ action?: string; paused?: boolean; muted?: boolean }>).detail;
+      if (action === "fullscreen") {
+        toggleFullscreen();
+        return;
+      }
+      if (action === "state") {
+        if (typeof detail?.paused === "boolean") noteNativePlaybackPaused(detail.paused);
+        if (typeof detail?.muted === "boolean") noteNativePlaybackMuted(detail.muted);
+        refreshPlayerUi();
+      }
+    };
+    window.addEventListener("nativePlayerCommand", onNativeCommand);
+    return () => window.removeEventListener("nativePlayerCommand", onNativeCommand);
+  }, [contentPage]);
 
   useEffect(() => {
     const onWindowError = (event: ErrorEvent) => {
@@ -1656,8 +2142,12 @@ export function App() {
       const cb = btn?.closest(".channel-icon-wrap")?.querySelector<HTMLInputElement>('.channel-icon-toggle input[type="checkbox"]');
       return cb && !cb.disabled ? cb : null;
     };
+    const tileFavoriteFor = (btn: HTMLElement | null): HTMLButtonElement | null => {
+      return btn?.closest(".channel-icon-wrap")?.querySelector<HTMLButtonElement>(".channel-icon-favorite") ?? null;
+    };
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if (isSeriesPickerVisible) return;
       if (isTextEntryTarget(e.target)) return;
 
       const activeEl = document.activeElement as HTMLElement | null;
@@ -1668,12 +2158,26 @@ export function App() {
         activeEl instanceof HTMLInputElement &&
         activeEl.type === "checkbox" &&
         !!activeEl.closest(".channel-icon-toggle");
+      const isFavoriteStar = isFavoriteFocusTarget(activeEl);
 
       // Remote OK sends Enter; native checkboxes only toggle on Space.
+      // Fire TV DPAD_CENTER is keyCode 23 and often will not click a poster unless we do it.
       if (key === "Enter") {
         if (isOverlayCheckbox) {
           e.preventDefault();
           activeEl.click();
+          return;
+        }
+        if (isFavoriteStar) {
+          e.preventDefault();
+          activeEl.click();
+          return;
+        }
+        const wrap = activeEl.closest(".channel-icon-wrap");
+        const poster = wrap?.querySelector<HTMLButtonElement>(".channel-icon-btn");
+        if (poster && !poster.disabled) {
+          e.preventDefault();
+          poster.click();
         }
         return;
       }
@@ -1682,11 +2186,59 @@ export function App() {
 
       const inIconGrid = !!activeEl.closest(".channel-list-icons");
       const inModeButtons = !!activeEl.closest(".playlist-manager-actions");
-      if (!inIconGrid && !inModeButtons) return;
-
+      const inGroupList = !!activeEl.closest(".group-list");
       const movieButtons = Array.from(
         document.querySelectorAll<HTMLButtonElement>(".channel-list-icons .channel-icon-btn")
       );
+      const groupButtons = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".group-list .group-select-btn, .group-list .group-item > button")
+      );
+
+      const inert =
+        activeEl === document.body ||
+        activeEl === document.documentElement ||
+        activeEl instanceof HTMLMediaElement;
+
+      if (!inIconGrid && !inModeButtons && !inGroupList) {
+        if (!inert) return;
+        e.preventDefault();
+        (groupButtons.find((button) => button.closest(".group-item.active")) || groupButtons[0] || movieButtons.find((btn) => !btn.disabled) || movieButtons[0])?.focus();
+        return;
+      }
+
+      if (inGroupList) {
+        const groupRow = activeEl.closest(".group-item");
+        const groupBtn = groupRow?.querySelector<HTMLButtonElement>(".group-select-btn");
+        const groupIndex = groupBtn ? groupButtons.indexOf(groupBtn) : groupButtons.indexOf(activeEl as HTMLButtonElement);
+        if (groupIndex < 0) {
+          if (key === "ArrowDown" || key === "ArrowRight") {
+            e.preventDefault();
+            (groupButtons[0] || movieButtons.find((btn) => !btn.disabled) || movieButtons[0])?.focus();
+          }
+          return;
+        }
+        if (key === "ArrowUp") {
+          e.preventDefault();
+          groupButtons[Math.max(0, groupIndex - 1)]?.focus();
+          return;
+        }
+        if (key === "ArrowDown") {
+          e.preventDefault();
+          groupButtons[Math.min(groupButtons.length - 1, groupIndex + 1)]?.focus();
+          return;
+        }
+        if (key === "ArrowRight") {
+          const firstTile = movieButtons.find((btn) => !btn.disabled) || movieButtons[0];
+          if (firstTile) {
+            e.preventDefault();
+            firstTile.focus();
+          }
+        }
+        return;
+      }
+
+      if (!inIconGrid && !inModeButtons) return;
+
       const modeButtons = inModeButtons || (inIconGrid && key === "ArrowUp")
         ? Array.from(document.querySelectorAll<HTMLButtonElement>(".playlist-manager-actions button"))
         : [];
@@ -1694,7 +2246,7 @@ export function App() {
       if (movieButtons.length === 0) return;
 
       // An overlay checkbox occupies the same grid position as its poster.
-      const tileButton = isOverlayCheckbox
+      const tileButton = isOverlayCheckbox || activeEl.closest(".channel-icon-wrap")
         ? (activeEl.closest(".channel-icon-wrap")?.querySelector<HTMLButtonElement>(".channel-icon-btn") ?? null)
         : (activeEl as HTMLButtonElement);
       const movieIndex = tileButton ? movieButtons.indexOf(tileButton) : -1;
@@ -1774,17 +2326,80 @@ export function App() {
         return;
       }
 
-      if (movieIndex >= 0) {
+      const focusTileFavorite = (index: number): void => {
+        const btn = movieButtons[index];
+        if (!btn) return;
+        const stop = tileFavoriteFor(btn) || (!btn.disabled ? btn : tileCheckboxFor(btn));
+        stop?.focus();
+      };
+
+      if (movieIndex >= 0 && isFavoriteStar) {
+        const focusActiveGroup = () => {
+          const groupBtn =
+            groupButtons.find((button) => button.closest(".group-item.active")) || groupButtons[0];
+          groupBtn?.focus();
+        };
+
+        if (key === "ArrowDown") {
+          e.preventDefault();
+          if (tileButton && !tileButton.disabled) tileButton.focus();
+          else focusTile(Math.min(movieButtons.length - 1, movieIndex + columns));
+          return;
+        }
         if (key === "ArrowUp") {
           e.preventDefault();
-          // Overlay checkbox first (playlist manager), then the row above.
           const cb = tileCheckboxFor(tileButton);
           if (cb) {
             cb.focus();
             return;
           }
           if (movieIndex < columns) {
-            (modeButtons[1] || modeButtons[0])?.focus();
+            focusActiveGroup();
+            return;
+          }
+          focusTile(movieIndex - columns);
+          return;
+        }
+        if (key === "ArrowLeft") {
+          e.preventDefault();
+          if (columns > 1 && movieIndex % columns === 0) {
+            focusActiveGroup();
+            return;
+          }
+          if (movieIndex > 0) focusTileFavorite(movieIndex - 1);
+          else focusActiveGroup();
+          return;
+        }
+        if (key === "ArrowRight") {
+          if (movieIndex < movieButtons.length - 1) {
+            e.preventDefault();
+            focusTileFavorite(movieIndex + 1);
+          }
+        }
+        return;
+      }
+
+      if (movieIndex >= 0) {
+        const focusActiveGroup = () => {
+          const groupBtn =
+            groupButtons.find((button) => button.closest(".group-item.active")) || groupButtons[0];
+          groupBtn?.focus();
+        };
+
+        if (key === "ArrowUp") {
+          e.preventDefault();
+          const fav = tileFavoriteFor(tileButton);
+          if (fav) {
+            fav.focus();
+            return;
+          }
+          const cb = tileCheckboxFor(tileButton);
+          if (cb) {
+            cb.focus();
+            return;
+          }
+          if (movieIndex < columns) {
+            focusActiveGroup();
             return;
           }
           focusTile(movieIndex - columns);
@@ -1798,10 +2413,13 @@ export function App() {
         }
 
         if (key === "ArrowLeft") {
-          if (movieIndex > 0) {
-            e.preventDefault();
-            focusTile(movieIndex - 1);
+          e.preventDefault();
+          if (columns > 1 && movieIndex % columns === 0) {
+            focusActiveGroup();
+            return;
           }
+          if (movieIndex > 0) focusTile(movieIndex - 1);
+          else focusActiveGroup();
           return;
         }
 
@@ -1816,23 +2434,61 @@ export function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isContentIconsView, filteredChannels.length]);
+  }, [isContentIconsView, isSeriesPickerVisible, filteredChannels.length]);
 
   useEffect(() => {
-    // Remote arrow-key navigation for the list views (live TV page and
-    // playlist manager in TV mode). These screens were pointer-only, which
-    // strands TV remotes: arrows move focus through the group column, the
-    // channel column, and per-row visibility checkboxes.
+    if (!isMainMoviesScreen && !isMainSeriesScreen) return;
+    if (isSeriesPickerVisible) return;
+
+    const timer = window.setTimeout(() => {
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.closest(".channel-list-icons, .group-list")) return;
+
+      const poster = document.querySelector<HTMLButtonElement>(
+        ".channel-list-icons .channel-icon-btn:not([disabled])"
+      );
+      const groupBtn = document.querySelector<HTMLButtonElement>(
+        ".group-list .group-item.active .group-select-btn, .group-list .group-select-btn"
+      );
+      (poster || groupBtn)?.focus();
+    }, 80);
+
+    return () => window.clearTimeout(timer);
+  }, [isMainMoviesScreen, isMainSeriesScreen, isSeriesPickerVisible, contentPage, channelUpdateTick]);
+
+  useEffect(() => {
+    if (showOpeningScreen || contentPage !== "live" || activePanel !== null) return;
+
+    const timer = window.setTimeout(() => {
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.closest(".channel-list, .group-list, .opening-screen, .player-control-bar")) return;
+      const channel = document.querySelector<HTMLButtonElement>(
+        ".channel-list .channel-select-btn, .channel-list .channel-row-btn"
+      );
+      const group = document.querySelector<HTMLButtonElement>(
+        ".group-list .group-item.active .group-select-btn, .group-list .group-select-btn"
+      );
+      (channel || group)?.focus();
+    }, 80);
+
+    return () => window.clearTimeout(timer);
+  }, [showOpeningScreen, contentPage, activePanel, channelUpdateTick, activeGroup]);
+
+  useEffect(() => {
+    // Remote arrow-key navigation for Live TV and Playlist Manager
+    // (Live TV / Movies / Series all use the same Master / Groups / Titles lists).
     const remoteListNavActive =
       !showOpeningScreen &&
       activePanel === null &&
-      (contentPage === "live" || (contentPage === "playlistManager" && contentMode === "tv"));
+      (contentPage === "live" || contentPage === "playlistManager");
     if (!remoteListNavActive) return;
 
     const enabledButton = (row: HTMLElement | null): HTMLButtonElement | null => {
       if (!row) return null;
       if (row instanceof HTMLButtonElement) return row.disabled ? null : row;
-      const btn = row.querySelector<HTMLButtonElement>("button");
+      const btn =
+        row.querySelector<HTMLButtonElement>(".channel-select-btn, .channel-row-btn, .group-select-btn") ||
+        row.querySelector<HTMLButtonElement>("button:not(.channel-list-favorite):not(.channel-icon-favorite)");
       return btn && !btn.disabled ? btn : null;
     };
 
@@ -1840,6 +2496,12 @@ export function App() {
       if (!row || row instanceof HTMLButtonElement) return null;
       const cb = row.querySelector<HTMLInputElement>('input[type="checkbox"]');
       return cb && !cb.disabled ? cb : null;
+    };
+
+    const enabledFavorite = (row: HTMLElement | null): HTMLButtonElement | null => {
+      if (!row || row instanceof HTMLButtonElement) return null;
+      const btn = row.querySelector<HTMLButtonElement>(".channel-list-favorite");
+      return btn && !btn.disabled ? btn : null;
     };
 
     const rowStop = (row: HTMLElement | null): HTMLElement | null =>
@@ -1856,12 +2518,34 @@ export function App() {
         if (active instanceof HTMLInputElement && active.type === "checkbox") {
           e.preventDefault();
           active.click();
+        } else if (
+          active instanceof HTMLButtonElement &&
+          (active.classList.contains("channel-list-favorite") || active.classList.contains("epg-favorite-btn"))
+        ) {
+          e.preventDefault();
+          active.click();
         }
         return;
       }
 
       if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return;
+      // Fire TV D-pad often sends an immediate repeat; keep one row per press.
+      if (e.repeat) {
+        e.preventDefault();
+        return;
+      }
 
+      const modeButtons = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".playlist-manager-actions button")
+      );
+      const parentalButtons = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".playlist-manager-parental-actions button")
+      );
+      const saveButton =
+        document.querySelector<HTMLButtonElement>(".playlist-manager-save-btn") ||
+        parentalButtons[parentalButtons.length - 1] ||
+        null;
+      const masterRows = Array.from(document.querySelectorAll<HTMLElement>(".master-min-list .group-item"));
       const groupRows = Array.from(document.querySelectorAll<HTMLElement>(".group-list .group-item"));
       const channelRows = Array.from(document.querySelectorAll<HTMLElement>(".channel-list .channel-item"))
         .filter((row) => !row.classList.contains("channel-header-item"));
@@ -1869,16 +2553,40 @@ export function App() {
         document.querySelectorAll<HTMLElement>(".group-list .group-list-bulk-btn")
       );
       const loadMoreBtn = document.querySelector<HTMLElement>(".channel-list .channel-load-more-btn");
-      if (groupRows.length === 0 && channelRows.length === 0) return;
+      const favoriteBtn =
+        document.querySelector<HTMLButtonElement>(".player-control-bar-favorite") ||
+        document.querySelector<HTMLButtonElement>(".epg-favorite-btn");
+      const cardButtons = playlistCardButtons();
+      const onFavorite = !!active && !!favoriteBtn && active === favoriteBtn;
+      const cardIndex = active instanceof HTMLButtonElement ? cardButtons.indexOf(active) : -1;
+      const onCard = cardIndex >= 0;
+      if (
+        modeButtons.length === 0 &&
+        masterRows.length === 0 &&
+        groupRows.length === 0 &&
+        channelRows.length === 0 &&
+        !onFavorite &&
+        !onCard
+      ) {
+        return;
+      }
 
       const isCheckbox = active instanceof HTMLInputElement && active.type === "checkbox";
+      const isFavoriteStar = !!active?.classList.contains("channel-list-favorite");
       const findRowIndex = (rows: HTMLElement[]) =>
         rows.findIndex((row) => row === active || (!!active && row.contains(active)));
 
+      const modeIndex = active ? modeButtons.indexOf(active as HTMLButtonElement) : -1;
+      const parentalIndex = active ? parentalButtons.indexOf(active as HTMLButtonElement) : -1;
       const toolbarIndex = active ? toolbarButtons.indexOf(active) : -1;
+      const masterIndex = findRowIndex(masterRows);
       const groupIndex = findRowIndex(groupRows);
       const channelIndex = findRowIndex(channelRows);
       const onLoadMore = !!active && active === loadMoreBtn;
+
+      const currentMasterStop = () =>
+        rowStop(document.querySelector<HTMLElement>(".master-min-list .group-item.active")) ||
+        rowStop(masterRows[0] || null);
 
       const currentGroupStop = () =>
         rowStop(document.querySelector<HTMLElement>(".group-list .group-item.active")) ||
@@ -1888,47 +2596,152 @@ export function App() {
       // checkbox column, button stays in the button column.
       const verticalStop = (row: HTMLElement | null): HTMLElement | null => {
         if (!row) return null;
+        if (isFavoriteStar) return enabledFavorite(row) || enabledButton(row);
         if (isCheckbox) return enabledCheckbox(row) || enabledButton(row);
         return enabledButton(row) || enabledCheckbox(row);
       };
 
       const moveTo = (el: HTMLElement | null) => {
         e.preventDefault();
-        if (el) el.focus();
+        if (!el) return;
+        el.focus();
+        try {
+          el.scrollIntoView({ block: "nearest", inline: "nearest" });
+        } catch {
+          // Older WebViews may not support scrollIntoView options.
+        }
       };
 
       // Focus is outside the lists: capture only from inert targets (body,
       // video surface), never steal from other focused buttons (EPG, player).
-      if (toolbarIndex < 0 && groupIndex < 0 && channelIndex < 0 && !onLoadMore) {
+      if (
+        modeIndex < 0 &&
+        parentalIndex < 0 &&
+        toolbarIndex < 0 &&
+        masterIndex < 0 &&
+        groupIndex < 0 &&
+        channelIndex < 0 &&
+        !onLoadMore &&
+        !onFavorite &&
+        !onCard
+      ) {
         const inert =
           !active ||
           active === document.body ||
           active === document.documentElement ||
           active instanceof HTMLMediaElement;
         if (!inert) return;
-        moveTo(currentGroupStop() || verticalStop(channelRows[0] || null));
+        moveTo(
+          modeButtons.find((button) => button.classList.contains("playlist-mode-active")) ||
+            modeButtons[1] ||
+            currentMasterStop() ||
+            currentGroupStop() ||
+            verticalStop(channelRows[0] || null)
+        );
+        return;
+      }
+
+      if (parentalIndex >= 0) {
+        if (key === "ArrowLeft") moveTo(parentalButtons[parentalIndex - 1] || null);
+        else if (key === "ArrowRight") moveTo(parentalButtons[parentalIndex + 1] || null);
+        else if (key === "ArrowDown") {
+          moveTo(
+            modeButtons.find((button) => button.classList.contains("playlist-mode-active")) ||
+              modeButtons[1] ||
+              currentMasterStop()
+          );
+        } else if (key === "ArrowUp") {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      if (modeIndex >= 0) {
+        if (key === "ArrowLeft") moveTo(modeButtons[modeIndex - 1] || null);
+        else if (key === "ArrowRight") moveTo(modeButtons[modeIndex + 1] || null);
+        else if (key === "ArrowDown") {
+          moveTo(firstPlaylistCardButton() || currentMasterStop() || toolbarButtons[0] || currentGroupStop());
+        } else if (key === "ArrowUp") {
+          moveTo(saveButton || parentalButtons[parentalButtons.length - 1] || parentalButtons[0] || null);
+        }
+        return;
+      }
+
+      if (onCard) {
+        if (key === "ArrowLeft" || key === "ArrowRight") {
+          moveTo(stepPlaylistCardFocus(active, key) || active);
+        } else if (key === "ArrowDown") {
+          const next = stepPlaylistCardFocus(active, "ArrowDown");
+          if (next) moveTo(next);
+          else moveTo(currentMasterStop() || toolbarButtons[0] || currentGroupStop());
+        } else if (key === "ArrowUp") {
+          const next = stepPlaylistCardFocus(active, "ArrowUp");
+          if (next) moveTo(next);
+          else {
+            moveTo(
+              modeButtons.find((button) => button.classList.contains("playlist-mode-active")) ||
+                modeButtons[1] ||
+                modeButtons[0] ||
+                saveButton ||
+                parentalButtons[0] ||
+                null
+            );
+          }
+        }
         return;
       }
 
       if (toolbarIndex >= 0) {
-        if (key === "ArrowLeft") moveTo(toolbarButtons[toolbarIndex - 1] || null);
+        if (key === "ArrowLeft") moveTo(currentMasterStop() || toolbarButtons[toolbarIndex - 1] || null);
         else if (key === "ArrowRight") moveTo(toolbarButtons[toolbarIndex + 1] || null);
         else if (key === "ArrowDown") moveTo(currentGroupStop());
         else e.preventDefault();
         return;
       }
 
+      if (masterIndex >= 0) {
+        if (key === "ArrowUp") {
+          if (masterIndex === 0) {
+            moveTo(
+              lastPlaylistCardButton() ||
+                modeButtons.find((button) => button.classList.contains("playlist-mode-active")) ||
+                modeButtons[1] ||
+                verticalStop(masterRows[0] || null)
+            );
+          } else {
+            moveTo(verticalStop(masterRows[masterIndex - 1] || null));
+          }
+        } else if (key === "ArrowDown") {
+          moveTo(verticalStop(masterRows[masterIndex + 1] || null));
+        } else if (key === "ArrowLeft") {
+          if (!isCheckbox) moveTo(enabledCheckbox(masterRows[masterIndex]) || null);
+          else e.preventDefault();
+        } else {
+          if (isCheckbox) moveTo(enabledButton(masterRows[masterIndex]));
+          else moveTo(currentGroupStop());
+        }
+        return;
+      }
+
       if (groupIndex >= 0) {
         const row = groupRows[groupIndex];
         if (key === "ArrowUp") {
-          if (groupIndex === 0) moveTo(toolbarButtons[0] || null);
-          else moveTo(verticalStop(groupRows[groupIndex - 1]));
+          if (groupIndex === 0) {
+            moveTo(
+              toolbarButtons[0] ||
+                currentMasterStop() ||
+                lastPlaylistCardButton() ||
+                modeButtons.find((button) => button.classList.contains("playlist-mode-active")) ||
+                modeButtons[1] ||
+                null
+            );
+          } else moveTo(verticalStop(groupRows[groupIndex - 1]));
         } else if (key === "ArrowDown") {
           moveTo(verticalStop(groupRows[groupIndex + 1] || null));
         } else if (key === "ArrowLeft") {
-          // Row button -> its visibility checkbox (playlist manager).
-          if (!isCheckbox) moveTo(enabledCheckbox(row) || null);
-          else e.preventDefault();
+          // Row button -> its visibility checkbox, then the Master category column.
+          if (!isCheckbox) moveTo(enabledCheckbox(row) || currentMasterStop());
+          else moveTo(currentMasterStop() || null);
         } else {
           // Right: checkbox -> row button, button -> channel column.
           if (isCheckbox) moveTo(enabledButton(row));
@@ -1944,28 +2757,71 @@ export function App() {
         return;
       }
 
+      if (onFavorite) {
+        if (key === "ArrowLeft" || key === "ArrowUp") {
+          const activeRow = channelRows.find((row) => row.classList.contains("active")) || channelRows[0];
+          moveTo(verticalStop(activeRow || null) || currentGroupStop());
+        } else {
+          e.preventDefault();
+        }
+        return;
+      }
+
       if (channelIndex >= 0) {
         const row = channelRows[channelIndex];
         if (key === "ArrowUp") {
-          moveTo(verticalStop(channelRows[channelIndex - 1] || null));
+          if (channelIndex === 0) {
+            moveTo(
+              currentGroupStop() ||
+                toolbarButtons[0] ||
+                currentMasterStop() ||
+                saveButton ||
+                modeButtons.find((button) => button.classList.contains("playlist-mode-active")) ||
+                null
+            );
+          } else {
+            moveTo(verticalStop(channelRows[channelIndex - 1] || null));
+          }
         } else if (key === "ArrowDown") {
           if (channelIndex === channelRows.length - 1) moveTo(loadMoreBtn);
           else moveTo(verticalStop(channelRows[channelIndex + 1] || null));
         } else if (key === "ArrowLeft") {
-          // Row button -> its checkbox first (playlist manager), then groups.
-          if (!isCheckbox && enabledCheckbox(row)) moveTo(enabledCheckbox(row));
+          // Star -> title, title -> checkbox, then groups.
+          if (isFavoriteStar) moveTo(enabledButton(row));
+          else if (!isCheckbox && enabledCheckbox(row)) moveTo(enabledCheckbox(row));
           else moveTo(currentGroupStop());
         } else {
-          // Right: checkbox -> row button; button -> stay put.
+          // Right: checkbox -> title, title -> star, then live Add Favorite / Save.
           if (isCheckbox) moveTo(enabledButton(row));
-          else e.preventDefault();
+          else if (!isFavoriteStar && enabledFavorite(row)) moveTo(enabledFavorite(row));
+          else moveTo(favoriteBtn || saveButton || parentalButtons[0] || null);
         }
       }
     };
 
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [showOpeningScreen, activePanel, contentPage, contentMode]);
+
+  function toggleFavoriteChannel(channel: any) {
+    if (!channel) return;
+    const now = Date.now();
+    if (now - lastFavoriteToggleAtRef.current < 400) return;
+    lastFavoriteToggleAtRef.current = now;
+    const channelId = String(channel.id || "");
+    setChannelFavoriteRecord(channel, !isFavoriteChannelRecord(channel));
+    window.setTimeout(() => {
+      const match = channelId
+        ? Array.from(
+            document.querySelectorAll<HTMLButtonElement>(".channel-list-favorite, .channel-icon-favorite")
+          ).find((btn) => btn.dataset.channelId === channelId)
+        : null;
+      const fallback = document.querySelector<HTMLButtonElement>(
+        ".channel-list-favorite, .channel-icon-favorite, .channel-select-btn, .channel-icon-btn:not([disabled])"
+      );
+      (match || fallback)?.focus();
+    }, 40);
+  }
 
   function normalizePlayableChannelUrl(ch: any): string {
     const rawUrl = String(ch?.url || "");
@@ -1974,7 +2830,12 @@ export function App() {
 
     // Older loaded Xtream live channels were built with a forced .m3u8 suffix.
     // Newer loaders use the provider's real extension, typically .ts.
-    if (contentType === "live" && /\/live\/[^/]+\/[^/]+\/\d+\.m3u8(?:\?|$)/i.test(rawUrl)) {
+    // webOS cannot play raw MPEG-TS, so keep HLS playlists there.
+    if (
+      contentType === "live" &&
+      !isWebOsRuntime() &&
+      /\/live\/[^/]+\/[^/]+\/\d+\.m3u8(?:\?|$)/i.test(rawUrl)
+    ) {
       return rawUrl.replace(/\.m3u8(?=\?|$)/i, ".ts");
     }
 
@@ -2058,13 +2919,40 @@ export function App() {
     saveSeriesLastWatchMap(seriesLastWatchRef.current);
   }
 
-  function playChannel(ch: any) {
+  function playChannel(ch: any, options?: { forceRestart?: boolean }) {
     if (showOpeningScreen) {
       // Ignore tune attempts until the user leaves the opening screen.
       return;
     }
 
-    console.log(`[playChannel] attempting to play: name=${ch?.name} url=${String(ch?.url).slice(0, 80)}...`);
+    const forceRestart = !!options?.forceRestart;
+    const isLiveSelectionEarly = matchesContentMode(ch, "tv");
+    const requestId = ch?.id ? String(ch.id) : null;
+    const sameLiveChannel =
+      isLiveSelectionEarly &&
+      !!requestId &&
+      String(currentChannelRef.current?.id || "") === requestId;
+
+    // First click previews. A later click on the same channel goes fullscreen.
+    // Ignore the extra click webOS/simulator often fires with the first select.
+    if (sameLiveChannel && !forceRestart) {
+      const previewingMs = Date.now() - lastPlayRequestRef.current.at;
+      if (!isEffectiveLiveFullscreen && previewingMs > 800) {
+        setIsLiveFullscreenRequested(true);
+        setShowLiveMenu(false);
+      }
+      return;
+    }
+
+    let capacitorMemoryTrimmed = false;
+    if (isCapacitorRuntime() && isLiveSelectionEarly) {
+      trimCapacitorChannelMemoryForLive();
+      const groupName = (ch?.group && String(ch.group).trim()) || "Uncategorized";
+      const beforeCount = getAllChannels().length;
+      const afterCount = releaseCapacitorMemoryForLivePlayback(groupName, String(ch?.id || ""));
+      capacitorMemoryTrimmed = afterCount < beforeCount;
+    }
+
     if (!ch?.url || typeof ch.url !== "string") {
       const msg = "This channel has no playable stream URL.";
       console.warn(`[playChannel] blocked: ${msg}`);
@@ -2079,14 +2967,13 @@ export function App() {
 
     // Guard against rapid duplicate tune events for the same stream.
     const now = Date.now();
-    const requestId = ch?.id ? String(ch.id) : null;
     const requestUrl = normalizePlayableChannelUrl(ch);
     const isDuplicateRapidRequest =
       lastPlayRequestRef.current.id === requestId &&
       lastPlayRequestRef.current.url === requestUrl &&
       now - lastPlayRequestRef.current.at < 1500;
 
-    if (isDuplicateRapidRequest) {
+    if (isDuplicateRapidRequest && !forceRestart) {
       return;
     }
 
@@ -2096,9 +2983,18 @@ export function App() {
       at: now
     };
 
+    if (!forceRestart) {
+      liveReconnectAttemptRef.current = 0;
+      hadLivePlayingRef.current = false;
+      if (liveReconnectTimerRef.current !== null) {
+        window.clearTimeout(liveReconnectTimerRef.current);
+        liveReconnectTimerRef.current = null;
+      }
+    }
+
     suppressPlayerEventsRef.current = false;
     setPlayerError(null);
-    setPlayerStatus(null);
+    setPlayerStatus(forceRestart ? "Reconnecting live TV..." : null);
     setPlayerWarning(null);
     const isLiveSelection = matchesContentMode(ch, "tv");
 
@@ -2107,7 +3003,7 @@ export function App() {
     setActivePanel(null);
     if (isLiveSelection) {
       setHasSelectedLiveChannel(true);
-      setShowLiveMenu(true);
+      if (!forceRestart) setShowLiveMenu(true);
     }
 
     const player = document.getElementById("player-main") as HTMLVideoElement | null;
@@ -2138,6 +3034,17 @@ export function App() {
       }
     }
 
+    const useNativeLivePlayback =
+      requestedContentType === "live" &&
+      isCapacitorRuntime() &&
+      isNativePlayerAvailable();
+
+    // Stop the previous tune immediately so ExoPlayer can clear the last frame
+    // before the next live channel or movie starts.
+    if (isCapacitorRuntime() && isNativePlayerAvailable() && currentChannelRef.current) {
+      stopPlayback();
+    }
+
     const play = () => {
       playUrl(requestUrl, false, false, 0, false, false, false, requestedContentType as "live" | "movie" | "series");
     };
@@ -2160,8 +3067,14 @@ export function App() {
       }, 100);
     };
 
-    // Ensure preview -> live transition has committed before playback starts.
-    if (isLiveSelection && !showOpeningScreen) {
+    if (useNativeLivePlayback) {
+      if (capacitorMemoryTrimmed) {
+        setChannelUpdateTick((tick) => tick + 1);
+      }
+      initPlayerEngine();
+      play();
+    } else if (isLiveSelection && !showOpeningScreen) {
+      // Ensure preview -> live transition has committed before playback starts.
       window.requestAnimationFrame(() => {
         window.requestAnimationFrame(() => {
           playWhenVideoReady();
@@ -2174,29 +3087,118 @@ export function App() {
     setShowOpeningScreen(false);
   }
 
+  function refreshPlayerUi() {
+    setPlayerUiTick((tick) => tick + 1);
+  }
+
+  function isPlaybackPaused() {
+    void playerUiTick;
+    if (document.body.classList.contains("native-exo-active")) {
+      return isNativePlaybackPaused();
+    }
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    return !player || player.paused;
+  }
+
+  function isPlaybackMuted() {
+    void playerUiTick;
+    if (document.body.classList.contains("native-exo-active")) {
+      return isNativePlaybackMuted();
+    }
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    return !!player && (player.muted || player.volume === 0);
+  }
+
+  function playPlayback() {
+    if (document.body.classList.contains("native-exo-active")) {
+      if (isNativePlaybackPaused()) resumeNativePlayback();
+      refreshPlayerUi();
+      return;
+    }
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    if (!player || !player.paused) return;
+    void player.play();
+    refreshPlayerUi();
+  }
+
+  function pausePlayback() {
+    if (document.body.classList.contains("native-exo-active")) {
+      if (!isNativePlaybackPaused()) pauseNativePlayback();
+      refreshPlayerUi();
+      return;
+    }
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    if (!player || player.paused) return;
+    player.pause();
+    refreshPlayerUi();
+  }
+
+  function seekPlayback(deltaSeconds: number) {
+    const player = document.getElementById("player-main") as HTMLVideoElement | null;
+    if (!player || !Number.isFinite(player.currentTime)) return;
+    let next = player.currentTime + deltaSeconds;
+    if (player.seekable && player.seekable.length > 0) {
+      const start = player.seekable.start(0);
+      const end = player.seekable.end(player.seekable.length - 1);
+      next = Math.min(end, Math.max(start, next));
+    } else if (Number.isFinite(player.duration) && player.duration > 0) {
+      next = Math.min(player.duration - 0.25, Math.max(0, next));
+    } else {
+      next = Math.max(0, next);
+    }
+    try {
+      player.currentTime = next;
+    } catch {
+      // Live HLS windows sometimes reject seeks.
+    }
+    window.dispatchEvent(new Event("playerRevealControls"));
+  }
+
   function togglePlayPause() {
+    // While the native ExoPlayer overlay renders video (Fire TV/Android), the
+    // WebView video element is empty — route play/pause to the native bridge.
+    if (document.body.classList.contains("native-exo-active")) {
+      if (isNativePlaybackPaused()) {
+        resumeNativePlayback();
+      } else {
+        pauseNativePlayback();
+      }
+      refreshPlayerUi();
+      return;
+    }
+
     const player = document.getElementById("player-main") as HTMLVideoElement | null;
     if (!player) return;
 
     if (player.paused) {
       void player.play();
+      refreshPlayerUi();
       return;
     }
 
     player.pause();
+    refreshPlayerUi();
   }
 
   function toggleMute() {
+    if (document.body.classList.contains("native-exo-active")) {
+      setNativeMuted(!isNativePlaybackMuted());
+      refreshPlayerUi();
+      return;
+    }
+
     const player = document.getElementById("player-main") as HTMLVideoElement | null;
     if (!player) return;
 
     if (player.muted || player.volume === 0) {
       player.muted = false;
       if (player.volume === 0) player.volume = 1;
+      refreshPlayerUi();
       return;
     }
 
     player.muted = true;
+    refreshPlayerUi();
   }
 
   function toggleFullscreen() {
@@ -2298,6 +3300,39 @@ export function App() {
     setShowOpeningScreen(false);
   }
 
+  function sendToPlaylistManager(status?: string) {
+    autoLoadTokenRef.current += 1;
+    setContentPage("playlistManager");
+    setActivePanel(null);
+    setShowOpeningScreen(false);
+    setPlayerStatus(status || "Open Playlist Manager and choose Load.");
+  }
+
+  async function openSavedCapacitorVod(
+    content: "movies" | "series",
+    keepPlaylistManagerPage: boolean,
+    requestToken: number
+  ): Promise<boolean> {
+    if (!isCapacitorRuntime()) return false;
+    const names = getCapacitorVodGroupNames(content);
+    if (names.length === 0) return false;
+    const targetGroup = names[0];
+    setPlayerStatus(`Restoring ${content}…`);
+    await loadCapacitorVodGroupChannels(content, targetGroup);
+    if (requestToken !== autoLoadTokenRef.current) return true;
+    setShowOpeningScreen(false);
+    setActivePanel(null);
+    setContentMode(content);
+    if (!keepPlaylistManagerPage) {
+      setContentPage(content);
+    }
+    setActiveGroup(targetGroup);
+    setChannelUpdateTick((tick) => tick + 1);
+    setCategoryRefreshTick((tick) => tick + 1);
+    setPlayerStatus(null);
+    return true;
+  }
+
   function selectContent(content: "tv" | "movies" | "series") {
     if (!canAccessContentByLevel(content)) {
       alert("This profile level cannot open that screen.");
@@ -2320,7 +3355,10 @@ export function App() {
           return;
         }
 
-        const keepPlaylistManagerPage = contentPage === "playlistManager";
+        // Only stay on the manager page when it is actually on screen; a stale
+        // contentPage left over after returning to the main menu must not trap
+        // Movies/Series navigation inside the Playlist Manager.
+        const keepPlaylistManagerPage = isPlaylistManagerPage;
         const roleChannels = getAllChannels();
         const roleModeChannels = roleChannels.filter((channel) => matchesContentMode(channel, content));
 
@@ -2354,118 +3392,101 @@ export function App() {
       return;
     }
 
-    const keepPlaylistManagerPage = contentPage === "playlistManager";
+    // Only stay on the manager page when it is actually on screen (see above).
+    const keepPlaylistManagerPage = isPlaylistManagerPage;
     const latestChannels = getAllChannels();
     const modeChannels = latestChannels.filter((channel) => matchesContentMode(channel, content));
 
     if (modeChannels.length === 0) {
-      // No channels for this mode yet. If we have playlists, auto-load the first
-      // one (and force a content-mode preference for the user's choice) instead
-      // of dropping a confusing "no channels" alert.
       if (latestChannels.length === 0) {
-        const roleAccessLevel = accessLevel as "adult" | "child";
-        if (roleAccessLevel === "adult" || roleAccessLevel === "child") {
-          void (async () => {
-            const restored = await restoreRoleContentForLogin(roleAccessLevel);
-            if (!restored) {
-              setLoginError(
-                roleAccessLevel === "adult"
-                  ? "Adult playlist is not assigned or failed to load."
-                  : "Child playlist is not assigned or failed to load."
-              );
-              setContentPage("playlistManager");
-              setActivePanel(null);
-              setShowOpeningScreen(false);
-              return;
-            }
-
-            const refreshedChannels = getAllChannels();
-            const refreshedModeChannels = refreshedChannels.filter((channel) => matchesContentMode(channel, content));
-            if (refreshedModeChannels.length === 0) {
-              alert(`Assigned ${roleAccessLevel} playlist has no ${content} entries.`);
-              return;
-            }
-
-            setShowOpeningScreen(false);
-            setActivePanel(null);
-            setContentMode(content);
-
-            if (!keepPlaylistManagerPage) {
-              if (content === "tv") setContentPage("live");
-              if (content === "movies") setContentPage("movies");
-              if (content === "series") setContentPage("series");
-            }
-
-            if (content === "tv") {
-              setActiveGroup(ROOT_GROUP);
-            } else {
-              setActiveGroup(pickDefaultContentGroup(refreshedChannels, content));
-            }
-
-            await ensureGuideEPGLoaded();
-          })();
-          return;
-        }
-
         const playlists = loadPlaylists();
         if (playlists.length === 0) {
-          // No playlists configured — guide user to add one.
           setActivePanel("playlist");
           setShowOpeningScreen(false);
           return;
         }
 
-        (async () => {
+        void (async () => {
           const requestToken = autoLoadTokenRef.current + 1;
           autoLoadTokenRef.current = requestToken;
 
-          try {
-            const { playlist, channels } = await loadFromAnyPlaylist(playlists);
-            if (requestToken !== autoLoadTokenRef.current) return;
-            if (accessLevelRef.current === "adult" || accessLevelRef.current === "child") return;
-
-            setActivePlaylistId(playlist.id);
-            writeStoredItem(SHARED_PLAYLIST_ID_KEY, playlist.id);
-            setChannels(channels);
-            setChannelUpdateTick((t) => t + 1);
-            resetVisibilityForCurrentChannels();
+          const restored = await restoreChannelsCache();
+          if (requestToken !== autoLoadTokenRef.current) return;
+          const restoredMode = restored.filter((channel) => matchesContentMode(channel, content));
+          if (restoredMode.length > 0) {
+            startupCacheHydrationCompletedRef.current = true;
+            setChannelUpdateTick((tick) => tick + 1);
             setCategoryRefreshTick((tick) => tick + 1);
-
-            const refreshed = channels.filter((channel: any) => matchesContentMode(channel, content));
-            if (refreshed.length === 0) {
-              alert(`Playlist "${playlist.name}" has no ${content} entries.`);
-              return;
-            }
-
+            if (content !== "tv") stopCurrentVodPlaybackIfNeeded();
             setShowOpeningScreen(false);
             setActivePanel(null);
             setContentMode(content);
-
             if (!keepPlaylistManagerPage) {
               if (content === "tv") setContentPage("live");
               if (content === "movies") setContentPage("movies");
               if (content === "series") setContentPage("series");
             }
-
-            if (content === "tv") {
-              setActiveGroup(ROOT_GROUP);
-            } else {
-              setActiveGroup(pickDefaultContentGroup(refreshed, content));
-            }
-
-            await loadEPGForPlaylist(playlist).catch(() => {
-              // EPG is optional; ignore failures here.
-            });
-          } catch (err) {
-            const message = err instanceof Error ? err.message : "Unknown error";
-            alert(`Failed to load playlist: ${message}`);
+            setActiveGroup(
+              content === "tv" ? pickDefaultLiveGroup(restored) : pickDefaultContentGroup(restored, content)
+            );
+            return;
           }
+
+          if (content === "tv" && isCapacitorRuntime() && getCapacitorLiveGroupNames().length > 0) {
+            const targetGroup = getCapacitorLiveGroupNames()[0];
+            await loadCapacitorLiveGroupChannels(targetGroup);
+            if (requestToken !== autoLoadTokenRef.current) return;
+            const liveRestored = getAllChannels().filter((channel) => matchesContentMode(channel, "tv"));
+            if (liveRestored.length > 0) {
+              setChannelUpdateTick((tick) => tick + 1);
+              setShowOpeningScreen(false);
+              setActivePanel(null);
+              setContentMode("tv");
+              if (!keepPlaylistManagerPage) setContentPage("live");
+              setActiveGroup(targetGroup);
+              return;
+            }
+          }
+
+          if (
+            (content === "movies" || content === "series") &&
+            (await openSavedCapacitorVod(content, keepPlaylistManagerPage, requestToken))
+          ) {
+            return;
+          }
+
+          sendToPlaylistManager("Open Playlist Manager and choose Load. Live TV, Movies, and Series then open instantly from this save.");
         })();
         return;
       }
 
-      // Channels are already loaded, but not for this mode yet. Lazily load
-      // the requested scope from the current/saved playlist and merge.
+      if ((content === "movies" || content === "series") && !isCapacitorRuntime()) {
+        void (async () => {
+          const requestToken = autoLoadTokenRef.current + 1;
+          autoLoadTokenRef.current = requestToken;
+          const hydrated = await hydrateCachedVodScope(content);
+          if (requestToken !== autoLoadTokenRef.current) return;
+          const hydratedMode = hydrated.filter((channel) => matchesContentMode(channel, content));
+          if (hydratedMode.length === 0) {
+            sendToPlaylistManager(
+              `No saved ${content} catalog. Open Playlist Manager and choose Load.`
+            );
+            return;
+          }
+          stopCurrentVodPlaybackIfNeeded();
+          setShowOpeningScreen(false);
+          setActivePanel(null);
+          setContentMode(content);
+          if (!keepPlaylistManagerPage) {
+            setContentPage(content);
+          }
+          setActiveGroup(pickDefaultContentGroup(hydrated, content));
+          setChannelUpdateTick((tick) => tick + 1);
+          setCategoryRefreshTick((tick) => tick + 1);
+        })();
+        return;
+      }
+
       const playlists = loadPlaylists();
       const preferredPlaylistId =
         (activePlaylistId || readStoredItem(SHARED_PLAYLIST_ID_KEY) || playlists[0]?.id || "").trim();
@@ -2487,50 +3508,144 @@ export function App() {
 
         const scope = content === "tv" ? "live" : content;
 
+        if (isCapacitorRuntime() && (scope === "movies" || scope === "series")) {
+          setShowOpeningScreen(false);
+          setActivePanel(null);
+          setContentMode(content);
+          if (!keepPlaylistManagerPage) {
+            setContentPage(content === "movies" ? "movies" : "series");
+          }
+          setPlayerStatus(`Loading ${content}…`);
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+          if (requestToken !== autoLoadTokenRef.current) return;
+        }
+
+        // Fire TV/Android: the live catalog persists as per-group IndexedDB
+        // records. When switching back to TV after a VOD scope replaced the
+        // in-memory list, restore a group from IndexedDB instead of
+        // re-downloading the whole catalog from the provider.
+        if (scope === "live" && isCapacitorRuntime()) {
+          const catalogGroups = getCapacitorLiveGroupNames();
+          if (catalogGroups.length > 0) {
+            setPlayerStatus("Restoring live TV channels…");
+            const targetGroup = catalogGroups[0] || "Uncategorized";
+            await loadCapacitorLiveGroupChannels(targetGroup);
+            if (requestToken !== autoLoadTokenRef.current) return;
+
+            const restoredLive = getAllChannels().filter((channel) => matchesContentMode(channel, "tv"));
+            if (restoredLive.length === 0) {
+              sendToPlaylistManager("No saved Live TV catalog. Open Playlist Manager and choose Load.");
+              return;
+            }
+            setPlayerStatus(null);
+            setShowOpeningScreen(false);
+            setActivePanel(null);
+            setContentMode("tv");
+            if (!keepPlaylistManagerPage) {
+              setContentPage("live");
+            }
+            setActiveGroup(targetGroup);
+            setChannelUpdateTick((tick) => tick + 1);
+            setCategoryRefreshTick((tick) => tick + 1);
+            return;
+          }
+        }
+
+        if (
+          (scope === "movies" || scope === "series") &&
+          (await openSavedCapacitorVod(scope, keepPlaylistManagerPage, requestToken))
+        ) {
+          return;
+        }
+
+        // Fire TV/Android: serve the VOD scope from the persistent IndexedDB
+        // cache (warmed by the startup prefetch or a previous load) instead of
+        // re-downloading the whole catalog from the provider on every entry.
+        if (isCapacitorRuntime() && (scope === "movies" || scope === "series")) {
+          setPlayerStatus(`Loading ${content} from the cache…`);
+          const cachedScopeChannels = await loadCapacitorVodScopeCache(
+            scope,
+            orderedPlaylists.map((playlist) => String(playlist.id))
+          );
+          if (requestToken !== autoLoadTokenRef.current) return;
+
+          if (cachedScopeChannels.length > 0) {
+            const cachedRecords = capCapacitorCatalogList(
+              cachedScopeChannels.filter((channel) => isChannelRecord(channel))
+            );
+            setChannels(cachedRecords as any[], "capacitor-vod-cache-load");
+            setChannelUpdateTick((tick) => tick + 1);
+            setCategoryRefreshTick((tick) => tick + 1);
+
+            setPlayerStatus(null);
+            setShowOpeningScreen(false);
+            setActivePanel(null);
+            setContentMode(content);
+            if (!keepPlaylistManagerPage) {
+              if (content === "movies") setContentPage("movies");
+              if (content === "series") setContentPage("series");
+            }
+            setActiveGroup(pickDefaultContentGroup(cachedRecords, content));
+            return;
+          }
+        }
+
+        if (!keepPlaylistManagerPage) {
+          sendToPlaylistManager(
+            `No saved ${content === "tv" ? "Live TV" : content} catalog. Open Playlist Manager and choose Load.`
+          );
+          return;
+        }
+
+        setPlayerStatus(`Loading ${content === "tv" ? "live TV" : content} from Playlist Manager…`);
         for (const playlist of orderedPlaylists) {
           try {
             const scopedChannels = await loadChannelsForPlaylist(playlist, scope);
             if (requestToken !== autoLoadTokenRef.current) return;
             if (!Array.isArray(scopedChannels) || scopedChannels.length === 0) continue;
 
-            const byId = new Map<string, any>();
-            latestChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
-            scopedChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
-            const mergedChannels = Array.from(byId.values()).filter((channel) => isChannelRecord(channel));
+            if (isCapacitorRuntime() && (scope === "movies" || scope === "series")) {
+              void saveCapacitorVodScopeCache(scope, String(playlist.id), capCapacitorCatalogList(scopedChannels));
+            }
+
+            let mergedChannels: any[];
+            if (isCapacitorRuntime() && scope !== "live") {
+              mergedChannels = capCapacitorCatalogList(
+                scopedChannels.filter((channel) => isChannelRecord(channel))
+              );
+            } else {
+              const byId = new Map<string, any>();
+              latestChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
+              scopedChannels.forEach((channel) => byId.set(String(channel?.id || ""), channel));
+              mergedChannels = Array.from(byId.values()).filter((channel) => isChannelRecord(channel));
+            }
 
             setActivePlaylistId(playlist.id);
             writeStoredItem(SHARED_PLAYLIST_ID_KEY, playlist.id);
-            setChannels(mergedChannels as any[], `lazy-${scope}-load`);
+            setChannels(mergedChannels as any[], `playlist-manager-${scope}-load`);
             setChannelUpdateTick((tick) => tick + 1);
             setCategoryRefreshTick((tick) => tick + 1);
 
             const refreshedModeChannels = mergedChannels.filter((channel) => matchesContentMode(channel, content));
             if (refreshedModeChannels.length === 0) continue;
 
-            setShowOpeningScreen(false);
-            setActivePanel(null);
+            setPlayerStatus(null);
             setContentMode(content);
-
-            if (!keepPlaylistManagerPage) {
-              if (content === "tv") setContentPage("live");
-              if (content === "movies") setContentPage("movies");
-              if (content === "series") setContentPage("series");
-            }
-
+            setActiveGroup(
+              content === "tv"
+                ? pickDefaultLiveGroup(mergedChannels)
+                : pickDefaultContentGroup(mergedChannels, content)
+            );
             if (content === "tv") {
-              setActiveGroup(pickDefaultLiveGroup(mergedChannels));
               await loadEPGForPlaylist(playlist).catch(() => {});
-            } else {
-              setActiveGroup(pickDefaultContentGroup(mergedChannels, content));
             }
-
             return;
           } catch {
             // Try the next playlist candidate.
           }
         }
 
-        alert(`No ${content} entries found in the loaded playlist.`);
+        setPlayerStatus(`No ${content} entries found. Use Load on a playlist first.`);
       })();
       return;
     }
@@ -2557,21 +3672,17 @@ export function App() {
   }
 
   function handlePlaylistLoaded(channels: any[]) {
-    resetVisibilityForCurrentChannels();
-    const preferredMode = pickPreferredContentMode(channels);
-    const keepPlaylistManagerPage = contentPage === "playlistManager";
-
-    // PlaylistManager writes channels directly to the shared store; bump the
-    // local tick so App recomputes memoized channel/group views immediately.
+    // Playlist Manager Load is the only provider download. Keep saved hide/show
+    // so Live TV / Movies / Series open instantly on the next launch.
+    autoLoadTokenRef.current += 1;
     setChannelUpdateTick((tick) => tick + 1);
-    setContentMode(preferredMode);
-    if (!keepPlaylistManagerPage) {
-      setContentPage(preferredMode === "tv" ? "live" : preferredMode);
-    }
-    setActiveGroup(pickDefaultContentGroup(channels, preferredMode));
+    setContentPage("playlistManager");
+    setContentMode("tv");
+    setActiveGroup(pickDefaultLiveGroup(channels));
     setShowOpeningScreen(false);
     setActivePanel(null);
     setCategoryRefreshTick((tick) => tick + 1);
+    setPlayerStatus("Hide or show categories here, then open Live TV / Movies / Series. They load instantly from this save.");
   }
 
   function handlePlaylistLoadedWithId(channels: any[], playlistId: string) {
@@ -2600,6 +3711,19 @@ export function App() {
 
     const liveChannels = channels.filter((channel) => isLikelyLiveChannel(channel));
     if (liveChannels.length === 0) return;
+
+    // Scanning EPG coverage across 50k+ channels freezes Fire TV/Capacitor.
+    if (isCapacitorRuntime() && liveChannels.length > 3000) {
+      for (const playlist of playlists) {
+        try {
+          await loadEPGForPlaylist(playlist);
+        } catch {
+          // Try the next playlist source if this one fails.
+        }
+      }
+      setCategoryRefreshTick((tick) => tick + 1);
+      return;
+    }
 
     const hasAnyGuideData = () =>
       liveChannels.some((channel) => {
@@ -2830,6 +3954,9 @@ export function App() {
     setShowNowNext(false);
 
     const openLiveView = (channels: any[]) => {
+      if (isCapacitorRuntime()) {
+        pruneCapacitorVisibilityIfBloated();
+      }
       setContentPage("live");
       setContentMode("tv");
       setActivePanel(null);
@@ -2853,7 +3980,9 @@ export function App() {
         }
 
         openLiveView(roleLiveChannels);
-        void ensureGuideEPGLoaded();  // Load EPG in background, don't block UI
+        if (!isCapacitorRuntime()) {
+          void ensureGuideEPGLoaded();
+        }
         return;
       }
 
@@ -2867,104 +3996,95 @@ export function App() {
       return;
     }
 
-    const currentLiveChannels = getAllChannels().filter((channel) => matchesContentMode(channel, "tv"));
-    if (currentLiveChannels.length > 0) {
-      openLiveView(currentLiveChannels);
-      void ensureGuideEPGLoaded();
-      return;
-    }
+    let liveChannels = getAllChannels().filter((channel) => matchesContentMode(channel, "tv"));
 
-    const restored = await restoreChannelsCache();
-    const restoredLiveChannels = restored.filter((channel) => matchesContentMode(channel, "tv"));
-    if (restoredLiveChannels.length > 0) {
-      startupCacheHydrationCompletedRef.current = true;
-      setChannelUpdateTick((tick) => tick + 1);
-      openLiveView(restoredLiveChannels);
-      void ensureGuideEPGLoaded();
-      return;
-    }
-
-    setLoginError("No saved Live TV channels are available. Open Playlist Manager and choose Reload.");
-    setContentPage("playlistManager");
-    setActivePanel(null);
-    setShowOpeningScreen(false);
-    return;
-
-    const playlists = loadPlaylists();
-    const preferredPlaylistId = (activePlaylistId || readStoredItem(SHARED_PLAYLIST_ID_KEY) || playlists[0]?.id || "").trim();
-    const targetPlaylist =
-      (preferredPlaylistId && playlists.find((playlist) => String(playlist.id) === preferredPlaylistId)) ||
-      playlists[0];
-
-    if (playlists.length > 0) {
-      const orderedPlaylists = targetPlaylist
-        ? [targetPlaylist, ...playlists.filter((playlist) => playlist.id !== targetPlaylist.id)]
-        : playlists;
-
-      try {
-        const { playlist: resolvedPlaylist, channels: loadedChannels } = await loadFromAnyPlaylist(orderedPlaylists, "live");
-        const loadedLiveChannels = loadedChannels.filter((channel) => matchesContentMode(channel, "tv"));
-        if (loadedLiveChannels.length === 0) {
-          setLoginError("Saved playlists returned no live channels.");
-          setActivePanel(null);
-          setShowOpeningScreen(false);
-          return;
-        }
-
-        setChannels(loadedChannels, "start-live-load");
+    if (liveChannels.length === 0) {
+      const restored = await restoreChannelsCache();
+      liveChannels = restored.filter((channel) => matchesContentMode(channel, "tv"));
+      if (liveChannels.length > 0) {
+        startupCacheHydrationCompletedRef.current = true;
         setChannelUpdateTick((tick) => tick + 1);
-        writeStoredItem(SHARED_PLAYLIST_ID_KEY, resolvedPlaylist.id);
-        setActivePlaylistId(resolvedPlaylist.id);
-        openLiveView(loadedLiveChannels);
-        resetVisibilityForCurrentChannels();
-        setCategoryRefreshTick((tick) => tick + 1);
-        void loadEPGForPlaylist(resolvedPlaylist).catch(() => {});
-        return;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Unknown error";
-        setLoginError(`Saved playlists failed to load: ${message}`);
-        setActivePanel(null);
-        setShowOpeningScreen(false);
-        return;
       }
     }
 
-    setLoginError("No saved playlist or cached channels are available. Open Playlist Manager to add one.");
-    setActivePanel(null);
-    setShowOpeningScreen(false);
+    if (liveChannels.length === 0 && isCapacitorRuntime()) {
+      const catalogGroups = getCapacitorLiveGroupNames();
+      if (catalogGroups.length > 0) {
+        const targetGroup = catalogGroups[0];
+        await loadCapacitorLiveGroupChannels(targetGroup);
+        liveChannels = getAllChannels().filter((channel) => matchesContentMode(channel, "tv"));
+        if (liveChannels.length > 0) {
+          setChannelUpdateTick((tick) => tick + 1);
+          openLiveView(liveChannels);
+          setActiveGroup(targetGroup);
+          return;
+        }
+      }
+    }
+
+    liveChannels = getAllChannels().filter((channel) => matchesContentMode(channel, "tv"));
+    if (liveChannels.length > 0) {
+      openLiveView(liveChannels);
+      if (!isCapacitorRuntime()) {
+        void ensureGuideEPGLoaded();
+      }
+      return;
+    }
+
+    sendToPlaylistManager("No saved Live TV channels. Open Playlist Manager and choose Load.");
   }
 
+  useEffect(() => {
+    if (!bootAction) return;
+    if (bootAction === "live") {
+      void startLiveTV();
+      return;
+    }
+    openPanelFromMenu(bootAction);
+    // Apply the lightweight Fire TV menu choice once after App loads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  playChannelRef.current = playChannel;
+
   return (
-    <div className="app-root">
+    <div className={`app-root${isPlaylistManagerPage ? " is-playlist-manager" : ""}${isPlaylistManagerPage ? " has-master-min-list" : ""}`}>
       {shouldRenderMainVideo && useLivePreviewShell && (
         <div className={`live-preview-shell${isLivePreviewFullscreen ? " live-preview-shell-fullscreen" : ""}`} aria-hidden="false">
             <video
               id="player-main"
               className={`player-main player-main-shell-video${currentChannel ? " player-main-native-controls" : ""}`}
-              autoPlay
               playsInline
-              controls={!!currentChannel}
+              controls={false}
               disablePictureInPicture={true}
               disableRemotePlayback={true}
-              tabIndex={0}
+              tabIndex={isCapacitorRuntime() || isWebOsRuntime() ? -1 : 0}
               style={{ background: 'transparent', zIndex: 0 }}
             />
-
-
-
-
+            {currentChannel && (
+              <PlayerControlBar
+                channel={currentChannel}
+                paused={isPlaybackPaused()}
+                muted={isPlaybackMuted()}
+                fullscreen={isLivePreviewFullscreen}
+                isFavorite={isFavoriteChannelRecord(currentChannel)}
+                onPlayPause={togglePlayPause}
+                onMute={toggleMute}
+                onFullscreen={toggleFullscreen}
+                onToggleFavorite={() => toggleFavoriteChannel(currentChannel)}
+              />
+            )}
         </div>
       )}
       {shouldRenderMainVideo && !useLivePreviewShell && (
         <video
           id="player-main"
           className={`player-main ${shouldShowOpeningMenu && !currentChannel ? "player-main-idle" : showContentPreviewWindow ? "player-main-preview" : contentPage === "live" ? (isEffectiveLiveFullscreen ? "player-main-live" : "player-main-compact") : currentChannel ? "player-main-live" : "player-main-compact"}${forceLivePreviewLayout ? " player-main-force-preview" : ""}`}
-          autoPlay
           playsInline
           controls={!!currentChannel && !forceLivePreviewLayout}
           disablePictureInPicture={contentPage === "live"}
           disableRemotePlayback={contentPage === "live"}
-          tabIndex={0}
+          tabIndex={isCapacitorRuntime() || isWebOsRuntime() ? -1 : 0}
           style={{ background: 'transparent', zIndex: 0 }}
         />
 
@@ -2983,22 +4103,15 @@ export function App() {
       )}
       {showIdlePlayerStatus && (
         <div className="player-status">
-          {allChannels.length > 0 ? "No channels available in this view." : "Add a playlist to load channels."}
+          {allChannels.length > 0 ? "No channels available in this view." : "Open Playlist Manager and choose Load."}
         </div>
       )}
-      {currentChannel && playerStatus && <div className="player-status player-status-info">{playerStatus}</div>}
+      {playerStatus && (currentChannel || isPlaylistManagerPage) && (
+        <div className="player-status player-status-info">{playerStatus}</div>
+      )}
       {currentChannel && !playerStatus && playerWarning && <div className="player-status player-status-info">{playerWarning}</div>}
       {currentChannel && playerError && <div className="player-status player-status-error">{playerError}</div>}
-      {isVodPlaybackFullscreen && (
-        <button
-          type="button"
-          className="vod-exit-btn"
-          onClick={exitVodPlayback}
-          aria-label="Exit movie playback"
-        >
-          Back
-        </button>
-      )}
+      {isVodPlaybackFullscreen && <VodExitButton visible={isVodPlaybackFullscreen} onExit={exitVodPlayback} />}
 
       {isLoginOverlayVisible && (
         <div className="app-login-overlay" role="dialog" aria-modal="true" aria-label="Login required">
@@ -3155,6 +4268,74 @@ export function App() {
               </button>
             </div>
           )}
+          {isPlaylistManagerPage ? (
+            <div className="playlist-columns-scroller">
+              <div className="playlist-columns-track">
+                <MasterMinList
+                  groups={groups}
+                  groupCounts={groupCounts}
+                  selectedKey={selectedMasterKey}
+                  isGroupVisible={isGroupVisible}
+                  onToggleCategory={(groupNames, visible) => {
+                    setGroupsVisible(groupNames, visible);
+                    setCategoryRefreshTick((tick) => tick + 1);
+                  }}
+                  onSelectKey={(key) => {
+                    setSelectedMasterKey(key);
+                    const match = firstGroupForMasterKey(groups, key);
+                    if (match) setActiveGroup(match);
+                  }}
+                />
+                <GroupList
+                  groups={groupsForList}
+                  groupCounts={groupCounts}
+                  activeGroup={activeGroup}
+                  onSelect={(group) => {
+                    setActiveGroup(group);
+                  }}
+                  isGroupVisible={isGroupVisible}
+                  onToggleGroupVisible={(group, visible) => {
+                    setGroupVisible(group, visible);
+                    setCategoryRefreshTick((tick) => tick + 1);
+                  }}
+                  showVisibilityControls={isPlaylistManagerPage}
+                  className={isMainMoviesScreen ? "group-list-movies-right" : ""}
+                  batchSize={isCapacitorRuntime() && (isLiveContentPage || isPlaylistManagerPage) ? 60 : undefined}
+                  autoLoadOnScroll={isCapacitorRuntime() && (isLiveContentPage || isPlaylistManagerPage)}
+                  onSetAllVisible={
+                    isPlaylistManagerPage
+                      ? (visible) => {
+                          setGroupsVisible(groupsForList, visible, true);
+                          setCategoryRefreshTick((tick) => tick + 1);
+                        }
+                      : undefined
+                  }
+                />
+                <ChannelList
+                  channels={filteredChannelsForDisplay}
+                  onSelect={playChannel}
+                  activeChannel={currentChannel}
+                  isChannelVisible={isChannelVisible}
+                  onToggleChannelVisible={(channelId, visible) => {
+                    setChannelVisible(channelId, visible);
+                    setCategoryRefreshTick((tick) => tick + 1);
+                  }}
+                  isFavoriteChannel={(channel) => isFavoriteChannelRecord(channel)}
+                  onToggleFavorite={toggleFavoriteChannel}
+                  showVisibilityControls={isPlaylistManagerPage}
+                  showFavoriteControls={false}
+                  showAsIcons={false}
+                  batchSize={
+                    isCapacitorRuntime() ? 40 : undefined
+                  }
+                  suppressLogos={false}
+                  autoLoadOnScroll={isCapacitorRuntime()}
+                  listClassName=""
+                />
+              </div>
+            </div>
+          ) : (
+            <>
           <GroupList
             groups={groupsForList}
             groupCounts={groupCounts}
@@ -3169,13 +4350,12 @@ export function App() {
             }}
             showVisibilityControls={isPlaylistManagerPage}
             className={isMainMoviesScreen ? "group-list-movies-right" : ""}
+            batchSize={isCapacitorRuntime() && (isLiveContentPage || isPlaylistManagerPage) ? 60 : undefined}
+            autoLoadOnScroll={isCapacitorRuntime() && (isLiveContentPage || isPlaylistManagerPage)}
             onSetAllVisible={
               isPlaylistManagerPage
                 ? (visible) => {
-                    setGroupsVisible(groups, visible);
-                    if (!visible) {
-                      setActiveGroup(ROOT_GROUP);
-                    }
+                    setGroupsVisible(groups, visible, true);
                     setCategoryRefreshTick((tick) => tick + 1);
                   }
                 : undefined
@@ -3191,21 +4371,26 @@ export function App() {
               setCategoryRefreshTick((tick) => tick + 1);
             }}
             isFavoriteChannel={(channel) => isFavoriteChannelRecord(channel)}
-            onToggleFavorite={(channel) => {
-              setChannelFavoriteRecord(channel, !isFavoriteChannelRecord(channel));
-            }}
-            showVisibilityControls={isPlaylistManagerPage && contentMode === "tv"}
-            showFavoriteControls={isContentIconsView}
+            onToggleFavorite={toggleFavoriteChannel}
+            showVisibilityControls={isPlaylistManagerPage}
+            showFavoriteControls={isLiveContentPage || isContentIconsView}
             showAsIcons={isContentIconsView}
             batchSize={
-              isMainSeriesScreen && isContentIconsView
-                ? 16
-                : isMainMoviesScreen && isContentIconsView
-                  ? 32
-                  : undefined
+              isCapacitorRuntime() && isLiveContentPage
+                ? 40
+                : isCapacitorRuntime() && isContentIconsView
+                  ? 12
+                  : isMainSeriesScreen && isContentIconsView
+                    ? 16
+                    : isMainMoviesScreen && isContentIconsView
+                      ? 32
+                      : undefined
             }
             suppressLogos={false}
-            autoLoadOnScroll={(isMainSeriesScreen || isMainMoviesScreen) && isContentIconsView}
+            autoLoadOnScroll={
+              (isCapacitorRuntime() && isLiveContentPage) ||
+              ((isMainSeriesScreen || isMainMoviesScreen) && isContentIconsView)
+            }
             listClassName={
               isMainSeriesScreen && isContentIconsView
                 ? "channel-list-series-grid"
@@ -3214,29 +4399,32 @@ export function App() {
                   : ""
             }
           />
+            </>
+          )}
         </>
       )}
 
-      {!shouldShowOpeningMenu && !isEpgSearchPanelOpen && currentChannel && (String(currentChannel.contentType || "").toLowerCase() === "live" || (!currentChannel.contentType && contentPage === "live")) && (
+      {!shouldShowOpeningMenu && !isEpgSearchPanelOpen && !isLivePreviewFullscreen && currentChannel && (String(currentChannel.contentType || "").toLowerCase() === "live" || (!currentChannel.contentType && contentPage === "live")) && (
         <>
           <EPGGrid
             currentChannel={currentChannel}
-            className={useLivePreviewShell && !isLivePreviewFullscreen ? "epg-grid-preview-window" : ""}
+            className={useLivePreviewShell ? "epg-grid-preview-window" : ""}
             onOpenGuide={() => {
               void openGuidePanel("epgSearch");
             }}
           />
+          {!useLivePreviewShell && (
           <button
             type="button"
-            className={`epg-favorite-btn${useLivePreviewShell && !isLivePreviewFullscreen ? " epg-favorite-btn-preview" : ""}`}
+            className="epg-favorite-btn"
             onClick={() => {
               if (!currentChannel) return;
-              const nextFavorite = !isFavoriteChannelRecord(currentChannel);
-              setChannelFavoriteRecord(currentChannel, nextFavorite);
+              toggleFavoriteChannel(currentChannel);
             }}
           >
             {isFavoriteChannelRecord(currentChannel) ? "Remove Favorite" : "Add Favorite"}
           </button>
+          )}
         </>
       )}
       {!shouldShowOpeningMenu && (
@@ -3254,7 +4442,7 @@ export function App() {
           }
           onToggleFavorite={() => {
             if (!seriesPickerSourceChannel) return;
-            setChannelFavoriteRecord(seriesPickerSourceChannel, !isFavoriteChannelRecord(seriesPickerSourceChannel));
+            toggleFavoriteChannel(seriesPickerSourceChannel);
           }}
           onSelectEpisode={(episode) => {
             rememberSeriesEpisode(seriesPickerSourceChannel, episode);
@@ -3284,6 +4472,7 @@ export function App() {
             setActivePanel(null);
             setShowOpeningScreen(true);
           }}
+          contentMode={contentMode}
         />
       )}
 
@@ -3349,27 +4538,81 @@ function hasAnyKeyword(text: string, keywords: string[]) {
   return keywords.some((keyword) => text.includes(keyword));
 }
 
-function pickPreferredContentMode(channels: any[]): "tv" | "movies" | "series" {
-  if (channels.some((channel) => matchesContentMode(channel, "tv"))) {
-    return "tv";
-  }
-
-  if (channels.some((channel) => matchesContentMode(channel, "movies"))) {
-    return "movies";
-  }
-
-  if (channels.some((channel) => matchesContentMode(channel, "series"))) {
-    return "series";
-  }
-
-  return "tv";
-}
-
 function isTextEntryTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
   const tag = target.tagName;
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+function playlistCardButtons(): HTMLButtonElement[] {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>(".playlist-card button")).filter(
+    (btn) => !btn.disabled && btn.offsetParent !== null
+  );
+}
+
+function firstPlaylistCardButton(): HTMLButtonElement | null {
+  const loaded = Array.from(
+    document.querySelectorAll<HTMLButtonElement>(".playlist-card-loaded button")
+  ).find((btn) => !btn.disabled && btn.offsetParent !== null);
+  return loaded || playlistCardButtons()[0] || null;
+}
+
+function lastPlaylistCardButton(): HTMLButtonElement | null {
+  const buttons = playlistCardButtons();
+  return buttons[buttons.length - 1] || null;
+}
+
+function stepPlaylistCardFocus(
+  active: HTMLElement | null,
+  key: "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight"
+): HTMLElement | null | undefined {
+  const buttons = playlistCardButtons();
+  if (buttons.length === 0) return undefined;
+  const index = active instanceof HTMLButtonElement ? buttons.indexOf(active) : -1;
+  if (index < 0) return undefined;
+
+  const current = buttons[index];
+  const currentRect = current.getBoundingClientRect();
+  const sameRow = (btn: HTMLButtonElement) =>
+    Math.abs(btn.getBoundingClientRect().top - currentRect.top) < 18;
+
+  if (key === "ArrowLeft" || key === "ArrowRight") {
+    const row = buttons.filter(sameRow);
+    const rowIndex = row.indexOf(current);
+    const next = key === "ArrowRight" ? row[rowIndex + 1] : row[rowIndex - 1];
+    return next || current;
+  }
+
+  const downward = key === "ArrowDown";
+  const candidates = buttons.filter((btn) => {
+    const top = btn.getBoundingClientRect().top;
+    return downward ? top > currentRect.top + 10 : top < currentRect.top - 10;
+  });
+  if (candidates.length === 0) return null;
+
+  const center = currentRect.left + currentRect.width / 2;
+  candidates.sort((a, b) => {
+    const aRect = a.getBoundingClientRect();
+    const bRect = b.getBoundingClientRect();
+    const primary = downward ? aRect.top - bRect.top : bRect.top - aRect.top;
+    if (Math.abs(primary) > 12) return primary;
+    const da = Math.abs(aRect.left + aRect.width / 2 - center);
+    const db = Math.abs(bRect.left + bRect.width / 2 - center);
+    return da - db;
+  });
+  return candidates[0];
+}
+
+function isFavoriteFocusTarget(el: Element | null): el is HTMLButtonElement {
+  return (
+    el instanceof HTMLButtonElement &&
+    (el.classList.contains("channel-list-favorite") ||
+      el.classList.contains("channel-icon-favorite") ||
+      el.classList.contains("epg-favorite-btn") ||
+      el.classList.contains("player-control-bar-favorite") ||
+      el.classList.contains("series-picker-favorite"))
+  );
 }
 
 function isSeriesEpisodeSelection(channel: any): boolean {

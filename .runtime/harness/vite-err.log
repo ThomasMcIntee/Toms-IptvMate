@@ -1,0 +1,26 @@
+[33m(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - ESM syntax in a file loaded as CommonJS (vite.config.ts:1:1). Use a `.mjs` extension or set `"type": "module"` in the closest package.json
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.[39m
+node:internal/fs/watchers:321
+    const error = new UVException({
+                  ^
+
+Error: EBUSY: resource busy or locked, watch 'C:\prgtm\Toms-IPTVmate\Toms-IPTVmate\release\win-unpacked\electron.exe'
+    at FSWatcher.<computed> (node:internal/fs/watchers:321:19)
+    at Object.watch (node:fs:2548:36)
+    at createFsWatchInstance (file:///C:/prgtm/Toms-IPTVmate/Toms-IPTVmate/node_modules/vite/dist/node/chunks/node.js:9429:16)
+    at setFsWatchListener (file:///C:/prgtm/Toms-IPTVmate/Toms-IPTVmate/node_modules/vite/dist/node/chunks/node.js:9471:14)
+    at NodeFsHandler._watchWithNodeFs (file:///C:/prgtm/Toms-IPTVmate/Toms-IPTVmate/node_modules/vite/dist/node/chunks/node.js:9586:20)
+    at NodeFsHandler._handleFile (file:///C:/prgtm/Toms-IPTVmate/Toms-IPTVmate/node_modules/vite/dist/node/chunks/node.js:9630:24)
+    at NodeFsHandler._addToNodeFs (file:///C:/prgtm/Toms-IPTVmate/Toms-IPTVmate/node_modules/vite/dist/node/chunks/node.js:9804:26)
+Emitted 'error' event on FSWatcher instance at:
+    at FSWatcher._handleError (file:///C:/prgtm/Toms-IPTVmate/Toms-IPTVmate/node_modules/vite/dist/node/chunks/node.js:10606:146)
+    at NodeFsHandler._addToNodeFs (file:///C:/prgtm/Toms-IPTVmate/Toms-IPTVmate/node_modules/vite/dist/node/chunks/node.js:9809:18) {
+  errno: -4082,
+  syscall: 'watch',
+  code: 'EBUSY',
+  path: 'C:\\prgtm\\Toms-IPTVmate\\Toms-IPTVmate\\release\\win-unpacked\\electron.exe',
+  filename: 'C:\\prgtm\\Toms-IPTVmate\\Toms-IPTVmate\\release\\win-unpacked\\electron.exe'
+}
+
+Node.js v24.16.0

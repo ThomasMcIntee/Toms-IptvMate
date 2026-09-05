@@ -2,9 +2,11 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const { syncAndroidWeb } = require("./sync-android-web.cjs");
 
 const rootDir = path.resolve(__dirname, "..");
 const androidDir = path.join(rootDir, "android");
+const distDir = path.join(rootDir, "dist");
 
 function firstExisting(paths) {
   return paths.find((candidate) => candidate && fs.existsSync(candidate));
@@ -36,6 +38,30 @@ if (!javaHome) {
 
 const sdkPath = androidSdk.replace(/\\/g, "\\\\").replace(/:/g, "\\:");
 fs.writeFileSync(path.join(androidDir, "local.properties"), `sdk.dir=${sdkPath}\n`, "ascii");
+
+if (fs.existsSync(distDir)) {
+  fs.rmSync(distDir, { recursive: true, force: true });
+}
+
+const webBuild = spawnSync("npm", ["run", "build"], {
+  cwd: rootDir,
+  stdio: "inherit",
+  shell: true
+});
+if (webBuild.error) {
+  console.error(webBuild.error.message);
+  process.exit(1);
+}
+if (webBuild.status !== 0) {
+  process.exit(webBuild.status ?? 1);
+}
+
+try {
+  syncAndroidWeb();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
 
 const wrapper = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
 const result = spawnSync(wrapper, ["assembleDebug"], {

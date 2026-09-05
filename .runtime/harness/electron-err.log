@@ -1,0 +1,637 @@
+
+DevTools listening on ws://127.0.0.1:9225/devtools/browser/473df3f5-72a0-421e-aa6f-ab907d403b3d
+(electron) 'console-message' arguments are deprecated and will be removed. Please use Event<WebContentsConsoleMessageEventParams> object instead.
+[34216:0830/111416.839:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/111416.861:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/111416.874:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/111417.025:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/111417.062:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111417.599:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111417.604:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111417.605:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111417.606:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111417.606:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111418.022:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111418.023:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111418.023:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111419.119:INFO:CONSOLE:140] "[webos-debug] cache-load: purged legacy monolithic idb on Capacitor", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111640.968:INFO:CONSOLE:140] "[webos-debug] click: button.opening-btn", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111640.970:INFO:CONSOLE:140] "[webos-debug] cache-load: raw=null", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111640.989:INFO:CONSOLE:140] "[webos-debug] cache-load: Capacitor skip monolithic idb (no split groups yet)", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111645.957:INFO:CONSOLE:140] "[webos-debug] capacitor-ingest: 57092 total -> 46 in memory (TV: 4K| 24/7 ᵁᴴᴰ ³⁸⁴⁰ᴾ), 914 groups", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111646.363:INFO:CONSOLE:140] "[webos-debug] capacitor-ingest: persisted 914 live groups to idb", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111646.445:INFO:CONSOLE:140] "[webos-debug] startup-check: show=false completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111646.445:INFO:CONSOLE:140] "[webos-debug] startup: SKIP - not on opening screen", source: http://127.0.0.1:4000/src/runtimeSetup.ts (140)
+[34216:0830/111931.986:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111931.987:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111931.987:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111931.988:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111931.988:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111931.988:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111931.989:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111932.344:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/111932.352:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/111932.366:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/111932.411:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/111932.461:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103171667 (140)
+[34216:0830/111932.732:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103171667 (140)
+[34216:0830/111932.733:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103171667 (140)
+[34216:0830/111932.734:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103171667 (140)
+[34216:0830/111932.734:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103171667 (140)
+[34216:0830/111932.734:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103171667 (140)
+[34216:0830/111933.138:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103171667 (140)
+[34216:0830/111933.140:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103171667 (140)
+[34216:0830/111933.140:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103171667 (140)
+[34216:0830/111938.893:INFO:CONSOLE:936] "[vite] ReferenceError: loadCapacitorFavoriteIndex is not defined", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/111938.894:INFO:CONSOLE:936] "[vite] Failed to reload /src/ui/RecordingLibrary.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/111938.894:INFO:CONSOLE:936] "[vite] ReferenceError: loadCapacitorFavoriteIndex is not defined", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/111938.895:INFO:CONSOLE:936] "[vite] Failed to reload /src/App.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/111938.895:INFO:CONSOLE:936] "[vite] ReferenceError: loadCapacitorFavoriteIndex is not defined", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/111938.895:INFO:CONSOLE:936] "[vite] Failed to reload /src/ui/PlaylistManager.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/111938.896:INFO:CONSOLE:936] "[vite] ReferenceError: loadCapacitorFavoriteIndex is not defined", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/111938.896:INFO:CONSOLE:936] "[vite] Failed to reload /src/ui/EPGSearch.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/111938.897:INFO:CONSOLE:936] "[vite] ReferenceError: loadCapacitorFavoriteIndex is not defined", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/111938.897:INFO:CONSOLE:936] "[vite] Failed to reload /src/ui/EPGTimelinePanel.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/111938.898:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111938.898:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111938.899:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111938.899:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111938.900:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111938.900:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111938.901:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/111939.205:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/111939.209:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/111939.250:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/111939.267:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/111939.290:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103178586 (140)
+[34216:0830/111939.574:INFO:CONSOLE:5274] "%o
+
+%s
+
+%s
+ ReferenceError: loadCapacitorFavoriteIndex is not defined The above error occurred in one of your React components. React will try to recreate this component tree from scratch using the error boundary you provided, RootErrorBoundary.", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (5274)
+[34216:0830/111939.574:INFO:CONSOLE:21] "[root-error-boundary] ReferenceError: loadCapacitorFavoriteIndex is not defined [object Object]", source: http://127.0.0.1:4000/src/AppBootstrap.tsx?t=1788103178586 (21)
+[34216:0830/112006.526:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112006.526:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112006.723:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/112006.725:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/112006.733:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/112006.776:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/112006.789:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103206519 (140)
+[34216:0830/112007.073:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103206519 (140)
+[34216:0830/112007.075:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103206519 (140)
+[34216:0830/112007.075:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103206519 (140)
+[34216:0830/112007.076:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103206519 (140)
+[34216:0830/112007.077:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103206519 (140)
+[34216:0830/112007.489:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103206519 (140)
+[34216:0830/112007.490:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103206519 (140)
+[34216:0830/112008.478:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103206519 (140)
+[34216:0830/112207.908:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112207.909:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112207.909:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112207.910:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112207.911:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112207.911:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112207.912:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112208.237:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/112208.243:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/112208.254:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/112208.327:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/112208.346:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103327608 (140)
+[34216:0830/112208.638:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103327608 (140)
+[34216:0830/112208.639:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103327608 (140)
+[34216:0830/112208.640:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103327608 (140)
+[34216:0830/112208.641:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103327608 (140)
+[34216:0830/112208.641:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103327608 (140)
+[34216:0830/112209.045:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103327608 (140)
+[34216:0830/112209.046:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103327608 (140)
+[34216:0830/112209.047:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103327608 (140)
+[34216:0830/112210.062:INFO:CONSOLE:936] "[vite] SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/112210.063:INFO:CONSOLE:936] "[vite] Failed to reload /src/ui/EPGTimelinePanel.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/112210.063:INFO:CONSOLE:936] "[vite] SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/112210.064:INFO:CONSOLE:936] "[vite] Failed to reload /src/ui/RecordingLibrary.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/112210.064:INFO:CONSOLE:936] "[vite] SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/112210.065:INFO:CONSOLE:936] "[vite] Failed to reload /src/ui/EPGSearch.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/112210.065:INFO:CONSOLE:936] "[vite] SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/112210.066:INFO:CONSOLE:936] "[vite] Failed to reload /src/ui/PlaylistManager.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/112210.066:INFO:CONSOLE:936] "[vite] SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/112210.066:INFO:CONSOLE:936] "[vite] Failed to reload /src/App.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/112210.067:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112210.067:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112210.068:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112210.068:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112210.069:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112210.069:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112210.070:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112210.222:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/112210.239:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/112210.247:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/112210.291:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/112210.317:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103329729 (140)
+[34216:0830/112210.609:INFO:CONSOLE:5274] "%o
+
+%s
+
+%s
+ SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared The above error occurred in one of your React components. React will try to recreate this component tree from scratch using the error boundary you provided, RootErrorBoundary.", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (5274)
+[34216:0830/112210.610:INFO:CONSOLE:21] "[root-error-boundary] SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared [object Object]", source: http://127.0.0.1:4000/src/AppBootstrap.tsx?t=1788103329729 (21)
+[34216:0830/112238.245:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112238.246:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/112238.486:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/112238.489:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/112238.497:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/112238.535:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/112238.550:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103358236 (140)
+[34216:0830/112238.848:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103358236 (140)
+[34216:0830/112238.850:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103358236 (140)
+[34216:0830/112238.851:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103358236 (140)
+[34216:0830/112238.852:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103358236 (140)
+[34216:0830/112238.852:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103358236 (140)
+[34216:0830/112239.259:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103358236 (140)
+[34216:0830/112239.261:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103358236 (140)
+[34216:0830/112240.244:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103358236 (140)
+[34216:0830/113319.100:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113319.101:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113319.102:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113319.102:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113319.103:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113319.104:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113319.104:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113319.457:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/113319.464:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/113319.465:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/113319.528:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/113319.552:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103998755 (140)
+[34216:0830/113319.831:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103998755 (140)
+[34216:0830/113319.832:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103998755 (140)
+[34216:0830/113319.833:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103998755 (140)
+[34216:0830/113319.834:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103998755 (140)
+[34216:0830/113319.834:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103998755 (140)
+[34216:0830/113320.245:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103998755 (140)
+[34216:0830/113320.246:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103998755 (140)
+[34216:0830/113320.250:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788103998755 (140)
+[34216:0830/113411.476:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113411.477:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113411.477:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113411.477:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113411.478:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113411.478:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113411.479:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113411.828:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/113411.832:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/113411.833:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/113411.879:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/113411.901:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104051155 (140)
+[34216:0830/113412.184:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104051155 (140)
+[34216:0830/113412.185:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104051155 (140)
+[34216:0830/113412.185:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104051155 (140)
+[34216:0830/113412.186:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104051155 (140)
+[34216:0830/113412.187:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104051155 (140)
+[34216:0830/113412.599:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104051155 (140)
+[34216:0830/113412.600:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104051155 (140)
+[34216:0830/113412.604:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104051155 (140)
+[34216:0830/113413.370:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113415.828:INFO:CONSOLE:936] "[vite] SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/113415.828:INFO:CONSOLE:936] "[vite] Failed to reload /src/App.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/113415.829:INFO:CONSOLE:936] "[vite] SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/113415.830:INFO:CONSOLE:936] "[vite] Failed to reload /src/ui/PlaylistManager.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/113415.831:INFO:CONSOLE:936] "[vite] SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/113415.831:INFO:CONSOLE:936] "[vite] Failed to reload /src/ui/EPGSearch.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/113415.832:INFO:CONSOLE:936] "[vite] SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/113415.832:INFO:CONSOLE:936] "[vite] Failed to reload /src/ui/RecordingLibrary.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/113415.833:INFO:CONSOLE:936] "[vite] SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/113415.833:INFO:CONSOLE:936] "[vite] Failed to reload /src/ui/EPGTimelinePanel.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)", source: http://127.0.0.1:4000/@vite/client (936)
+[34216:0830/113415.834:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113415.834:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113415.835:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113415.835:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113415.836:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113415.836:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113415.837:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113415.982:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/113415.998:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/113416.100:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/113416.157:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/113416.179:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104055499 (140)
+[34216:0830/113416.461:INFO:CONSOLE:5274] "%o
+
+%s
+
+%s
+ SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared The above error occurred in one of your React components. React will try to recreate this component tree from scratch using the error boundary you provided, RootErrorBoundary.", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (5274)
+[34216:0830/113416.462:INFO:CONSOLE:21] "[root-error-boundary] SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared [object Object]", source: http://127.0.0.1:4000/src/AppBootstrap.tsx?t=1788104055499 (21)
+[34216:0830/113437.265:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113437.266:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/113437.500:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/113437.535:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/113437.535:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/113437.574:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/113437.594:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/113437.960:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/113437.961:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/113437.962:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/113437.963:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/113437.963:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/113438.380:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/113438.381:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/114523.517:INFO:CONSOLE:1003] "[vite] server connection lost. Polling for restart...", source: http://127.0.0.1:4000/@vite/client (1003)
+[34216:0830/114524.495:WARNING:net\dns\dns_config_service_win.cc:609] Failed to read DnsConfig.
+[34216:0830/114524.902:WARNING:net\dns\dns_config_service_win.cc:609] Failed to read DnsConfig.
+[34216:0830/115018.899:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/115018.904:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/115018.905:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/115018.997:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/115019.044:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/115019.307:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/115019.307:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/115019.308:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/115019.309:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/115019.310:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/115019.709:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/115019.711:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/115019.714:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/115019.716:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788104077258 (140)
+[34216:0830/121052.978:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121052.979:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121052.979:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121052.980:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121052.980:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121052.981:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121052.981:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121053.289:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/121053.293:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/121053.297:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/121053.355:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/121053.376:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106252630 (140)
+[34216:0830/121053.671:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106252630 (140)
+[34216:0830/121053.672:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106252630 (140)
+[34216:0830/121053.673:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106252630 (140)
+[34216:0830/121053.674:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106252630 (140)
+[34216:0830/121053.674:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106252630 (140)
+[34216:0830/121054.075:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106252630 (140)
+[34216:0830/121054.076:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106252630 (140)
+[34216:0830/121054.091:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106252630 (140)
+[34216:0830/121055.138:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121055.139:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121055.139:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121055.139:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121055.140:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121055.140:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121055.140:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/121055.527:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/121055.529:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/121055.548:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/121055.570:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/121055.592:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106254758 (140)
+[34216:0830/121055.899:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106254758 (140)
+[34216:0830/121055.900:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106254758 (140)
+[34216:0830/121055.901:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106254758 (140)
+[34216:0830/121055.901:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106254758 (140)
+[34216:0830/121055.902:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106254758 (140)
+[34216:0830/121056.304:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106254758 (140)
+[34216:0830/121056.305:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106254758 (140)
+[34216:0830/121056.320:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788106254758 (140)
+[34216:0830/123621.269:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123621.270:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123621.271:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123621.271:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123621.272:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123621.272:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123621.273:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123621.670:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/123621.673:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/123621.679:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/123621.741:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/123621.761:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107780931 (140)
+[34216:0830/123622.058:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107780931 (140)
+[34216:0830/123622.060:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107780931 (140)
+[34216:0830/123622.060:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107780931 (140)
+[34216:0830/123622.061:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107780931 (140)
+[34216:0830/123622.062:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107780931 (140)
+[34216:0830/123622.467:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107780931 (140)
+[34216:0830/123622.469:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107780931 (140)
+[34216:0830/123623.430:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123623.431:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123623.432:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123623.432:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123623.433:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123623.434:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123623.434:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123623.785:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/123623.847:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/123623.866:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/123623.909:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/123623.943:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107783064 (140)
+[34216:0830/123624.264:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107783064 (140)
+[34216:0830/123624.266:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107783064 (140)
+[34216:0830/123624.267:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107783064 (140)
+[34216:0830/123624.268:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107783064 (140)
+[34216:0830/123624.269:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107783064 (140)
+[34216:0830/123624.679:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107783064 (140)
+[34216:0830/123624.680:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107783064 (140)
+[34216:0830/123624.684:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107783064 (140)
+[34216:0830/123625.506:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123625.507:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123625.507:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123625.508:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123625.508:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123625.508:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123625.509:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123625.864:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/123625.869:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/123625.881:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/123625.921:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/123625.943:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107785156 (140)
+[34216:0830/123626.239:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107785156 (140)
+[34216:0830/123626.240:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107785156 (140)
+[34216:0830/123626.241:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107785156 (140)
+[34216:0830/123626.241:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107785156 (140)
+[34216:0830/123626.242:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107785156 (140)
+[34216:0830/123626.666:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107785156 (140)
+[34216:0830/123626.667:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107785156 (140)
+[34216:0830/123626.667:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107785156 (140)
+[34216:0830/123627.629:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123627.629:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123627.629:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123627.630:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123627.630:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123627.630:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123627.631:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123627.995:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/123627.997:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/123628.023:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/123628.055:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/123628.076:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107787298 (140)
+[34216:0830/123628.369:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107787298 (140)
+[34216:0830/123628.370:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107787298 (140)
+[34216:0830/123628.370:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107787298 (140)
+[34216:0830/123628.371:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107787298 (140)
+[34216:0830/123628.371:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107787298 (140)
+[34216:0830/123628.785:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107787298 (140)
+[34216:0830/123628.786:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107787298 (140)
+[34216:0830/123629.778:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107787298 (140)
+[34216:0830/123637.257:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123637.257:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123637.258:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123637.258:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123637.259:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123637.259:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123637.260:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123637.621:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/123637.655:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/123637.658:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/123637.710:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/123637.728:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107796923 (140)
+[34216:0830/123638.028:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107796923 (140)
+[34216:0830/123638.029:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107796923 (140)
+[34216:0830/123638.030:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107796923 (140)
+[34216:0830/123638.031:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107796923 (140)
+[34216:0830/123638.031:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107796923 (140)
+[34216:0830/123638.450:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107796923 (140)
+[34216:0830/123638.451:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107796923 (140)
+[34216:0830/123702.749:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123702.749:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123702.750:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123702.750:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123702.751:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123702.751:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123702.751:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123703.117:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/123703.119:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/123703.159:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/123703.182:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/123703.203:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107822381 (140)
+[34216:0830/123703.486:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107822381 (140)
+[34216:0830/123703.488:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107822381 (140)
+[34216:0830/123703.488:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107822381 (140)
+[34216:0830/123703.489:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107822381 (140)
+[34216:0830/123703.490:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107822381 (140)
+[34216:0830/123703.893:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107822381 (140)
+[34216:0830/123703.894:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107822381 (140)
+[34216:0830/123703.894:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107822381 (140)
+[34216:0830/123721.740:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123721.741:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123721.741:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123721.741:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123721.742:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123721.743:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123721.743:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123722.125:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/123722.128:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/123722.155:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/123722.186:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/123722.205:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107841372 (140)
+[34216:0830/123722.499:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107841372 (140)
+[34216:0830/123722.501:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107841372 (140)
+[34216:0830/123722.502:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107841372 (140)
+[34216:0830/123722.502:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107841372 (140)
+[34216:0830/123722.503:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107841372 (140)
+[34216:0830/123722.916:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107841372 (140)
+[34216:0830/123722.917:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107841372 (140)
+[34216:0830/123722.918:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107841372 (140)
+[34216:0830/123723.863:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123723.864:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123723.864:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123723.864:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123723.865:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123723.865:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123723.865:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123724.259:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/123724.261:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/123724.288:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/123724.313:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/123724.341:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107843501 (140)
+[34216:0830/123724.686:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107843501 (140)
+[34216:0830/123724.688:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107843501 (140)
+[34216:0830/123724.688:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107843501 (140)
+[34216:0830/123724.689:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107843501 (140)
+[34216:0830/123724.690:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107843501 (140)
+[34216:0830/123725.106:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107843501 (140)
+[34216:0830/123725.106:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107843501 (140)
+[34216:0830/123725.112:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107843501 (140)
+[34216:0830/123725.970:INFO:CONSOLE:937] "[vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123725.971:INFO:CONSOLE:937] "[vite] hot updated: /src/AppBootstrap.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123725.971:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123725.972:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/PlaylistManager.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123725.972:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGTimelinePanel.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123725.972:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/EPGSearch.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123725.973:INFO:CONSOLE:937] "[vite] hot updated: /src/ui/RecordingLibrary.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123726.342:INFO:CONSOLE:859] "[vite] connecting...", source: http://127.0.0.1:4000/@vite/client (859)
+[34216:0830/123726.344:INFO:CONSOLE:2] "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.", source: node:electron/js2c/renderer_init (2)
+[34216:0830/123726.365:INFO:CONSOLE:968] "[vite] connected.", source: http://127.0.0.1:4000/@vite/client (968)
+[34216:0830/123726.411:INFO:CONSOLE:14336] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (14336)
+[34216:0830/123726.433:INFO:CONSOLE:140] "[webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107845623 (140)
+[34216:0830/123726.719:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107845623 (140)
+[34216:0830/123726.721:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=false login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107845623 (140)
+[34216:0830/123726.721:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107845623 (140)
+[34216:0830/123726.721:INFO:CONSOLE:140] "[webos-debug] React App mounted!", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107845623 (140)
+[34216:0830/123726.722:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107845623 (140)
+[34216:0830/123727.130:INFO:CONSOLE:140] "[webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107845623 (140)
+[34216:0830/123727.132:INFO:CONSOLE:140] "[webos-debug] startup-check: show=true completed=true login=false access=null inflight=false", source: http://127.0.0.1:4000/src/runtimeSetup.ts?t=1788107845623 (140)
+[34216:0830/123741.385:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123743.496:INFO:CONSOLE:937] "[vite] hot updated: /src/App.tsx", source: http://127.0.0.1:4000/@vite/client (937)
+[34216:0830/123743.517:INFO:CONSOLE:4197] "The final argument passed to %s changed size between renders. The order and size of this array must remain constant.
+
+Previous: %s
+Incoming: %s useEffect [Favorites, live] [Favorites, live, true, false]", source: http://127.0.0.1:4000/node_modules/.vite/deps/react-dom_client.js?v=0dca93f7 (4197)

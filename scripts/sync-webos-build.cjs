@@ -1,5 +1,7 @@
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
+const { verifyIndexAssets } = require("./sync-android-web.cjs");
 
 const root = process.cwd();
 const distDir = path.join(root, "dist");
@@ -32,10 +34,43 @@ function copyDirContents(sourceDir, targetDir) {
   }
 }
 
+function collectLanRelayOrigins() {
+  const ips = [];
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const net of ifaces[name] || []) {
+      if (net.family !== "IPv4" && net.family !== 4) continue;
+      if (net.internal) continue;
+      const ip = String(net.address || "");
+      if (!ip || ip.startsWith("127.") || ip.startsWith("169.254.")) {
+        continue;
+      }
+      // Skip Docker / WSL / Hyper-V virtual NICs (172.16/12). The simulator
+      // hits those as Host: 172.x and Vite returns 403; the TV cannot use them.
+      const octets = ip.split(".").map((part) => Number(part));
+      if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) {
+        continue;
+      }
+      ips.push(ip);
+    }
+  }
+  ips.sort((a, b) => {
+    const rank = (ip) => (ip.startsWith("192.168.") ? 0 : ip.startsWith("10.") ? 1 : 2);
+    return rank(a) - rank(b) || a.localeCompare(b);
+  });
+  const origins = [];
+  for (const ip of ips) {
+    origins.push(`http://${ip}:5173`);
+    origins.push(`http://${ip}:4173`);
+  }
+  return origins;
+}
+
 function syncWebOsBundle() {
   ensureExists(distDir, "dist directory");
   ensureExists(distAssetsDir, "dist assets directory");
   ensureExists(webosDir, "webos directory");
+  verifyIndexAssets(distDir, "dist");
 
   copyDirContents(distAssetsDir, webosAssetsDir);
 
@@ -47,7 +82,14 @@ function syncWebOsBundle() {
 
   // Inject webOSTVjs SDK before the closing </head> tag.
   // This library is required for proper remote control handling on webOS TVs.
+  const relayOrigins = collectLanRelayOrigins();
+  const relayPrimary = relayOrigins[0] || "";
+  const relayJson = JSON.stringify(relayOrigins);
   const webOsScript = `
+    <script type="text/javascript">
+      window.__IPTV_RELAY_ORIGIN__ = ${JSON.stringify(relayPrimary)};
+      window.__IPTV_RELAY_CANDIDATES__ = ${relayJson};
+    </script>
     <script type="text/javascript" src="webOSTVjs-1.2.4/webOSTV.js"></script>
     <script type="text/javascript" src="webOSTVjs-1.2.4/webOSTV-dev.js"></script>
     <script type="text/javascript">
@@ -74,7 +116,11 @@ function syncWebOsBundle() {
   const webosIndex = path.join(webosDir, "index.html");
   fs.writeFileSync(webosIndex, indexHtml, "utf8");
 
-  console.log("Synced dist bundle to webos/ (index.html + assets + webOS SDK injection).");
+  console.log(
+    relayPrimary
+      ? `Synced dist bundle to webos/ (index.html + assets + webOS SDK injection). PC relay: ${relayOrigins.join(", ")}`
+      : "Synced dist bundle to webos/ (index.html + assets + webOS SDK injection). No LAN IP found for PC relay."
+  );
 }
 
 try {

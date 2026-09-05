@@ -30,7 +30,8 @@ export function PanelsHost({
   onPlaylistAdded,
   activePlaylistId,
   onPlaylistsChanged,
-  onExitToMainMenu
+  onExitToMainMenu,
+  contentMode = "tv"
 }: {
   // This host wires side panels without owning their playback state.
   activePanel: string | null;
@@ -45,6 +46,7 @@ export function PanelsHost({
   activePlaylistId: string;
   onPlaylistsChanged?: () => void;
   onExitToMainMenu: () => void;
+  contentMode?: "tv" | "movies" | "series";
 }) {
   return (
     <>
@@ -71,6 +73,7 @@ export function PanelsHost({
         onPlaylistLoadedWithId={onPlaylistLoadedWithId}
         activePlaylistId={activePlaylistId}
         onOpenAddPlaylist={() => setActivePanel("playlist")}
+        contentMode={contentMode}
       />
       <RecordingPlayback visible={activePanel === "recordingPlayback"} />
       <EPGTimelinePanel key={`timeline-${visibilityVersion}`} visible={activePanel === "timeline"} channels={visibleTvGuideChannels} />

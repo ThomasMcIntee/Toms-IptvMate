@@ -14,8 +14,6 @@ import { BrowserPlayerEngine } from "./engines/BrowserPlayerEngine";
 export function createPlayerEngine(): IPlayerEngine {
   const platform = detectPlatformRuntime();
 
-  console.log(`[player-factory] Creating engine for platform: ${platform}`);
-
   switch (platform) {
     case "webos":
       return new WebOSPlayerEngine();

@@ -24,15 +24,29 @@ export class WebOSPlayerEngine implements IPlayerEngine {
     this.destroyHls();
     this.resetVideoElement();
 
-    const isRealManifest = this.isLikelyHlsManifestUrl(url) || url.startsWith("blob:");
-    const canPlayNativeHls = this.videoEl.canPlayType("application/vnd.apple.mpegurl");
+    // Never feed blob:file:// URLs to webOS. Native FFmpeg cannot open them,
+    // and HLS.js MediaSource blobs fail the same way.
+    if (url.startsWith("blob:")) {
+      this.emitError("webOS cannot play blob-backed live sources.");
+      return;
+    }
 
-    if (isRealManifest && canPlayNativeHls) {
-      this.playNativeHls(url, isStaleRequest);
+    let playableUrl = url;
+    if (contentType === "live" && /\.ts(?:\?|$)/i.test(playableUrl)) {
+      playableUrl = playableUrl.replace(/\.ts(?=\?|$)/i, ".m3u8");
+    }
+
+    const isRealManifest = this.isLikelyHlsManifestUrl(playableUrl);
+
+    if (isRealManifest || contentType === "live") {
+      if (!this.isLikelyHlsManifestUrl(playableUrl) && /\.ts(?:\?|$)/i.test(playableUrl) === false) {
+        playableUrl = playableUrl.replace(/(\/live\/[^/]+\/[^/]+\/[^/?#]+)(?=\?|$)/i, "$1.m3u8");
+      }
+      this.playNativeHls(playableUrl, isStaleRequest);
     } else if (Hls.isSupported()) {
-      this.playWithHlsJs(url, isStaleRequest);
+      this.playWithHlsJs(playableUrl, isStaleRequest);
     } else {
-      this.playDirect(url, isStaleRequest);
+      this.playDirect(playableUrl, isStaleRequest);
     }
   }
 
@@ -50,9 +64,28 @@ export class WebOSPlayerEngine implements IPlayerEngine {
   private playNativeHls(url: string, isStaleRequest: () => boolean): void {
     if (!this.videoEl) return;
     let finalUrl = url.startsWith("https://") ? url.replace("https://", "http://") : url;
-    
-    this.logDebug(`PLAYER: native HLS mode - url=${finalUrl.substring(0, 80)}`);
+
+    while (this.videoEl.firstChild) {
+      this.videoEl.removeChild(this.videoEl.firstChild);
+    }
+    const mediaOption = encodeURIComponent(JSON.stringify({
+      mediaTransportType: "HLS",
+      option: { adaptiveStreaming: { seamlessPlay: true } }
+    }));
+    const source = document.createElement("source");
+    source.src = finalUrl;
+    source.type = `application/x-mpegURL;mediaOption=${mediaOption}`;
+    this.videoEl.appendChild(source);
+    this.videoEl.setAttribute("preload", "auto");
+    try {
+      (this.videoEl as HTMLVideoElement & { mediaOption?: string }).mediaOption = JSON.stringify({
+        mediaTransportType: "HLS"
+      });
+    } catch {
+      // ignore
+    }
     this.videoEl.src = finalUrl;
+    this.videoEl.load();
     
     this.videoEl.onerror = () => {
       if (isStaleRequest()) return;
@@ -112,6 +145,9 @@ export class WebOSPlayerEngine implements IPlayerEngine {
       try { URL.revokeObjectURL(this.videoEl.src); } catch { /* ignore */ }
     }
     this.videoEl.removeAttribute("src");
+    while (this.videoEl.firstChild) {
+      this.videoEl.removeChild(this.videoEl.firstChild);
+    }
     this.videoEl.load();
   }
 
@@ -126,11 +162,6 @@ export class WebOSPlayerEngine implements IPlayerEngine {
 
   private isLikelyHlsManifestUrl(url: string): boolean {
     return /\.m3u8(?:\?|$)/i.test(url);
-  }
-
-  private logDebug(message: string): void {
-    const debugLog = (window as any).webosDebugLog;
-    if (debugLog) debugLog(message);
   }
 
   private emitError(message: string): void {
