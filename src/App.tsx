@@ -85,15 +85,16 @@ import {
 import { loadRecordings } from "./core/recordingEngine";
 import MainMenuScreen from "./ui/MainMenuScreen";
 import { loadChannelsForPlaylist } from "./core/loaders/playlistLoader";
-import { loadXtream, loadXtreamSeriesEpisodesFromChannel, loadXtreamVodInfoFromChannel, type XtreamVodInfo } from "./core/loaders/xtreamLoader";
+import { loadXtream, loadXtreamSeriesBundleFromChannel, loadXtreamSeriesEpisodesFromChannel, loadXtreamVodInfoFromChannel, type XtreamSeriesInfo, type XtreamVodInfo } from "./core/loaders/xtreamLoader";
 import { loadXtreamEPGForStream } from "./core/loaders/xtreamEPG";
 import SeriesEpisodePicker from "./ui/SeriesEpisodePicker";
+import SeriesDetailsScreen from "./ui/SeriesDetailsScreen";
 import MovieDetailsScreen from "./ui/MovieDetailsScreen";
 
 const ROOT_GROUP = "Favorites";
-const MAX_SERIES_SEARCH_RESULTS = 120;
-const MAX_SERIES_SEARCH_SCAN = 40000;
-const SERIES_SEARCH_MIN_TERM_LENGTH = 3;
+const MAX_SERIES_SEARCH_RESULTS = 800;
+const MAX_WEAK_SEARCH_RESULTS = 240;
+const SERIES_SEARCH_MIN_TERM_LENGTH = 1;
 const SERIES_LAST_WATCH_KEY = "iptvmate_series_last_watch";
 const SERIES_SEARCH_KEY_ROWS = [
   ["A", "B", "C", "D", "E", "F", "G", "H", "I"],
@@ -214,6 +215,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   const [seriesPickerTitle, setSeriesPickerTitle] = useState("");
   const [seriesPickerEpisodes, setSeriesPickerEpisodes] = useState<any[]>([]);
   const [seriesPickerSourceChannel, setSeriesPickerSourceChannel] = useState<any | null>(null);
+  const [isSeriesDetailsVisible, setIsSeriesDetailsVisible] = useState(false);
+  const [seriesDetailsChannel, setSeriesDetailsChannel] = useState<any | null>(null);
+  const [seriesDetailsInfo, setSeriesDetailsInfo] = useState<XtreamSeriesInfo | null>(null);
+  const [seriesDetailsLoading, setSeriesDetailsLoading] = useState(false);
+  const seriesDetailsTokenRef = useRef(0);
   const [isSeriesSearchComposerOpen, setIsSeriesSearchComposerOpen] = useState(false);
   const [seriesMainSearchDraft, setSeriesMainSearchDraft] = useState("");
   const [seriesMainSearchDebouncedTerm, setSeriesMainSearchDebouncedTerm] = useState("");
@@ -256,7 +262,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   const isPlaylistManagerSeriesMode = isPlaylistManagerPage && contentMode === "series";
   const isMainMoviesScreen = !showOpeningScreen && isMoviesPage;
   const isMainSeriesScreen =
-    !showOpeningScreen && isSeriesPage && !isSeriesPickerVisible;
+    !showOpeningScreen && isSeriesPage && !isSeriesPickerVisible && !isSeriesDetailsVisible;
   const isEpgSearchPanelOpen = activePanel === "epgSearch";
   const isContentIconsView = isMoviesPage || isSeriesPage || isLiveTvView;
   const isPlaylistInputPanelOpen = activePanel === "playlist";
@@ -282,6 +288,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     !isEpgSearchPanelOpen &&
     (!!currentChannel || hasSelectedLiveChannel);
   const useLivePreviewShell = shouldRenderMainVideo && contentPage === "live";
+  const useVodPlaybackShell = shouldRenderMainVideo && isVodPlaybackFullscreen;
   const isLiveChannelPlaying =
     !showOpeningScreen &&
     !!currentChannel &&
@@ -291,6 +298,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   const suppressPlayerEventsRef = useRef(false);
   const seriesLastWatchRef = useRef<Record<string, any>>(loadSeriesLastWatchMap());
   const seriesPickerSourceChannelRef = useRef<any | null>(null);
+  const seriesPickerEpisodesRef = useRef<any[]>([]);
+  seriesPickerEpisodesRef.current = seriesPickerEpisodes;
   const lastPlayRequestRef = useRef<{ id: string | null; url: string | null; at: number }>({
     id: null,
     url: null,
@@ -699,14 +708,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, [channelsForScope, contentChannels, contentMode, activeGroup, categoryRefreshTick, favoritesRefreshTick, lastWatchedRefreshTick]);
   const searchableSeriesChannels = useMemo(() => {
     if (!isSeriesPage) return [] as any[];
-    return contentChannels.filter((channel) => {
-      if (!isChannelRecord(channel)) return false;
-      const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
-      return isGroupVisible(groupName);
-    });
+    return contentChannels.filter((channel) => isUnhiddenContentChannel(channel));
   }, [isSeriesPage, contentChannels, categoryRefreshTick]);
   const searchableSeriesIndex = useMemo(() => {
-    return searchableSeriesChannels.slice(0, MAX_SERIES_SEARCH_SCAN).map((channel, index) => {
+    return searchableSeriesChannels.map((channel, index) => {
       const name = String(channel?.name || "").toLowerCase();
       const group = String(channel?.group || "").toLowerCase();
       return {
@@ -720,10 +725,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     if (isMainMoviesScreen) {
       const term = String(moviesMainSearchTerm || "").trim().toLowerCase();
       const movies = contentChannels.filter((channel) => isChannelRecord(channel));
-      const visibleMovies = movies.filter((channel) => {
-        const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
-        return isGroupVisible(groupName);
-      });
+      const visibleMovies = movies.filter((channel) => isUnhiddenContentChannel(channel));
+
+      if (term) {
+        return rankCatalogSearchMatches(visibleMovies, term, moviesSortDirection);
+      }
 
       const scopedMovies =
         activeGroup === ROOT_GROUP
@@ -735,19 +741,18 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
               return groupName === activeGroup;
             });
 
-      const filteredMovies = !term
-        ? scopedMovies
-        : scopedMovies.filter((channel) => {
-        const name = String(channel?.name || "").toLowerCase();
-        const group = String(channel?.group || "").toLowerCase();
-        return `${name} ${group}`.includes(term);
-      });
-
-      if (activeGroup === LAST_WATCHED_GROUP) return filteredMovies;
-      return sortChannelsByName(filteredMovies, moviesSortDirection);
+      if (activeGroup === LAST_WATCHED_GROUP) return scopedMovies;
+      return sortChannelsByName(scopedMovies, moviesSortDirection);
     }
 
     if (!isSeriesPage) return filteredChannels;
+
+    const term = String(seriesMainSearchDebouncedTerm || "").trim().toLowerCase();
+    if (term) {
+      if (term.length < SERIES_SEARCH_MIN_TERM_LENGTH) return [];
+      return (seriesMainSearchResults ?? []).filter((channel) => isUnhiddenContentChannel(channel));
+    }
+
     if (activeGroup === LAST_WATCHED_GROUP) {
       return filteredChannels;
     }
@@ -759,24 +764,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     // visibility can be toggled back on; the public series view hides them.
     const visibleSeriesChannels = isPlaylistManagerPage
       ? filteredChannels.filter((channel) => isChannelRecord(channel))
-      : filteredChannels.filter((channel) => {
-          if (!isChannelRecord(channel)) return false;
-          const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
-          return isGroupVisible(groupName);
-        });
-    const term = String(seriesMainSearchDebouncedTerm || "").trim().toLowerCase();
-    if (!term) return sortChannelsByName(visibleSeriesChannels, seriesSortDirection);
-    if (term.length < SERIES_SEARCH_MIN_TERM_LENGTH) return [];
-
-    return sortChannelsByName(
-      (seriesMainSearchResults ?? []).filter((channel) => {
-        if (!isChannelRecord(channel)) return false;
-        if (isPlaylistManagerPage) return true;
-        const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
-        return isGroupVisible(groupName);
-      }),
-      seriesSortDirection
-    );
+      : filteredChannels.filter((channel) => isUnhiddenContentChannel(channel));
+    return sortChannelsByName(visibleSeriesChannels, seriesSortDirection);
   }, [
     isMainMoviesScreen,
     moviesMainSearchTerm,
@@ -797,6 +786,19 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
   function commitSeriesMainSearch(nextTerm: string) {
     setSeriesMainSearchDebouncedTerm(nextTerm);
+  }
+
+  function clearCatalogSearch() {
+    setMoviesMainSearchTerm("");
+    setSeriesMainSearchDraft("");
+    setSeriesMainSearchDebouncedTerm("");
+    setSeriesMainSearchResults(null);
+    setIsSeriesSearchComposerOpen(false);
+  }
+
+  function selectBrowseGroup(group: string) {
+    clearCatalogSearch();
+    setActiveGroup(group);
   }
 
   function appendSeriesSearchDraft(fragment: string) {
@@ -888,7 +890,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     setActivePanel(null);
     if (returnToSeriesPicker) {
       setSeriesPickerFocusEpisodeId(String(playing?.id || "") || null);
-      setIsSeriesPickerVisible(true);
+      if (seriesDetailsChannel || seriesPickerSourceChannel) {
+        setIsSeriesDetailsVisible(true);
+      }
+      setIsSeriesPickerVisible(false);
     } else if (returnToMovieDetails) {
       setIsMovieDetailsVisible(true);
     }
@@ -980,7 +985,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       setSeriesPickerEpisodes([]);
       setSeriesPickerTitle("");
     }
-  }, [isSeriesPage, isPlaylistManagerSeriesMode, isSeriesPickerVisible]);
+    if (!inSeriesContext && isSeriesDetailsVisible) {
+      setIsSeriesDetailsVisible(false);
+      setSeriesDetailsLoading(false);
+    }
+  }, [isSeriesPage, isPlaylistManagerSeriesMode, isSeriesPickerVisible, isSeriesDetailsVisible]);
 
   useEffect(() => {
     const stayingOnMovieBrowse =
@@ -999,10 +1008,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, [isSeriesPage]);
 
   useEffect(() => {
-    if (isSeriesPickerVisible) {
+    if (isSeriesPickerVisible || isSeriesDetailsVisible) {
       setIsSeriesSearchComposerOpen(false);
     }
-  }, [isSeriesPickerVisible]);
+  }, [isSeriesPickerVisible, isSeriesDetailsVisible]);
 
   useEffect(() => {
     if (isMainMoviesScreen) return;
@@ -1025,19 +1034,13 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       return;
     }
 
-    const matches: any[] = [];
-    for (let index = 0; index < searchableSeriesIndex.length; index += 1) {
-      const entry = searchableSeriesIndex[index];
-      if (entry.haystack.includes(term)) {
-        matches.push(entry.channel);
-        if (matches.length >= MAX_SERIES_SEARCH_RESULTS) {
-          break;
-        }
-      }
-    }
-
-    setSeriesMainSearchResults(matches);
-  }, [isSeriesPage, seriesMainSearchDebouncedTerm, searchableSeriesIndex]);
+    const ranked = rankCatalogSearchMatches(
+      searchableSeriesIndex.map((entry) => entry.channel),
+      term,
+      seriesSortDirection
+    );
+    setSeriesMainSearchResults(ranked);
+  }, [isSeriesPage, seriesMainSearchDebouncedTerm, searchableSeriesIndex, seriesSortDirection]);
 
   useEffect(() => {
     initPlayerEngine();
@@ -2016,12 +2019,17 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
       const token = ++seriesAutoAdvanceTokenRef.current;
       const continueToNextEpisode = async () => {
-        let candidates = Array.isArray(seriesPickerEpisodes) ? seriesPickerEpisodes : [];
+        let candidates = Array.isArray(seriesPickerEpisodesRef.current) ? seriesPickerEpisodesRef.current : [];
         let nextEpisode = findNextSeriesEpisode(activeChannel, candidates);
 
         if (!nextEpisode) {
           try {
-            candidates = await loadXtreamSeriesEpisodesFromChannel(activeChannel);
+            const source = seriesPickerSourceChannelRef.current || activeChannel;
+            candidates = await loadXtreamSeriesEpisodesFromChannel(source);
+            if (candidates.length > 0) {
+              seriesPickerEpisodesRef.current = candidates;
+              setSeriesPickerEpisodes(candidates);
+            }
           } catch {
             candidates = [];
           }
@@ -2036,8 +2044,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
         if (!nextEpisode) return;
 
-        rememberSeriesEpisode(activeChannel, nextEpisode);
-        playChannel(nextEpisode, { skipResumePrompt: true });
+        rememberSeriesEpisode(seriesPickerSourceChannelRef.current || activeChannel, nextEpisode);
+        playChannel(nextEpisode, { skipResumePrompt: true, resumeAt: 0 });
       };
 
       void continueToNextEpisode();
@@ -2047,7 +2055,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     return () => {
       window.removeEventListener("playerEnded", onPlayerEnded);
     };
-  }, [seriesPickerEpisodes]);
+  }, []);
 
   useEffect(() => {
     const channel = currentChannel;
@@ -2082,6 +2090,19 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, [currentChannel?.id, currentChannel?.url]);
 
   useEffect(() => {
+    if (!isVodPlaybackFullscreen) return;
+    const player = document.getElementById("player-main");
+    if (!player) return;
+    const refresh = () => refreshPlayerUi();
+    player.addEventListener("play", refresh);
+    player.addEventListener("pause", refresh);
+    return () => {
+      player.removeEventListener("play", refresh);
+      player.removeEventListener("pause", refresh);
+    };
+  }, [isVodPlaybackFullscreen, currentChannel?.id]);
+
+  useEffect(() => {
     // Helper to handle Back navigation (shared by webosBackKey and keydown)
     const handleBackNavigation = () => {
       const now = Date.now();
@@ -2099,8 +2120,23 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return true;
       }
 
+      if (isSeriesDetailsVisible) {
+        setIsSeriesDetailsVisible(false);
+        return true;
+      }
+
       if (isMovieDetailsVisible) {
         setIsMovieDetailsVisible(false);
+        return true;
+      }
+
+      if (isSeriesSearchComposerOpen) {
+        setIsSeriesSearchComposerOpen(false);
+        return true;
+      }
+
+      if (String(seriesMainSearchDebouncedTerm || "").trim() || String(moviesMainSearchTerm || "").trim()) {
+        clearCatalogSearch();
         return true;
       }
 
@@ -2250,6 +2286,26 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
       if (isVodPlaybackFullscreen) {
         window.dispatchEvent(new Event("playerRevealControls"));
+        const barButtons = Array.from(
+          document.querySelectorAll<HTMLButtonElement>(".vod-playback-shell .player-control-bar-btn")
+        ).filter((btn) => btn.tabIndex !== -1);
+        const activeBtn = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
+        const barIndex = activeBtn ? barButtons.indexOf(activeBtn) : -1;
+        if (navKey === "ArrowDown" || navKey === "ArrowUp") {
+          e.preventDefault();
+          (barButtons[0] || null)?.focus();
+          return;
+        }
+        if (barIndex >= 0 && navKey === "ArrowLeft") {
+          e.preventDefault();
+          barButtons[Math.max(0, barIndex - 1)]?.focus();
+          return;
+        }
+        if (barIndex >= 0 && navKey === "ArrowRight") {
+          e.preventDefault();
+          barButtons[Math.min(barButtons.length - 1, barIndex + 1)]?.focus();
+          return;
+        }
         if (navKey === "ArrowLeft") {
           e.preventDefault();
           seekPlayback(-15);
@@ -2258,6 +2314,15 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         if (navKey === "ArrowRight") {
           e.preventDefault();
           seekPlayback(15);
+          return;
+        }
+        if (navKey === "Enter") {
+          e.preventDefault();
+          if (barIndex >= 0 && activeBtn) {
+            activeBtn.click();
+          } else {
+            togglePlayPause();
+          }
           return;
         }
       }
@@ -2301,7 +2366,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       document.removeEventListener("keyboardStateChange", onKeyboardStateChange);
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [activePanel, isVodPlaybackFullscreen, currentChannel, isSeriesPickerVisible, isMovieDetailsVisible, vodResumePrompt, contentPage, isEffectiveLiveFullscreen, showOpeningScreen, hasPlaylists, seriesPickerSourceChannel, movieDetailsChannel]);
+  }, [activePanel, isVodPlaybackFullscreen, currentChannel, isSeriesPickerVisible, isSeriesDetailsVisible, isMovieDetailsVisible, vodResumePrompt, contentPage, isEffectiveLiveFullscreen, showOpeningScreen, hasPlaylists, seriesPickerSourceChannel, seriesDetailsChannel, movieDetailsChannel]);
 
   useEffect(() => {
     const onNativeCommand = (event: Event) => {
@@ -2359,6 +2424,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (isSeriesPickerVisible) return;
+      if (isSeriesDetailsVisible) return;
       if (isMovieDetailsVisible) return;
       if (vodResumePrompt) return;
       if (isTextEntryTarget(e.target)) return;
@@ -2657,11 +2723,12 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isContentIconsView, isSeriesPickerVisible, isMovieDetailsVisible, vodResumePrompt, filteredChannels.length]);
+  }, [isContentIconsView, isSeriesPickerVisible, isSeriesDetailsVisible, isMovieDetailsVisible, vodResumePrompt, filteredChannels.length]);
 
   useEffect(() => {
     if (!isMainMoviesScreen && !isMainSeriesScreen && !isLiveTvView) return;
     if (isSeriesPickerVisible) return;
+    if (isSeriesDetailsVisible) return;
     if (isMovieDetailsVisible) return;
     if (vodResumePrompt) return;
 
@@ -2680,7 +2747,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     }, 80);
 
     return () => window.clearTimeout(timer);
-  }, [isMainMoviesScreen, isMainSeriesScreen, isLiveTvView, isSeriesPickerVisible, isMovieDetailsVisible, vodResumePrompt, contentPage, channelUpdateTick, posterRestoreId]);
+  }, [isMainMoviesScreen, isMainSeriesScreen, isLiveTvView, isSeriesPickerVisible, isSeriesDetailsVisible, isMovieDetailsVisible, vodResumePrompt, contentPage, channelUpdateTick, posterRestoreId]);
 
   useEffect(() => {
     if (showOpeningScreen || contentPage !== "live" || activePanel !== null) return;
@@ -3044,7 +3111,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     const channelId = String(channel.id || "");
     setChannelFavoriteRecord(channel, !isFavoriteChannelRecord(channel));
     window.setTimeout(() => {
-      if (isMovieDetailsVisible) {
+      if (isMovieDetailsVisible || isSeriesDetailsVisible) {
         document.querySelector<HTMLButtonElement>(".movie-details-favorite")?.focus();
         return;
       }
@@ -3098,28 +3165,91 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     return /^series_\d+$/i.test(id) && /\/series\/[^/]+\/[^/]+\/\d+\.[^/?#]+/i.test(url);
   }
 
-  async function openSeriesEpisodePicker(seriesChannel: any) {
-    setPosterRestoreId(String(seriesChannel?.id || "") || null);
-    setSeriesPickerFocusEpisodeId(null);
+  async function openSeriesEpisodePicker(seriesChannel: any, options?: { reuseLoaded?: boolean }) {
+    const seriesId = String(seriesChannel?.id || "");
+    const alreadyLoaded =
+      !!options?.reuseLoaded &&
+      String(seriesPickerSourceChannel?.id || "") === seriesId &&
+      (seriesPickerEpisodes.length > 0 || seriesPickerLoading || !!seriesPickerError);
+
+    setPosterRestoreId(seriesId || null);
+    if (!options?.reuseLoaded) {
+      setSeriesPickerFocusEpisodeId(null);
+    }
     setSeriesPickerTitle(String(seriesChannel?.name || "Series"));
-    setSeriesPickerEpisodes([]);
-    setSeriesPickerError(null);
-    setSeriesPickerLoading(true);
     seriesPickerSourceChannelRef.current = seriesChannel;
     setSeriesPickerSourceChannel(seriesChannel);
     setIsSeriesPickerVisible(true);
 
-    try {
-      const episodes = await loadXtreamSeriesEpisodesFromChannel(seriesChannel);
-      setSeriesPickerEpisodes(episodes);
+    if (alreadyLoaded) return;
 
-      if (episodes.length === 0) {
+    setSeriesPickerEpisodes([]);
+    setSeriesPickerError(null);
+    setSeriesPickerLoading(true);
+
+    try {
+      const bundle = await loadXtreamSeriesBundleFromChannel(seriesChannel);
+      setSeriesPickerEpisodes(bundle.episodes);
+      if (String(seriesDetailsChannel?.id || "") === seriesId || !seriesDetailsChannel) {
+        setSeriesDetailsInfo(bundle.info);
+      }
+
+      if (bundle.episodes.length === 0) {
         setSeriesPickerError("No episodes found for this series.");
       }
     } catch {
       setSeriesPickerError("Could not load episodes for this series.");
     } finally {
       setSeriesPickerLoading(false);
+    }
+  }
+
+  async function openSeriesDetails(seriesChannel: any) {
+    setPosterRestoreId(String(seriesChannel?.id || "") || null);
+    setSeriesDetailsChannel(seriesChannel);
+    setSeriesDetailsInfo(null);
+    setSeriesDetailsLoading(true);
+    setIsSeriesDetailsVisible(true);
+    seriesPickerSourceChannelRef.current = seriesChannel;
+    setSeriesPickerSourceChannel(seriesChannel);
+    setSeriesPickerTitle(String(seriesChannel?.name || "Series"));
+    setSeriesPickerEpisodes([]);
+    setSeriesPickerError(null);
+    setSeriesPickerLoading(true);
+    const last = (() => {
+      const seriesId = getSeriesRootId(seriesChannel);
+      return seriesId ? seriesLastWatchRef.current[seriesId] : null;
+    })();
+    setSeriesPickerFocusEpisodeId(String(last?.id || "") || null);
+    const token = ++seriesDetailsTokenRef.current;
+
+    try {
+      const bundle = await loadXtreamSeriesBundleFromChannel(seriesChannel);
+      if (token !== seriesDetailsTokenRef.current) return;
+      setSeriesDetailsInfo(bundle.info);
+      setSeriesPickerEpisodes(bundle.episodes);
+      const lastMatch = last
+        ? bundle.episodes.find(
+            (episode) =>
+              String(episode?.id || "") === String(last.id || "") ||
+              String(episode?.url || "") === String(last.url || "")
+          )
+        : null;
+      if (lastMatch) {
+        setSeriesPickerFocusEpisodeId(String(lastMatch.id || "") || null);
+      }
+      if (bundle.episodes.length === 0) {
+        setSeriesPickerError("No episodes found for this series.");
+      }
+    } catch {
+      if (token !== seriesDetailsTokenRef.current) return;
+      setSeriesDetailsInfo(null);
+      setSeriesPickerError("Could not load episodes for this series.");
+    } finally {
+      if (token === seriesDetailsTokenRef.current) {
+        setSeriesDetailsLoading(false);
+        setSeriesPickerLoading(false);
+      }
     }
   }
 
@@ -3185,6 +3315,41 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     saveSeriesLastWatchMap(seriesLastWatchRef.current);
   }
 
+  function getLastWatchedSeriesEpisode(seriesChannel: any = seriesDetailsChannel || seriesPickerSourceChannel) {
+    const episodes = Array.isArray(seriesPickerEpisodes) ? seriesPickerEpisodes : [];
+    if (episodes.length === 0) return null;
+    const seriesId = getSeriesRootId(seriesChannel);
+    const last = seriesId ? seriesLastWatchRef.current[seriesId] : null;
+    if (!last) return null;
+    const lastId = String(last?.id || "");
+    const lastUrl = String(last?.url || "");
+    return (
+      (lastId ? episodes.find((episode) => String(episode?.id || "") === lastId) : null) ||
+      (lastUrl ? episodes.find((episode) => String(episode?.url || "") === lastUrl) : null) ||
+      null
+    );
+  }
+
+  function seriesDetailsPlayLabel() {
+    const lastEpisode = getLastWatchedSeriesEpisode();
+    if (!lastEpisode) return "Play";
+    const season = lastEpisode?.episodeInfo?.season;
+    const number = lastEpisode?.episodeInfo?.episode;
+    if (typeof season === "number" && typeof number === "number") {
+      return `Resume S${String(season).padStart(2, "0")}E${String(number).padStart(2, "0")}`;
+    }
+    return "Resume";
+  }
+
+  function playPreferredSeriesEpisode() {
+    const episodes = Array.isArray(seriesPickerEpisodes) ? seriesPickerEpisodes : [];
+    if (episodes.length === 0) return;
+    const episode = getLastWatchedSeriesEpisode() || episodes[0];
+    rememberSeriesEpisode(seriesDetailsChannel || seriesPickerSourceChannel, episode);
+    setSeriesPickerFocusEpisodeId(String(episode?.id || "") || null);
+    playChannel(episode);
+  }
+
   function playChannel(ch: any, options?: { forceRestart?: boolean; skipResumePrompt?: boolean; resumeAt?: number; skipMovieDetails?: boolean }) {
     if (showOpeningScreen) {
       // Ignore tune attempts until the user leaves the opening screen.
@@ -3231,7 +3396,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     }
 
     if (isTopLevelSeriesSelection(ch)) {
-      void openSeriesEpisodePicker(ch);
+      void openSeriesDetails(ch);
       return;
     }
 
@@ -3300,6 +3465,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
     setCurrentChannel(ch);
     setIsSeriesPickerVisible(false);
+    setIsSeriesDetailsVisible(false);
     setIsMovieDetailsVisible(false);
     setActivePanel(null);
     if (isLiveSelection) {
@@ -3313,6 +3479,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         recordLastWatched("movies", ch);
       } else if (matchesContentMode(ch, "series")) {
         recordLastWatched("series", ch, seriesPickerSourceChannelRef.current);
+        if (isSeriesEpisodeSelection(ch)) {
+          rememberSeriesEpisode(seriesPickerSourceChannelRef.current || seriesDetailsChannel || ch, ch);
+          setSeriesPickerFocusEpisodeId(String(ch?.id || "") || null);
+        }
       }
     }
 
@@ -4393,12 +4563,41 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             )}
         </div>
       )}
-      {shouldRenderMainVideo && !useLivePreviewShell && (
+      {shouldRenderMainVideo && useVodPlaybackShell && (
+        <div className="vod-playback-shell" aria-hidden="false">
+          <video
+            id="player-main"
+            className="player-main player-main-shell-video player-main-live"
+            playsInline
+            controls={false}
+            disablePictureInPicture={true}
+            disableRemotePlayback={true}
+            tabIndex={isCapacitorRuntime() || isWebOsRuntime() ? -1 : 0}
+            style={{ background: "transparent", zIndex: 0 }}
+          />
+          {currentChannel && (
+            <PlayerControlBar
+              mode="vod"
+              channel={currentChannel}
+              paused={isPlaybackPaused()}
+              muted={isPlaybackMuted()}
+              fullscreen
+              isFavorite={isFavoriteChannelRecord(currentChannel)}
+              onPlayPause={togglePlayPause}
+              onMute={toggleMute}
+              onFullscreen={toggleFullscreen}
+              onToggleFavorite={() => toggleFavoriteChannel(currentChannel)}
+              onStop={exitVodPlayback}
+            />
+          )}
+        </div>
+      )}
+      {shouldRenderMainVideo && !useLivePreviewShell && !useVodPlaybackShell && (
         <video
           id="player-main"
           className={`player-main ${shouldShowOpeningMenu && !currentChannel ? "player-main-idle" : showContentPreviewWindow ? "player-main-preview" : contentPage === "live" ? (isEffectiveLiveFullscreen ? "player-main-live" : "player-main-compact") : currentChannel ? "player-main-live" : "player-main-compact"}${forceLivePreviewLayout ? " player-main-force-preview" : ""}`}
           playsInline
-          controls={!!currentChannel && !forceLivePreviewLayout}
+          controls={!!currentChannel && !forceLivePreviewLayout && !isWebOsRuntime()}
           disablePictureInPicture={contentPage === "live"}
           disableRemotePlayback={contentPage === "live"}
           tabIndex={isCapacitorRuntime() || isWebOsRuntime() ? -1 : 0}
@@ -4415,7 +4614,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
           <div className="live-preview-placeholder-subtitle">Select a channel to start playback</div>
         </div>
       )}
-      {showContentPreviewWindow && (
+      {showContentPreviewWindow && !useVodPlaybackShell && (
         <div className="player-preview-badge" aria-hidden="true">Preview</div>
       )}
       {showIdlePlayerStatus && (
@@ -4428,7 +4627,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       )}
       {currentChannel && !playerStatus && playerWarning && <div className="player-status player-status-info">{playerWarning}</div>}
       {currentChannel && playerError && <div className="player-status player-status-error">{playerError}</div>}
-      {isVodPlaybackFullscreen && <VodExitButton visible={isVodPlaybackFullscreen} onExit={exitVodPlayback} />}
+      {isVodPlaybackFullscreen && !useVodPlaybackShell && (
+        <VodExitButton visible={isVodPlaybackFullscreen} onExit={exitVodPlayback} />
+      )}
 
       {isLoginOverlayVisible && (
         <div className="app-login-overlay" role="dialog" aria-modal="true" aria-label="Login required">
@@ -4473,8 +4674,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       {!shouldShowOpeningMenu && (!isLiveChannelPlaying || showLiveMenu) && (
         <div
           className="vod-browse-layer"
-          hidden={isVodPlaybackFullscreen || isMovieDetailsVisible}
-          aria-hidden={isVodPlaybackFullscreen || isMovieDetailsVisible}
+          hidden={isVodPlaybackFullscreen || isMovieDetailsVisible || isSeriesDetailsVisible}
+          aria-hidden={isVodPlaybackFullscreen || isMovieDetailsVisible || isSeriesDetailsVisible}
         >
           {isMainSeriesScreen && (
             <div className="series-main-search-bar">
@@ -4506,7 +4707,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                     Clear
                   </button>
                   <span className="series-main-search-hint" aria-live="polite">
-                    Search: {seriesMainSearchDebouncedTerm.trim()}
+                    Search all series: {seriesMainSearchDebouncedTerm.trim()}
                   </span>
                 </>
               )}
@@ -4562,7 +4763,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                     ))}
                   </div>
                   <span className="series-main-search-hint" aria-live="polite">
-                    Build the term with buttons, then choose Apply
+                    Build the term with buttons, then choose Apply to search all unhidden series
                   </span>
                 </div>
               )}
@@ -4575,10 +4776,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                 className="movies-main-search-input"
                 value={moviesMainSearchTerm}
                 onChange={(event) => setMoviesMainSearchTerm(event.target.value.slice(0, 64))}
-                placeholder="Search movies"
-                aria-label="Search movies"
+                placeholder="Search all movies"
+                aria-label="Search all unhidden movies"
               />
               {moviesMainSearchTerm.trim() && (
+                <>
                 <button
                   type="button"
                   className="series-main-search-btn"
@@ -4586,6 +4788,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                 >
                   Clear
                 </button>
+                <span className="series-main-search-hint" aria-live="polite">
+                  All unhidden movies
+                </span>
+                </>
               )}
               <button
                 type="button"
@@ -4620,7 +4826,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                   groupCounts={groupCounts}
                   activeGroup={activeGroup}
                   onSelect={(group) => {
-                    setActiveGroup(group);
+                    selectBrowseGroup(group);
                   }}
                   isGroupVisible={isGroupVisible}
                   onToggleGroupVisible={(group, visible) => {
@@ -4660,7 +4866,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                   suppressLogos={false}
                   autoLoadOnScroll={isCapacitorRuntime()}
                   listClassName=""
-                  restoreChannelId={!isVodPlaybackFullscreen && !isSeriesPickerVisible && !isMovieDetailsVisible ? posterRestoreId : null}
+                  restoreChannelId={!isVodPlaybackFullscreen && !isSeriesPickerVisible && !isSeriesDetailsVisible && !isMovieDetailsVisible ? posterRestoreId : null}
                 />
               </div>
             </div>
@@ -4671,7 +4877,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             groupCounts={groupCounts}
             activeGroup={activeGroup}
             onSelect={(group) => {
-              setActiveGroup(group);
+              selectBrowseGroup(group);
             }}
             isGroupVisible={isGroupVisible}
             onToggleGroupVisible={(group, visible) => {
@@ -4723,7 +4929,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                     ? "channel-list-movies-grid"
                     : ""
             }
-            restoreChannelId={!isVodPlaybackFullscreen && !isSeriesPickerVisible && !isMovieDetailsVisible ? posterRestoreId : null}
+            restoreChannelId={!isVodPlaybackFullscreen && !isSeriesPickerVisible && !isSeriesDetailsVisible && !isMovieDetailsVisible ? posterRestoreId : null}
           />
             </>
           )}
@@ -4752,6 +4958,36 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
           </button>
           )}
         </>
+      )}
+      {!shouldShowOpeningMenu && (
+        <SeriesDetailsScreen
+          visible={isSeriesDetailsVisible && !isSeriesPickerVisible}
+          series={seriesDetailsChannel}
+          info={seriesDetailsInfo}
+          loading={seriesDetailsLoading}
+          episodes={seriesPickerEpisodes}
+          episodesLoading={seriesPickerLoading}
+          episodesError={seriesPickerError}
+          focusEpisodeId={seriesPickerFocusEpisodeId}
+          playLabel={seriesDetailsPlayLabel()}
+          lastEpisodeId={String(getLastWatchedSeriesEpisode()?.id || seriesPickerFocusEpisodeId || "") || null}
+          favoriteLabel={
+            isFavoriteChannelRecord(seriesDetailsChannel) ? "Remove Favorite" : "Add Favorite"
+          }
+          onClose={() => setIsSeriesDetailsVisible(false)}
+          onToggleFavorite={() => {
+            if (!seriesDetailsChannel) return;
+            toggleFavoriteChannel(seriesDetailsChannel);
+          }}
+          onPlay={() => {
+            playPreferredSeriesEpisode();
+          }}
+          onSelectEpisode={(episode) => {
+            rememberSeriesEpisode(seriesDetailsChannel, episode);
+            setSeriesPickerFocusEpisodeId(String(episode?.id || "") || null);
+            playChannel(episode);
+          }}
+        />
       )}
       {!shouldShowOpeningMenu && (
         <SeriesEpisodePicker
@@ -4993,6 +5229,91 @@ function isSeriesEpisodeSelection(channel: any): boolean {
 
 function isChannelRecord(channel: any): channel is Record<string, any> {
   return !!channel && typeof channel === "object";
+}
+
+function isUnhiddenContentChannel(channel: any): boolean {
+  if (!isChannelRecord(channel)) return false;
+  const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
+  return isGroupVisible(groupName) && isChannelVisible(String(channel.id || ""));
+}
+
+function searchableCatalogTitle(name: string): string {
+  const raw = String(name || "").toLowerCase().trim();
+  const parts = raw.split(/\s[-–]\s/);
+  if (parts.length >= 2 && parts[0].length <= 24 && !/\(\d{4}\)/.test(parts[0])) {
+    return parts.slice(1).join(" - ").trim() || raw;
+  }
+  return raw;
+}
+
+function compactSearchText(value: string): string {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function catalogSearchRank(name: string, group: string, term: string): number {
+  const query = String(term || "").trim().toLowerCase();
+  if (!query) return -1;
+
+  const title = String(name || "").toLowerCase();
+  const core = searchableCatalogTitle(title);
+  const grp = String(group || "").toLowerCase();
+  const compactTerm = compactSearchText(query);
+  const compactCore = compactSearchText(core);
+  const compactTitle = compactSearchText(title);
+
+  if (
+    core.startsWith(query) ||
+    title.startsWith(query) ||
+    (compactTerm && (compactCore.startsWith(compactTerm) || compactTitle.startsWith(compactTerm)))
+  ) {
+    return 0;
+  }
+
+  const tokens = `${core} ${title}`.split(/[^a-z0-9]+/).filter(Boolean);
+  if (tokens.some((token) => token.startsWith(query))) return 1;
+  if (
+    core.includes(query) ||
+    title.includes(query) ||
+    (compactTerm && (compactCore.includes(compactTerm) || compactTitle.includes(compactTerm)))
+  ) {
+    return 2;
+  }
+  if (grp.includes(query)) return 3;
+  return -1;
+}
+
+function rankCatalogSearchMatches(channels: any[], term: string, direction: ItemSortDirection): any[] {
+  const query = String(term || "").trim().toLowerCase();
+  if (!query) return [];
+
+  const strong: Array<{ channel: any; rank: number; name: string }> = [];
+  const weak: Array<{ channel: any; rank: number; name: string }> = [];
+
+  for (const channel of channels) {
+    if (!isChannelRecord(channel)) continue;
+    const rank = catalogSearchRank(String(channel.name || ""), String(channel.group || ""), query);
+    if (rank < 0) continue;
+    const entry = { channel, rank, name: String(channel.name || "") };
+    if (rank <= 1) strong.push(entry);
+    else if (weak.length < MAX_WEAK_SEARCH_RESULTS) weak.push(entry);
+  }
+
+  const compare = (
+    left: { rank: number; name: string },
+    right: { rank: number; name: string }
+  ) => {
+    if (left.rank !== right.rank) return left.rank - right.rank;
+    const comparison = left.name.localeCompare(right.name, undefined, {
+      sensitivity: "base",
+      numeric: true
+    });
+    if (!direction || direction === "asc") return comparison;
+    return -comparison;
+  };
+
+  strong.sort(compare);
+  weak.sort(compare);
+  return [...strong.slice(0, MAX_SERIES_SEARCH_RESULTS), ...weak].map((entry) => entry.channel);
 }
 
 function getSeriesRootId(channel: any): string | null {

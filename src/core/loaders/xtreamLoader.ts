@@ -856,18 +856,42 @@ function toCorsProxyUrl(url: string): string {
   return `https://corsproxy.io/?${encodeURIComponent(url)}`;
 }
 
-export async function loadXtreamSeriesEpisodesFromChannel(seriesChannel: Channel): Promise<Channel[]> {
-  const parsed = parseXtreamSeriesUrl(String(seriesChannel?.url || ""));
-  if (!parsed) return [];
+export type XtreamSeriesBundle = {
+  info: XtreamSeriesInfo | null;
+  episodes: Channel[];
+};
 
-  const { baseUrl, user, pass, seriesId } = parsed;
+export async function loadXtreamSeriesBundleFromChannel(seriesChannel: Channel): Promise<XtreamSeriesBundle> {
+  const parsed = parseXtreamSeriesUrl(String(seriesChannel?.url || ""));
+  if (!parsed) return { info: null, episodes: [] };
+
+  const seriesId = resolveXtreamSeriesId(seriesChannel, parsed.seriesId);
+  const parsedWithId = { ...parsed, seriesId };
+  const { baseUrl, user, pass } = parsedWithId;
   const apiUrl = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_series_info&series_id=${encodeURIComponent(seriesId)}`;
   const payload = await fetchJsonWithProxyFallback(apiUrl);
-  if (!payload || typeof payload !== "object") return [];
+  if (!payload || typeof payload !== "object") return { info: null, episodes: [] };
 
-  const episodes = extractEpisodeEntries(payload.episodes);
+  return {
+    info: parseXtreamSeriesInfoFromPayload(payload, seriesChannel),
+    episodes: mapXtreamSeriesEpisodesFromPayload(payload, seriesChannel, parsedWithId)
+  };
+}
+
+export async function loadXtreamSeriesEpisodesFromChannel(seriesChannel: Channel): Promise<Channel[]> {
+  const bundle = await loadXtreamSeriesBundleFromChannel(seriesChannel);
+  return bundle.episodes;
+}
+
+function mapXtreamSeriesEpisodesFromPayload(
+  payload: any,
+  seriesChannel: Channel,
+  parsed: { baseUrl: string; user: string; pass: string; seriesId: string }
+): Channel[] {
+  const episodes = extractEpisodeEntries(payload?.episodes);
   if (episodes.length === 0) return [];
 
+  const { baseUrl, user, pass, seriesId } = parsed;
   const group = seriesChannel.group || "Series";
   const parentGroup = seriesChannel.group || undefined;
   const fallbackLogo = seriesChannel.logo;
@@ -940,6 +964,15 @@ function parseXtreamSeriesUrl(url: string): {
     pass: decodeURIComponent(match[3]),
     seriesId: match[4]
   };
+}
+
+function resolveXtreamSeriesId(channel: Channel, urlSeriesId: string): string {
+  const id = String(channel?.id || "");
+  const episodeMatch = id.match(/^series_(\d+)_episode_\d+$/i);
+  if (episodeMatch) return episodeMatch[1];
+  const seriesMatch = id.match(/^series_(\d+)$/i);
+  if (seriesMatch) return seriesMatch[1];
+  return urlSeriesId;
 }
 
 async function fetchJsonWithProxyFallback(url: string): Promise<unknown> {
@@ -1182,6 +1215,8 @@ export type XtreamVodInfo = {
   trailerVideoUrl: string | null;
 };
 
+export type XtreamSeriesInfo = XtreamVodInfo;
+
 function firstText(...values: unknown[]): string {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) return value.trim();
@@ -1287,4 +1322,44 @@ export async function loadXtreamVodInfoFromChannel(movieChannel: Channel): Promi
     trailerEmbedUrl,
     trailerVideoUrl
   };
+}
+
+function parseXtreamSeriesInfoFromPayload(payload: unknown, seriesChannel: Channel): XtreamSeriesInfo | null {
+  const root = asRecord(payload);
+  const info = asRecord(root?.info) || {};
+  const title =
+    firstText(info.name, info.title, info.o_name, seriesChannel.name) ||
+    String(seriesChannel.name || "Series");
+  const plot = firstText(info.plot, info.description, info.series_description);
+  const poster =
+    firstHttpUrl(info.cover, info.cover_big, info.movie_image, info.stream_icon, seriesChannel.logo) ||
+    (typeof seriesChannel.logo === "string" && seriesChannel.logo.trim() ? seriesChannel.logo.trim() : null);
+  const backdrop = firstHttpUrl(info.backdrop_path, info.backdrop);
+  const year = firstText(info.releaseDate, info.release_date, info.releasedate, info.year).replace(
+    /^(\d{4}).*/,
+    "$1"
+  );
+  const trailerRaw = firstText(info.youtube_trailer, info.trailer, info.youtube);
+  const trailerEmbedUrl = youtubeEmbedUrl(trailerRaw);
+  const trailerVideoUrl =
+    !trailerEmbedUrl && /^https?:\/\//i.test(trailerRaw) && /\.(mp4|mkv|webm|m3u8)(?:\?|$)/i.test(trailerRaw)
+      ? trailerRaw
+      : null;
+
+  return {
+    title,
+    plot,
+    poster,
+    backdrop,
+    year: year || null,
+    trailerEmbedUrl,
+    trailerVideoUrl
+  };
+}
+
+function formatSeriesRuntime(raw: string): string {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  if (/^\d+$/.test(text)) return `${text} min`;
+  return text;
 }

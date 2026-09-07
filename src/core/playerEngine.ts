@@ -329,9 +329,50 @@ function emitPlayerTranscoding(message: string) {
   window.dispatchEvent(new CustomEvent("playerTranscoding", { detail: { message } }));
 }
 
+let lastPlayerEndedAt = 0;
+let vodNearEndWatcher: { el: HTMLVideoElement; onTimeUpdate: () => void } | null = null;
+
 function emitPlayerEnded() {
   if (shouldSuppressPlayerEvents()) return;
+  const now = Date.now();
+  if (now - lastPlayerEndedAt < 2000) return;
+  lastPlayerEndedAt = now;
   window.dispatchEvent(new CustomEvent("playerEnded"));
+}
+
+function bindHtmlVideoLifecycle(el: HTMLVideoElement | null) {
+  if (!el) return;
+  el.onplaying = () => emitPlayerPlaying();
+  el.onended = () => emitPlayerEnded();
+}
+
+function unbindVodNearEndWatcher() {
+  if (!vodNearEndWatcher) return;
+  try {
+    vodNearEndWatcher.el.removeEventListener("timeupdate", vodNearEndWatcher.onTimeUpdate);
+  } catch {
+    // Ignore detach errors while tearing down playback.
+  }
+  vodNearEndWatcher = null;
+}
+
+function bindVodNearEndWatcher(el: HTMLVideoElement | null, contentType: ContentType) {
+  unbindVodNearEndWatcher();
+  if (!el || (contentType !== "movie" && contentType !== "series")) return;
+
+  const onTimeUpdate = () => {
+    if (shouldSuppressPlayerEvents()) return;
+    const duration = el.duration;
+    const time = el.currentTime;
+    if (!Number.isFinite(duration) || duration < 15) return;
+    if (!Number.isFinite(time)) return;
+    if (duration - time <= 1.5 || time / duration >= 0.997) {
+      emitPlayerEnded();
+    }
+  };
+
+  el.addEventListener("timeupdate", onTimeUpdate);
+  vodNearEndWatcher = { el, onTimeUpdate };
 }
 
 async function teardownShakaPlayer() {
@@ -1460,8 +1501,7 @@ export function initPlayerEngine() {
     videoEl.playsInline = true;
     videoEl.setAttribute("playsinline", "true");
     videoEl.setAttribute("webkit-playsinline", "true");
-    videoEl.onplaying = () => emitPlayerPlaying();
-    videoEl.onended = () => emitPlayerEnded();
+    bindHtmlVideoLifecycle(videoEl);
   }
 
   if (isWebOsRuntime() && isWebOsSimulator()) {
@@ -1473,6 +1513,7 @@ export function stopPlayback() {
   playRequestToken += 1;
   invalidateGlobalPlayAttempts();
   suppressPlayerEventsUntil = Date.now() + 3000;
+  unbindVodNearEndWatcher();
 
   stopNativePlayback();
 
@@ -1527,9 +1568,11 @@ export function playUrl(
   // Always re-bind to the current DOM element in case React re-rendered and
   // replaced the element reference since the last initPlayerEngine() call.
   videoEl = document.getElementById("player-main") as HTMLVideoElement | null;
+  bindHtmlVideoLifecycle(videoEl);
   if (isWebOsRuntime()) ensureWebOsResourceObserver();
   let normalizedUrl = normalizeProblematicXtreamSourceUrl(normalizeStreamUrl(url));
   contentType = inferContentTypeFromUrl(normalizedUrl, contentType);
+  bindVodNearEndWatcher(videoEl, contentType);
   if (isWebOsRuntime() && contentType === "live") {
     if (normalizedUrl.includes("/__transcode")) {
       normalizedUrl = resolveRootSourceUrl(normalizedUrl);

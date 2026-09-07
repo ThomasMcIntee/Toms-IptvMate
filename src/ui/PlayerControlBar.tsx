@@ -12,26 +12,42 @@ type PlayerChannel = {
   epgChannelId?: string;
 } | null;
 
+function formatClock(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const total = Math.floor(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
 export function PlayerControlBar({
   channel,
   paused,
   muted,
   fullscreen,
   isFavorite = false,
+  mode = "live",
   onPlayPause,
   onMute,
   onFullscreen,
-  onToggleFavorite
+  onToggleFavorite,
+  onStop
 }: {
   channel: PlayerChannel;
   paused: boolean;
   muted: boolean;
   fullscreen: boolean;
   isFavorite?: boolean;
+  mode?: "live" | "vod";
   onPlayPause: () => void;
   onMute: () => void;
   onFullscreen: () => void;
   onToggleFavorite?: () => void;
+  onStop?: () => void;
 }) {
   useSyncExternalStore(subscribeEPG, getEPGVersion, getEPGVersion);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -46,11 +62,37 @@ export function PlayerControlBar({
     return () => window.clearInterval(timer);
   }, []);
 
+  const [vodTime, setVodTime] = useState({ current: 0, duration: 0 });
+  const isVod = mode === "vod";
+
   const currentProgram = useMemo(() => {
-    if (!channel) return null;
+    if (!channel || isVod) return null;
     const events = getEPGForChannel(channel);
     return events.find((event) => event.start <= nowMs && event.end >= nowMs) || null;
-  }, [channel, nowMs]);
+  }, [channel, nowMs, isVod]);
+
+  useEffect(() => {
+    if (!isVod) return;
+    const video = document.getElementById("player-main") as HTMLVideoElement | null;
+    if (!video) return;
+    const update = () => {
+      setVodTime({
+        current: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+        duration: Number.isFinite(video.duration) ? video.duration : 0
+      });
+    };
+    update();
+    video.addEventListener("timeupdate", update);
+    video.addEventListener("durationchange", update);
+    video.addEventListener("seeked", update);
+    const timer = window.setInterval(update, 500);
+    return () => {
+      video.removeEventListener("timeupdate", update);
+      video.removeEventListener("durationchange", update);
+      video.removeEventListener("seeked", update);
+      window.clearInterval(timer);
+    };
+  }, [isVod, channel?.id]);
 
   useEffect(() => {
     if (!channel) {
@@ -103,14 +145,18 @@ export function PlayerControlBar({
     reveal();
 
     const shell =
-      barRef.current?.closest(".live-preview-shell") ??
-      document.querySelector(".live-preview-shell");
+      barRef.current?.closest(".live-preview-shell, .vod-playback-shell") ??
+      document.querySelector(".live-preview-shell, .vod-playback-shell");
     // webOS Magic Remote streams mousemove over the video; only clicks/taps
     // should keep the bar visible. Listen for mouse too — some webOS builds
     // never emit PointerEvents.
     const onPointer = () => reveal();
     shell?.addEventListener("pointerdown", onPointer);
     shell?.addEventListener("mousedown", onPointer);
+    if (isVod) {
+      document.addEventListener("pointerdown", onPointer);
+      document.addEventListener("mousedown", onPointer);
+    }
 
     const onPlayerReveal = () => reveal();
     window.addEventListener("playerRevealControls", onPlayerReveal);
@@ -119,21 +165,36 @@ export function PlayerControlBar({
       clearHideTimer();
       shell?.removeEventListener("pointerdown", onPointer);
       shell?.removeEventListener("mousedown", onPointer);
+      if (isVod) {
+        document.removeEventListener("pointerdown", onPointer);
+        document.removeEventListener("mousedown", onPointer);
+      }
       window.removeEventListener("playerRevealControls", onPlayerReveal);
     };
-  }, [channel?.id, fullscreen]);
+  }, [channel?.id, fullscreen, isVod]);
 
   if (!channel) return null;
 
-  const duration = currentProgram ? currentProgram.end - currentProgram.start : 0;
-  const progress =
-    currentProgram && duration > 0
+  const duration = isVod
+    ? vodTime.duration
+    : currentProgram
+      ? currentProgram.end - currentProgram.start
+      : 0;
+  const progress = isVod
+    ? vodTime.duration > 0
+      ? Math.max(0, Math.min(1, vodTime.current / vodTime.duration))
+      : 0
+    : currentProgram && duration > 0
       ? Math.max(0, Math.min(1, (nowMs - currentProgram.start) / duration))
       : 0;
-  const title = currentProgram?.title || String(channel.name || "Live TV");
-  const timeLabel = currentProgram
-    ? `${formatEpgTime(currentProgram.start)} – ${formatEpgTime(currentProgram.end)}`
-    : "Live";
+  const title = isVod
+    ? String(channel.name || "Movie")
+    : currentProgram?.title || String(channel.name || "Live TV");
+  const timeLabel = isVod
+    ? `${formatClock(vodTime.current)} / ${vodTime.duration > 0 ? formatClock(vodTime.duration) : "--:--"}`
+    : currentProgram
+      ? `${formatEpgTime(currentProgram.start)} – ${formatEpgTime(currentProgram.end)}`
+      : "Live";
 
   return (
     <div
@@ -183,7 +244,21 @@ export function PlayerControlBar({
       }}
     >
       <div className="player-control-bar-progress" aria-hidden="true">
-        <div className="player-control-bar-progress-track">
+        <div
+          className="player-control-bar-progress-track"
+          onClick={(event) => {
+            if (!isVod || vodTime.duration <= 0) return;
+            const video = document.getElementById("player-main") as HTMLVideoElement | null;
+            if (!video) return;
+            const rect = event.currentTarget.getBoundingClientRect();
+            const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+            try {
+              video.currentTime = ratio * vodTime.duration;
+            } catch {
+              // Ignore seek errors on unfinished buffers.
+            }
+          }}
+        >
           <div
             className="player-control-bar-progress-fill"
             style={{ width: `${Math.round(progress * 1000) / 10}%` }}
@@ -208,9 +283,22 @@ export function PlayerControlBar({
             </svg>
           )}
         </button>
+        {onStop && (
+          <button
+            type="button"
+            className="player-control-bar-btn player-control-bar-stop"
+            tabIndex={revealed ? 0 : -1}
+            onClick={onStop}
+            aria-label="Stop playback"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M6 6h12v12H6z" />
+            </svg>
+          </button>
+        )}
         <span className="player-control-bar-time">{timeLabel}</span>
         <span className="player-control-bar-title">{title}</span>
-        <span className="player-control-bar-live">LIVE</span>
+        {!isVod && <span className="player-control-bar-live">LIVE</span>}
         <button
           type="button"
           className="player-control-bar-btn"
@@ -256,6 +344,7 @@ export function PlayerControlBar({
             )}
           </button>
         )}
+        {!isVod && (
         <button
           type="button"
           className="player-control-bar-btn"
@@ -273,6 +362,7 @@ export function PlayerControlBar({
             </svg>
           )}
         </button>
+        )}
       </div>
     </div>
   );
