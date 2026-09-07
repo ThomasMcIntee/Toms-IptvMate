@@ -14,7 +14,12 @@ import {
   playNativeUrl,
   stopNativePlayback
 } from "./nativePlayerBridge";
-import { fetchWebOsRemote, isWebOsRelayUrl } from "./webosStreamRelay";
+import {
+  fetchWebOsRemote,
+  isWebOsPcRelayOriginDown,
+  isWebOsRelayUrl,
+  markWebOsPcRelayOriginDown
+} from "./webosStreamRelay";
 
 let hls: Hls | null = null;
 type HlsConstructor = typeof import("hls.js").default;
@@ -103,33 +108,60 @@ const WEBOS_PC_RELAY_ORIGIN_KEY = "iptvmate_webos_relay_origin";
 
 export function getWebOsPcRelayOrigin(): string | null {
   if (typeof window === "undefined") return null;
+  const pick = (value: string | null | undefined): string | null => {
+    const origin = preferDevRelayOrigin(String(value || "").trim().replace(/\/$/, ""));
+    if (!/^https?:\/\//i.test(origin) || isWebOsPcRelayOriginDown(origin)) return null;
+    return origin;
+  };
   try {
-    const stored = window.localStorage.getItem(WEBOS_PC_RELAY_ORIGIN_KEY)?.trim() || "";
-    if (/^https?:\/\//i.test(stored)) return stored.replace(/\/$/, "");
+    const stored = pick(window.localStorage.getItem(WEBOS_PC_RELAY_ORIGIN_KEY));
+    if (stored) return stored;
   } catch {
     // Ignore storage errors on locked-down webOS builds.
   }
   const scoped = window as Window & { __IPTV_RELAY_ORIGIN__?: string; __IPTV_RELAY_CANDIDATES__?: string[] };
-  const explicit = scoped.__IPTV_RELAY_ORIGIN__?.trim();
-  if (explicit && /^https?:\/\//i.test(explicit)) return explicit.replace(/\/$/, "");
-  return null;
+  return pick(scoped.__IPTV_RELAY_ORIGIN__);
+}
+
+function sortWebOsRelayOrigins(origins: string[]): string[] {
+  const score = (origin: string) => (/:5173$/i.test(origin) ? 0 : /:4173$/i.test(origin) ? 2 : 1);
+  return [...origins].sort((left, right) => score(left) - score(right) || left.localeCompare(right));
+}
+
+function preferDevRelayOrigin(origin: string): string {
+  const value = String(origin || "").trim().replace(/\/$/, "");
+  if (/:4173$/i.test(value)) {
+    const dev = value.replace(/:4173$/i, ":5173");
+    if (!isWebOsPcRelayOriginDown(dev)) return dev;
+  }
+  return value;
 }
 
 function webOsRelayCandidateOrigins(): string[] {
   const scoped = window as Window & { __IPTV_RELAY_ORIGIN__?: string; __IPTV_RELAY_CANDIDATES__?: string[] };
   const found: string[] = [];
   const push = (value: string | null | undefined) => {
-    const origin = String(value || "").trim().replace(/\/$/, "");
-    if (/^https?:\/\//i.test(origin) && !found.includes(origin)) found.push(origin);
+    const origin = preferDevRelayOrigin(String(value || "").trim().replace(/\/$/, ""));
+    if (/^https?:\/\//i.test(origin) && !found.includes(origin) && !isWebOsPcRelayOriginDown(origin)) {
+      found.push(origin);
+    }
   };
   push(getWebOsPcRelayOrigin());
   push(scoped.__IPTV_RELAY_ORIGIN__);
   const extra = scoped.__IPTV_RELAY_CANDIDATES__;
   if (Array.isArray(extra)) extra.forEach(push);
-  return found;
+  if (typeof window !== "undefined" && /^https?:$/.test(window.location.protocol)) {
+    push(window.location.origin);
+  }
+  if (isWebOsSimulator()) {
+    push("http://127.0.0.1:5173");
+    push("http://localhost:5173");
+  }
+  return sortWebOsRelayOrigins(found);
 }
 
 async function probeWebOsPcRelayOrigin(origin: string): Promise<boolean> {
+  if (isWebOsPcRelayOriginDown(origin)) return false;
   const probeUrls = [`${origin}/__iptv_ping`, `${origin}/__stream`];
   for (const probeUrl of probeUrls) {
     const attempt = (mode: RequestMode) =>
@@ -141,7 +173,7 @@ async function probeWebOsPcRelayOrigin(origin: string): Promise<boolean> {
           window.clearTimeout(timer);
           resolve(ok);
         };
-        const timer = window.setTimeout(() => finish(false), 1800);
+        const timer = window.setTimeout(() => finish(false), 1200);
         fetch(probeUrl, { method: "GET", mode, cache: "no-store" })
           .then((res) => finish(mode === "no-cors" ? true : res.status > 0))
           .catch(() => finish(false));
@@ -149,6 +181,10 @@ async function probeWebOsPcRelayOrigin(origin: string): Promise<boolean> {
     if (await attempt("cors")) return true;
     if (await attempt("no-cors")) return true;
   }
+  if (typeof window !== "undefined" && origin === window.location.origin.replace(/\/$/, "")) {
+    return false;
+  }
+  markWebOsPcRelayOriginDown(origin);
   return false;
 }
 
@@ -176,8 +212,25 @@ export function setWebOsPcRelayOrigin(origin: string | null): string | null {
   return value || null;
 }
 
+function getWebOsSimulatorRelayOrigin(): string | null {
+  if (!isWebOsSimulator()) return null;
+  const candidates = webOsRelayCandidateOrigins();
+  if (candidates[0]) return candidates[0];
+  const scoped = window as Window & { __IPTV_RELAY_ORIGIN__?: string };
+  const injected = preferDevRelayOrigin(String(scoped.__IPTV_RELAY_ORIGIN__ || "").trim());
+  if (/^https?:\/\//i.test(injected)) return injected;
+  if (typeof window !== "undefined" && /^https?:$/.test(window.location.protocol)) {
+    const here = preferDevRelayOrigin(window.location.origin.replace(/\/$/, ""));
+    if (/^https?:\/\//i.test(here)) return here;
+  }
+  return "http://127.0.0.1:5173";
+}
+
 function getRelayBaseOrigin(): string | null {
-  if (isWebOsRuntime()) return getWebOsPcRelayOrigin();
+  if (isWebOsRuntime()) {
+    if (!isWebOsSimulator()) return null;
+    return getWebOsSimulatorRelayOrigin();
+  }
 
   const protocol = window.location.protocol;
 
@@ -450,8 +503,11 @@ function listXtreamVodContainerUrls(url: string, preferBrowserSafe: boolean): st
   const current = match[2].toLowerCase();
   const queryIndex = url.indexOf("?");
   const query = queryIndex >= 0 ? url.slice(queryIndex) : "";
+  const isSeries = /\/series\//i.test(url);
   const preferred = preferBrowserSafe
-    ? ["mp4", "m3u8", "ts", "mkv"]
+    ? isSeries
+      ? ["mp4", "ts", "mkv", "m3u8"]
+      : ["mp4", "m3u8", "ts", "mkv"]
     : [current, "mp4", "m3u8", "ts", "mkv"];
   const seen = new Set<string>();
   const out: string[] = [];
@@ -685,15 +741,74 @@ function restoreHttpsForCdnRelay(url: string): string {
   return url;
 }
 
+function isBrowserBlockedCdnTlsUrl(url: string): boolean {
+  return /^https:\/\//i.test(url) && /ip1-st|vod\d+\.|\/live\/play\//i.test(url);
+}
+
+function innerRelayTargetUrl(url: string): string {
+  try {
+    const parsed = new URL(url, "http://localhost");
+    if (parsed.pathname.includes("/__stream")) {
+      const inner = parsed.searchParams.get("url");
+      if (inner) return inner;
+    }
+  } catch {
+    // Keep the original URL when it is not a PC relay address.
+  }
+  return url;
+}
+
+function rewriteSimulatorPlaylist(text: string, playlistUrl: string): string {
+  const origin = getWebOsSimulatorRelayOrigin();
+  if (!origin || !/#EXTM3U/i.test(text)) return text.replace(/https:\/\//gi, "http://");
+  const playlistBase = innerRelayTargetUrl(playlistUrl);
+  const wrap = (uri: string) => {
+    try {
+      const absolute = new URL(uri, playlistBase).toString();
+      if (absolute.includes("/__stream")) return absolute;
+      return `${origin}/__stream?url=${encodeURIComponent(restoreHttpsForCdnRelay(absolute))}`;
+    } catch {
+      return uri;
+    }
+  };
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return line;
+      if (trimmed.startsWith("#")) {
+        return line.replace(/URI="([^"]+)"/, (_, uri: string) => `URI="${wrap(uri)}"`);
+      }
+      return wrap(trimmed);
+    })
+    .join("\n");
+}
+
 function toWebOsPcStreamUrl(url: string): string | null {
-  const origin = getWebOsPcRelayOrigin();
+  if (!isWebOsSimulator()) return null;
+  const origin = getWebOsSimulatorRelayOrigin();
   if (!origin || !/^https?:\/\//i.test(url)) return null;
   if (url.includes("/__stream")) return url;
   const target = restoreHttpsForCdnRelay(toWebOsLiveHlsUrl(url));
   return `${origin}/__stream?url=${encodeURIComponent(target)}`;
 }
 
+function isWebOsPcStreamUrl(url: string): boolean {
+  return /\/__stream\?url=/i.test(url);
+}
+
+function markDeadOriginFromPlaybackUrl(url: string): void {
+  try {
+    const parsed = new URL(url, "http://localhost");
+    if (!parsed.pathname.includes("/__stream")) return;
+    markWebOsPcRelayOriginDown(parsed.origin);
+  } catch {
+    // Ignore unparseable playback URLs.
+  }
+}
+
 function noteWebOsCapturedMediaUrl(url: string) {
+  if (isWebOsSimulator()) return;
   if (!url || !/^https?:\/\//i.test(url)) return;
   if (/corsproxy\.io/i.test(url)) return;
   if (!isWebOsCdnMediaUrl(url)) return;
@@ -704,7 +819,7 @@ function noteWebOsCapturedMediaUrl(url: string) {
 }
 
 function ensureWebOsResourceObserver() {
-  if (!isWebOsRuntime() || webOsResourceObserver) return;
+  if (!isWebOsRuntime() || isWebOsSimulator() || webOsResourceObserver) return;
   try {
     webOsResourceObserver = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
@@ -747,6 +862,7 @@ function findWebOsDiscoveredMediaUrl(originalUrl: string): string | null {
 }
 
 function probeWebOsRedirectUrl(url: string): Promise<string | null> {
+  if (isWebOsSimulator()) return Promise.resolve(null);
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
     const start = rewriteHttpsToHttpUrl(url);
@@ -827,6 +943,7 @@ async function loadWebOsProxiedText(url: string, signal?: AbortSignal): Promise<
 
 async function resolveWebOsLivePlaybackUrl(url: string): Promise<string> {
   if (isAlreadyRelayed(url) || isWebOsRelayUrl(url)) return url;
+  if (isWebOsSimulator()) return toWebOsPcStreamUrl(url) || url;
   const start = rewriteHttpsToHttpUrl(url);
   try {
     const res = await fetch(start, {
@@ -868,9 +985,35 @@ async function loadWebOsHttpResource(
   responseType: string,
   signal?: AbortSignal
 ): Promise<{ finalUrl: string; data: string | ArrayBuffer }> {
-  const keepHttps = isWebOsSimulator() || url.includes("/__stream");
-  const current = keepHttps ? restoreHttpsForCdnRelay(url) : rewriteHttpsToHttpUrl(url);
   const wantsText = responseType !== "arraybuffer";
+
+  if (isWebOsSimulator() && !isWebOsPcStreamUrl(url) && !isWebOsRelayUrl(url) && /^https?:\/\//i.test(url)) {
+    const relayed = toWebOsPcStreamUrl(url);
+    if (relayed && relayed !== url) {
+      return loadWebOsHttpResource(relayed, responseType, signal);
+    }
+  }
+
+  if (isWebOsPcStreamUrl(url) && !isWebOsSimulator()) {
+    const inner = resolveRootSourceUrl(url);
+    if (inner !== url) {
+      markDeadOriginFromPlaybackUrl(url);
+      return loadWebOsHttpResource(inner, responseType, signal);
+    }
+  }
+
+  const current =
+    isWebOsSimulator() || url.includes("/__stream") || isWebOsRelayUrl(url)
+      ? url
+      : rewriteHttpsToHttpUrl(url);
+
+  if (isWebOsSimulator() && isBrowserBlockedCdnTlsUrl(current)) {
+    const relayed = toWebOsPcStreamUrl(current);
+    if (relayed && relayed !== current) {
+      return loadWebOsHttpResource(relayed, responseType, signal);
+    }
+    throw new Error("simulator cannot open CDN HTTPS directly");
+  }
 
   if (isWebOsRelayUrl(current)) {
     const res = await fetch(current, {
@@ -882,7 +1025,7 @@ async function loadWebOsHttpResource(
     if (!res.ok) throw new Error(`relay HTTP ${res.status}`);
     if (!wantsText) return { finalUrl: current, data: await res.arrayBuffer() };
     let text = await res.text();
-    if (/#EXTM3U/i.test(text)) text = text.replace(/https:\/\//gi, "http://");
+    if (/#EXTM3U/i.test(text)) text = isWebOsSimulator() ? rewriteSimulatorPlaylist(text, current) : text.replace(/https:\/\//gi, "http://");
     return { finalUrl: current, data: text };
   }
 
@@ -894,10 +1037,12 @@ async function loadWebOsHttpResource(
       signal
     });
     if (res.ok) {
-      const finalUrl = rewriteHttpsToHttpUrl(res.url || current);
+      const finalUrl = isWebOsSimulator() || isWebOsPcStreamUrl(current) ? current : rewriteHttpsToHttpUrl(res.url || current);
       if (!wantsText) return { finalUrl, data: await res.arrayBuffer() };
       let text = await res.text();
-      if (/#EXTM3U/i.test(text)) text = text.replace(/https:\/\//gi, "http://");
+      if (/#EXTM3U/i.test(text)) {
+        text = isWebOsSimulator() ? rewriteSimulatorPlaylist(text, current) : text.replace(/https:\/\//gi, "http://");
+      }
       return { finalUrl, data: text };
     }
   } catch (err) {
@@ -907,24 +1052,37 @@ async function loadWebOsHttpResource(
     const remote = await fetchWebOsRemote(current);
     if (remote?.text) {
       let text = remote.text;
-      if (/#EXTM3U/i.test(text)) text = text.replace(/https:\/\//gi, "http://");
-      return { finalUrl: rewriteHttpsToHttpUrl(remote.url || current), data: text };
+      if (/#EXTM3U/i.test(text)) {
+        text = isWebOsSimulator() ? rewriteSimulatorPlaylist(text, current) : text.replace(/https:\/\//gi, "http://");
+      }
+      return {
+        finalUrl: isWebOsSimulator() || isWebOsPcStreamUrl(current) ? current : rewriteHttpsToHttpUrl(remote.url || current),
+        data: text
+      };
     }
     throw new Error("webOS playlist fetch failed");
   }
 
-  const pcRelay = getWebOsPcRelayOrigin();
-  if (pcRelay) {
+  const pcRelay = isWebOsSimulator() ? getWebOsSimulatorRelayOrigin() : null;
+  if (pcRelay && !isWebOsPcStreamUrl(current)) {
     const target = restoreHttpsForCdnRelay(current);
     const relayed = `${pcRelay}/__stream?url=${encodeURIComponent(target)}`;
-    const res = await fetch(relayed, {
-      method: "GET",
-      credentials: "omit",
-      cache: "no-store",
-      signal
-    });
-    if (!res.ok) throw new Error(`PC relay HTTP ${res.status}`);
-    return { finalUrl: relayed, data: await res.arrayBuffer() };
+    try {
+      const res = await fetch(relayed, {
+        method: "GET",
+        credentials: "omit",
+        cache: "no-store",
+        signal
+      });
+      if (!res.ok) throw new Error(`PC relay HTTP ${res.status}`);
+      return { finalUrl: relayed, data: await res.arrayBuffer() };
+    } catch (err) {
+      const msg = String((err as Error)?.message || err);
+      if (/Failed to fetch|NetworkError|ERR_CONNECTION/i.test(msg)) {
+        const pageOrigin = typeof window !== "undefined" ? window.location.origin.replace(/\/$/, "") : "";
+        if (pcRelay !== pageOrigin) markWebOsPcRelayOriginDown(pcRelay);
+      }
+    }
   }
 
   throw new Error("webOS media fetch failed");
@@ -983,7 +1141,7 @@ function createWebOsHlsLoader() {
           this.stats.loading.end = performance.now();
           const data = result.data;
           this.stats.loaded = this.stats.total = typeof data === "string" ? data.length : data.byteLength;
-          callbacks.onSuccess?.({ url: result.finalUrl, data }, this.stats, context, null);
+          callbacks.onSuccess?.({ url: String(context.url || result.finalUrl), data }, this.stats, context, null);
         })
         .catch((err: Error & { code?: number }) => {
           if (this.stats.aborted) return;
@@ -1091,6 +1249,7 @@ function toHttpFallbackUrl(url: string): string | null {
 function toProxyFallbackUrl(url: string, isTsStream: boolean = false): string | null {
   if (!/^https?:\/\//i.test(url)) return null;
   if (isAlreadyRelayed(url)) return null;
+  if (isWebOsRuntime() && !isWebOsSimulator()) return null;
 
   if (isCapacitorRuntime()) {
     // For Capacitor/Android, use the native proxy
@@ -1135,9 +1294,8 @@ function toTranscodeFallbackUrl(
   audioMode: "standard" | "compat" | "safe" = "standard",
   audioStreamOrder: number | null = null
 ): string | null {
-  // The TV has no FFmpeg. Sending live to a stale PC __transcode URL only
-  // produces "transcode failed" after native HLS already had a chance.
-  if (isWebOsRuntime()) {
+  // Real webOS TVs have no FFmpeg. The SDK simulator can use the PC __transcode relay.
+  if (isWebOsRuntime() && !isWebOsSimulator()) {
     return null;
   }
   if (!isTranscodeAvailable()) return null;
@@ -1305,6 +1463,10 @@ export function initPlayerEngine() {
     videoEl.onplaying = () => emitPlayerPlaying();
     videoEl.onended = () => emitPlayerEnded();
   }
+
+  if (isWebOsRuntime() && isWebOsSimulator()) {
+    void resolveWebOsPcRelayOrigin();
+  }
 }
 
 export function stopPlayback() {
@@ -1371,12 +1533,11 @@ export function playUrl(
   if (isWebOsRuntime() && contentType === "live") {
     if (normalizedUrl.includes("/__transcode")) {
       normalizedUrl = resolveRootSourceUrl(normalizedUrl);
+    } else if (isWebOsPcStreamUrl(normalizedUrl) && !isWebOsSimulator()) {
+      markDeadOriginFromPlaybackUrl(normalizedUrl);
+      normalizedUrl = resolveRootSourceUrl(normalizedUrl);
     }
-    if (isWebOsSimulator()) {
-      if (!normalizedUrl.includes("/__stream")) {
-        normalizedUrl = toWebOsLiveHlsUrl(normalizedUrl);
-      }
-    } else {
+    if (!isWebOsPcStreamUrl(normalizedUrl)) {
       normalizedUrl = toWebOsLiveHlsUrl(rewriteHttpsToHttpUrl(normalizedUrl));
     }
   }
@@ -1662,7 +1823,8 @@ export function playUrl(
     !forceNativePlayback &&
     !isRequestedTranscode &&
     !isLiveContent &&
-    !isWebOsRuntime()
+    (!isWebOsRuntime() ||
+      (isWebOsSimulator() && (contentType === "series" || /\.mkv(?:\?|$)/i.test(normalizedUrl))))
       ? toTranscodeFallbackUrl(rootSourceUrl, false, "compat")
       : null;
   const initialLiveTranscodeUrl =
@@ -1701,22 +1863,16 @@ export function playUrl(
   if (
     isWebOsRuntime() &&
     isLiveContent &&
-    !forceNativePlayback &&
     !isRequestedTranscode &&
-    !isAlreadyRelayed(rootSourceUrl) &&
-    !isWebOsRelayUrl(normalizedUrl) &&
-    proxyFallbackStage < 2 &&
-    !hasTriedNativeFallback
+    !isWebOsRelayUrl(normalizedUrl)
   ) {
     if (isWebOsSimulator()) {
-      const relayed = toWebOsPcStreamUrl(rootSourceUrl);
-      playbackUrl = relayed || toWebOsLiveHlsUrl(rootSourceUrl);
+      playbackUrl =
+        toWebOsPcStreamUrl(rootSourceUrl) ||
+        toWebOsLiveHlsUrl(rewriteHttpsToHttpUrl(rootSourceUrl));
     } else {
       playbackUrl = toWebOsLiveHlsUrl(rewriteHttpsToHttpUrl(rootSourceUrl));
     }
-  } else if (isWebOsSimulator() && isLiveContent && !playbackUrl.includes("/__stream")) {
-    const relayed = toWebOsPcStreamUrl(rootSourceUrl);
-    if (relayed) playbackUrl = relayed;
   }
 
   // On Android/Capacitor, we have a clear split strategy:
@@ -1804,9 +1960,11 @@ export function playUrl(
     isWebOsRuntime() &&
     currentIsManifest &&
     !playbackUrl.startsWith("blob:") &&
-    (!webOsUseNativeHls ||
-      hasTriedNativeFallback ||
-      (isLiveContent && (isWebOsRelayUrl(playbackUrl) || playbackUrl.includes("/__stream"))));
+    (isWebOsSimulator() ||
+      (!isWebOsPcStreamUrl(playbackUrl) &&
+        (!webOsUseNativeHls ||
+          hasTriedNativeFallback ||
+          (isLiveContent && isWebOsRelayUrl(playbackUrl)))));
   const shouldUseHlsJs =
     (!isWebOsRuntime() || allowWebOsHlsJs) &&
     (playbackUrl.includes("/__transcode") ||
@@ -2050,7 +2208,6 @@ export function playUrl(
       isWebOsRuntime() &&
       contentType === "live" &&
       !isWebOsRelayUrl(playbackUrl) &&
-      !playbackUrl.includes("/__stream") &&
       !playbackUrl.includes("/__transcode");
     const WebOsLoader = useWebOsHttpLoader ? createWebOsHlsLoader() : undefined;
     if (useWebOsHttpLoader) {
@@ -2066,12 +2223,12 @@ export function playUrl(
       lowLatencyMode: useLiveHlsTuning,
 
       liveDurationInfinity: useLiveHlsTuning,
-      manifestLoadingTimeOut: isLocalTranscodePlayback ? 120000 : 20000,
-      levelLoadingTimeOut: isLocalTranscodePlayback ? 120000 : 10000,
-      fragLoadingTimeOut: isLocalTranscodePlayback ? 120000 : 20000,
-      manifestLoadingMaxRetry: isLocalTranscodePlayback ? 3 : 1,
-      levelLoadingMaxRetry: isLocalTranscodePlayback ? 3 : 2,
-      fragLoadingMaxRetry: isLocalTranscodePlayback ? 3 : 2,
+      manifestLoadingTimeOut: isWebOsSimulator() ? 25000 : isWebOsRuntime() ? 8000 : isLocalTranscodePlayback ? 120000 : 20000,
+      levelLoadingTimeOut: isWebOsSimulator() ? 25000 : isWebOsRuntime() ? 8000 : isLocalTranscodePlayback ? 120000 : 10000,
+      fragLoadingTimeOut: isWebOsSimulator() ? 30000 : isWebOsRuntime() ? 15000 : isLocalTranscodePlayback ? 120000 : 20000,
+      manifestLoadingMaxRetry: isWebOsRuntime() ? 0 : isLocalTranscodePlayback ? 3 : 1,
+      levelLoadingMaxRetry: isWebOsRuntime() ? 1 : isLocalTranscodePlayback ? 3 : 2,
+      fragLoadingMaxRetry: isWebOsRuntime() ? 1 : isLocalTranscodePlayback ? 3 : 2,
       manifestLoadingRetryDelay: 1000,
       levelLoadingRetryDelay: 1000,
       fragLoadingRetryDelay: 1000,
@@ -3011,6 +3168,77 @@ export function playUrl(
           data
         );
 
+        const isNetworkManifestFailure =
+          data.type === HlsRuntime.ErrorTypes.NETWORK_ERROR ||
+          fatalDetails === "manifestLoadError" ||
+          fatalDetails === "manifestLoadTimeOut" ||
+          fatalDetails === "levelLoadError" ||
+          /network error|status 0|ERR_CONNECTION/i.test(`${errorMsg} ${fatalDetails}`);
+
+        if (isWebOsRuntime() && isNetworkManifestFailure) {
+          if (isWebOsSimulator()) {
+            if (!isLiveContent) {
+              if (tryWebOsVodVariant("hls-network")) return;
+              if (!hasTriedTranscodeFallback && allowTranscodeFallback) {
+                const transcodeUrl = toTranscodeFallbackUrl(rootSourceUrl, false, "compat");
+                if (transcodeUrl) {
+                  emitPlayerTranscoding("Network/protocol error, trying local transcoder...");
+                  playUrl(
+                    transcodeUrl,
+                    hasRetriedHttpFallback,
+                    false,
+                    proxyFallbackStage,
+                    hasTriedNativeFallback,
+                    true,
+                    hasRetriedTranscodeBootstrap,
+                    contentType
+                  );
+                  return;
+                }
+              }
+            } else {
+              const relayed = toWebOsPcStreamUrl(rootSourceUrl);
+              if (relayed && relayed !== playbackUrl) {
+                emitPlayerTranscoding("Retrying live stream through the PC relay...");
+                playUrl(
+                  relayed,
+                  true,
+                  false,
+                  0,
+                  false,
+                  hasTriedTranscodeFallback,
+                  hasRetriedTranscodeBootstrap,
+                  contentType
+                );
+                return;
+              }
+              emitPlayerError("Stream failed to load. Start npm run dev so the simulator can relay HTTPS.");
+              return;
+            }
+          } else {
+            if (isWebOsPcStreamUrl(dataUrl) || isWebOsPcStreamUrl(playbackUrl)) {
+              markDeadOriginFromPlaybackUrl(dataUrl || playbackUrl);
+            }
+            const innerUrl = toWebOsLiveHlsUrl(rewriteHttpsToHttpUrl(rootSourceUrl));
+            if (innerUrl && (innerUrl !== playbackUrl || !hasTriedNativeFallback)) {
+              emitPlayerTranscoding("Stream proxy unreachable, playing directly on the TV...");
+              playUrl(
+                innerUrl,
+                true,
+                true,
+                Math.max(proxyFallbackStage, 2),
+                true,
+                hasTriedTranscodeFallback,
+                hasRetriedTranscodeBootstrap,
+                contentType
+              );
+              return;
+            }
+            emitPlayerError("Stream failed to load (network error).");
+            return;
+          }
+        }
+
         const isTranscodeSessionManifestError =
           fatalDetails === "manifestLoadError" && isTranscodeSessionUrl(dataUrl);
 
@@ -3306,7 +3534,9 @@ export function playUrl(
         }
 
         if (tryWebOsVodVariant("hls-failed")) return;
-        const finalMsg = "Stream codecs are not supported by this browser/player.";
+        const finalMsg = isNetworkManifestFailure
+          ? "Stream failed to load (network error)."
+          : "Stream codecs are not supported by this browser/player.";
         console.error(`[playback-failed] ${finalMsg}`);
         emitPlayerError(finalMsg);
       }
@@ -3423,6 +3653,24 @@ export function playUrl(
       }
 
       if (isWebOS && contentType === "live") {
+        if (isWebOsSimulator()) {
+          const relayed = toWebOsPcStreamUrl(rootSourceUrl);
+          if (relayed && relayed !== playbackUrl) {
+            playUrl(
+              relayed,
+              true,
+              false,
+              0,
+              false,
+              hasTriedTranscodeFallback,
+              hasRetriedTranscodeBootstrap,
+              contentType
+            );
+            return;
+          }
+          emitPlayerError("Stream failed to load. Start npm run dev so the simulator can relay HTTPS.");
+          return;
+        }
         void (async () => {
           await new Promise((resolve) => window.setTimeout(resolve, 300));
           if (isStaleRequest() || hasPlaybackStarted) return;
@@ -3591,16 +3839,13 @@ export function playUrl(
       if (isWebOS) {
         nativeStartupWatchdog = window.setTimeout(() => {
           failNativeHls("startup-timeout");
-        }, 8000);
+        }, 20000);
       }
     };
 
-    if (isWebOS && contentType === "live" && isWebOsSimulator() && !isAlreadyRelayed(finalUrl) && !isWebOsRelayUrl(finalUrl)) {
-      void (async () => {
-        const resolved = await resolveWebOsLivePlaybackUrl(finalUrl);
-        if (isStaleRequest()) return;
-        startNativePlayback(resolved);
-      })();
+    if (isWebOS && contentType === "live" && isWebOsSimulator()) {
+      const relayed = isWebOsPcStreamUrl(finalUrl) ? finalUrl : toWebOsPcStreamUrl(finalUrl);
+      startNativePlayback(relayed || finalUrl);
     } else {
       startNativePlayback(finalUrl);
     }
@@ -3614,8 +3859,22 @@ export function playUrl(
       finalUrl = playbackUrl.replace("https://", "http://");
     }
 
-    if (isWebOS && contentType === "live" && (!webOsUseNativeHls || playbackUrl.includes("/__stream"))) {
-      if (!hasTriedNativeFallback) {
+    if (isWebOS && contentType === "live" && (!webOsUseNativeHls || isWebOsPcStreamUrl(playbackUrl))) {
+      if (isWebOsPcStreamUrl(playbackUrl) && !isWebOsSimulator()) {
+        markDeadOriginFromPlaybackUrl(playbackUrl);
+        playUrl(
+          toWebOsLiveHlsUrl(rewriteHttpsToHttpUrl(rootSourceUrl)),
+          hasRetriedHttpFallback,
+          true,
+          Math.max(proxyFallbackStage, 2),
+          true,
+          hasTriedTranscodeFallback,
+          hasRetriedTranscodeBootstrap,
+          contentType
+        );
+        return;
+      }
+      if (!hasTriedNativeFallback && !isWebOsSimulator()) {
         playUrl(
           rootSourceUrl,
           hasRetriedHttpFallback,
@@ -3686,6 +3945,24 @@ export function playUrl(
       }
 
       if (isWebOS && contentType === "live") {
+        if (isWebOsSimulator()) {
+          const relayed = toWebOsPcStreamUrl(rootSourceUrl);
+          if (relayed && relayed !== playbackUrl) {
+            playUrl(
+              relayed,
+              hasRetriedHttpFallback,
+              false,
+              proxyFallbackStage,
+              hasTriedNativeFallback,
+              hasTriedTranscodeFallback,
+              hasRetriedTranscodeBootstrap,
+              contentType
+            );
+            return;
+          }
+          emitPlayerError("Stream failed to load. Start npm run dev so the simulator can relay HTTPS.");
+          return;
+        }
         const hlsUrl = toWebOsLiveHlsUrl(rootSourceUrl);
         if (hlsUrl !== playbackUrl) {
           playUrl(

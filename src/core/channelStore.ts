@@ -28,6 +28,7 @@ const CHILD_SAVED_KEY = "iptvmate_visibility_child";       // child profile hide
 let activeVisibilityRole: "adult" | "child" = "adult";
 const FAVORITES_KEY = "iptvmate_favorites";
 const FAVORITES_GROUP = "Favorites";
+const LAST_WATCHED_GROUP = "Last Watched";
 const CHANNELS_CACHE_KEY = "iptvmate_channels_cache";
 const CHANNELS_CACHE_META_KEY = "iptvmate_channels_cache_meta";
 const CHANNELS_CACHE_DB = "iptvmate_cache";
@@ -2317,7 +2318,7 @@ function isVodGroupName(group: string): boolean {
 }
 
 export function isGroupVisible(group: string): boolean {
-  if (group === "All" || group === FAVORITES_GROUP) return true;
+  if (group === "All" || group === FAVORITES_GROUP || group === LAST_WATCHED_GROUP) return true;
 
   if (isMovieGroupName(group) && visibilityState.allMoviesHidden) {
     return visibilityState.groups[group] === true;
@@ -2345,7 +2346,7 @@ function writeGroupVisibility(
   moviesHideAll: boolean,
   seriesHideAll: boolean
 ): void {
-  if (group === "All" || group === FAVORITES_GROUP) return;
+  if (group === "All" || group === FAVORITES_GROUP || group === LAST_WATCHED_GROUP) return;
   if (isMovieGroupName(group) && moviesHideAll) {
     if (visible) nextGroups[group] = true;
     else delete nextGroups[group];
@@ -2371,7 +2372,7 @@ function writeGroupVisibility(
 }
 
 export function setGroupVisible(group: string, visible: boolean) {
-  if (group === "All" || group === FAVORITES_GROUP) return;
+  if (group === "All" || group === FAVORITES_GROUP || group === LAST_WATCHED_GROUP) return;
 
   const nextGroups = { ...visibilityState.groups };
   writeGroupVisibility(
@@ -2400,7 +2401,9 @@ function vodVisibilityKeys(groups: Record<string, boolean>): Record<string, bool
 }
 
 export function setGroupsVisible(groups: string[], visible: boolean, catalogWide = false) {
-  const targetGroups = groups.filter((group) => group !== "All" && group !== FAVORITES_GROUP);
+  const targetGroups = groups.filter(
+    (group) => group !== "All" && group !== FAVORITES_GROUP && group !== LAST_WATCHED_GROUP
+  );
   const vodTargets = targetGroups.filter(isVodGroupName);
   const liveTargets = targetGroups.filter((group) => !isVodGroupName(group));
   const vodOnly = vodTargets.length > 0 && liveTargets.length === 0;

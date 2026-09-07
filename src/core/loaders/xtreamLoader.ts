@@ -947,25 +947,28 @@ async function fetchJsonWithProxyFallback(url: string): Promise<unknown> {
     return fetchWebOsRemoteJson(url);
   }
 
-  const direct = await fetch(url).catch(() => null);
-  if (direct?.ok) {
+  const readJson = async (target: string): Promise<unknown | null> => {
+    const response = await fetch(target).catch(() => null);
+    if (!response?.ok) return null;
     try {
-      return await direct.json();
-    } catch {
-      // Fall through to proxy retry if direct JSON parsing fails.
-    }
-  }
-
-  const proxied = await fetch(toCorsProxyUrl(url)).catch(() => null);
-  if (proxied?.ok) {
-    try {
-      return await proxied.json();
+      return await response.json();
     } catch {
       return null;
     }
+  };
+
+  const direct = await readJson(url);
+  if (direct != null) return direct;
+
+  if (typeof window !== "undefined" && /^https?:$/.test(window.location.protocol)) {
+    const host = window.location.hostname;
+    if (host === "localhost" || host === "127.0.0.1") {
+      const viaRelay = await readJson(`${window.location.origin}/__stream?url=${encodeURIComponent(url)}`);
+      if (viaRelay != null) return viaRelay;
+    }
   }
 
-  return null;
+  return readJson(toCorsProxyUrl(url));
 }
 
 async function readResponseJsonCapped(
@@ -1162,4 +1165,126 @@ function formatEpisodeLabel(params: {
   if (code) return `${params.seriesTitle} ${code}`;
   if (title) return title;
   return `${params.seriesTitle} Episode ${params.fallbackId}`;
+}
+
+export type XtreamVodInfo = {
+  title: string;
+  plot: string;
+  poster: string | null;
+  backdrop: string | null;
+  year: string | null;
+  genre: string | null;
+  duration: string | null;
+  rating: string | null;
+  director: string | null;
+  cast: string | null;
+  trailerEmbedUrl: string | null;
+  trailerVideoUrl: string | null;
+};
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) return String(value);
+  }
+  return "";
+}
+
+function firstHttpUrl(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      const nested = firstHttpUrl(...value);
+      if (nested) return nested;
+      continue;
+    }
+    const text = firstText(value);
+    if (/^https?:\/\//i.test(text)) return text;
+  }
+  return null;
+}
+
+function youtubeEmbedUrl(raw: string): string | null {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+  const fromUrl = text.match(
+    /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/i
+  );
+  const id = fromUrl?.[1] || (/^[A-Za-z0-9_-]{11}$/.test(text) ? text : "");
+  if (!id) return null;
+  return `https://www.youtube-nocookie.com/embed/${id}?rel=0&modestbranding=1&playsinline=1`;
+}
+
+function parseXtreamMovieUrl(url: string): {
+  baseUrl: string;
+  user: string;
+  pass: string;
+  vodId: string;
+} | null {
+  const match = String(url || "").match(/^(https?:\/\/[^/]+)\/movie\/([^/]+)\/([^/]+)\/(\d+)\.[^/?#]+/i);
+  if (!match) return null;
+  return {
+    baseUrl: match[1],
+    user: decodeURIComponent(match[2]),
+    pass: decodeURIComponent(match[3]),
+    vodId: match[4]
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export async function loadXtreamVodInfoFromChannel(movieChannel: Channel): Promise<XtreamVodInfo | null> {
+  const fromUrl = parseXtreamMovieUrl(String(movieChannel?.url || ""));
+  const idMatch = String(movieChannel?.id || "").match(/^movie_(\d+)$/i);
+  const vodId = fromUrl?.vodId || idMatch?.[1] || "";
+  if (!fromUrl || !vodId) return null;
+
+  const apiUrl = `${fromUrl.baseUrl}/player_api.php?username=${encodeURIComponent(fromUrl.user)}&password=${encodeURIComponent(fromUrl.pass)}&action=get_vod_info&vod_id=${encodeURIComponent(vodId)}`;
+  const payload = await fetchJsonWithProxyFallback(apiUrl);
+  const root = asRecord(payload);
+  if (!root) return null;
+
+  const info = asRecord(root.info) || {};
+  const movieData = asRecord(root.movie_data) || {};
+  const title =
+    firstText(info.name, info.o_name, movieData.name, movieChannel.name) ||
+    String(movieChannel.name || "Movie");
+  const plot = firstText(info.plot, info.description, info.movie_description, movieData.plot);
+  const poster =
+    firstHttpUrl(info.movie_image, info.cover_big, info.cover, movieData.stream_icon, movieChannel.logo) ||
+    (typeof movieChannel.logo === "string" && movieChannel.logo.trim() ? movieChannel.logo.trim() : null);
+  const backdrop = firstHttpUrl(info.backdrop_path, info.backdrop);
+  const year = firstText(info.releasedate, info.releaseDate, info.year, movieData.year).replace(
+    /^(\d{4}).*/,
+    "$1"
+  );
+  const durationSecs = Number(info.duration_secs);
+  const durationFromSecs =
+    Number.isFinite(durationSecs) && durationSecs > 0
+      ? `${Math.round(durationSecs / 60)} min`
+      : "";
+  const trailerRaw = firstText(info.youtube_trailer, info.trailer, info.youtube);
+  const trailerEmbedUrl = youtubeEmbedUrl(trailerRaw);
+  const trailerVideoUrl =
+    !trailerEmbedUrl && /^https?:\/\//i.test(trailerRaw) && /\.(mp4|mkv|webm|m3u8)(?:\?|$)/i.test(trailerRaw)
+      ? trailerRaw
+      : null;
+
+  return {
+    title,
+    plot,
+    poster,
+    backdrop,
+    year: year || null,
+    genre: firstText(info.genre, movieData.genre) || null,
+    duration: firstText(info.duration, info.episode_run_time, durationFromSecs) || null,
+    rating: firstText(info.rating, info.rating_5based) || null,
+    director: firstText(info.director) || null,
+    cast: firstText(info.cast, info.actors) || null,
+    trailerEmbedUrl,
+    trailerVideoUrl
+  };
 }

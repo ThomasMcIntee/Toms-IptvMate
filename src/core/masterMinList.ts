@@ -113,6 +113,7 @@ export function setMasterMinKeyEnabled(key: string, enabled: boolean): void {
 export function groupMatchesMasterMinList(groupName: string): boolean {
   if (selectedKeys.size === 0) return true;
   if (String(groupName || "") === "Favorites") return true;
+  if (String(groupName || "") === "Last Watched") return true;
   const key = extractMasterBouquetKey(groupName);
   return !!key && selectedKeys.has(key);
 }
@@ -121,8 +122,8 @@ export function sortGroupsByMasterCategory(
   groups: string[],
   direction: "asc" | "desc" = "asc"
 ): string[] {
-  const pinned = groups.filter((group) => group === "Favorites");
-  const rest = groups.filter((group) => group !== "Favorites");
+  const pinned = groups.filter((group) => group === "Favorites" || group === "Last Watched");
+  const rest = groups.filter((group) => group !== "Favorites" && group !== "Last Watched");
   rest.sort((left, right) => {
     const leftKey = extractMasterBouquetKey(left) || `\uFFFF${left}`;
     const rightKey = extractMasterBouquetKey(right) || `\uFFFF${right}`;

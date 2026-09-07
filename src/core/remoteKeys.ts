@@ -65,3 +65,49 @@ export function normalizeRemoteMediaKey(event: KeyboardEvent): string | null {
   if (raw.startsWith("Media")) return raw;
   return MEDIA_KEYCODE_MAP[Number(event.keyCode || 0)] || null;
 }
+
+// webOS Magic Remote OK often delivers a real click AND keydown Enter.
+// Playlist-manager screens also have two Enter handlers. Either path toggles
+// a checkbox twice (off, then straight back on) unless we collapse them.
+const REMOTE_ACTIVATE_DEBOUNCE_MS = 450;
+const lastRemoteActivateAt = new WeakMap<EventTarget, number>();
+
+export function resolveRemoteActivateTarget(target: EventTarget | null): HTMLElement | null {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.closest !== "function") return el instanceof HTMLElement ? el : null;
+  const control = el.closest("button, [role='button'], a, input, select, textarea, label");
+  if (!(control instanceof HTMLElement)) return el;
+  if (control instanceof HTMLLabelElement) {
+    const htmlFor = String(control.htmlFor || "").trim();
+    if (htmlFor) {
+      const labeled = document.getElementById(htmlFor);
+      if (labeled instanceof HTMLElement) return labeled;
+    }
+    const nested = control.querySelector("input, button, select, textarea");
+    if (nested instanceof HTMLElement) return nested;
+  }
+  return control;
+}
+
+export function noteRemoteActivate(target: EventTarget | null): void {
+  const el = resolveRemoteActivateTarget(target);
+  if (!el) return;
+  lastRemoteActivateAt.set(el, Date.now());
+}
+
+export function consumeRemoteActivate(target: EventTarget | null): boolean {
+  const el = resolveRemoteActivateTarget(target);
+  if (!el) return false;
+  const now = Date.now();
+  const prev = lastRemoteActivateAt.get(el) || 0;
+  if (now - prev < REMOTE_ACTIVATE_DEBOUNCE_MS) return false;
+  lastRemoteActivateAt.set(el, now);
+  return true;
+}
+
+export function activateFocusedRemoteControl(target: EventTarget | null): boolean {
+  const el = resolveRemoteActivateTarget(target);
+  if (!el || !consumeRemoteActivate(el)) return false;
+  el.click();
+  return true;
+}

@@ -101,12 +101,21 @@ function MasterCategoryRow({
             onSelect();
           }}
         />
-        <button type="button" className="group-select-btn" onClick={onSelect}>
-          <span>{label}</span>
-          <span className="group-item-count" aria-label={`${groupCount} groups`}>
-            {groupCount}
-          </span>
+        <button
+          type="button"
+          className="group-select-btn"
+          onClick={onSelect}
+          aria-label={`${label}, ${groupCount} groups`}
+        >
+          <span className="group-item-name">{label}</span>
         </button>
+        <span
+          className="group-item-count"
+          aria-hidden="true"
+          onClick={onSelect}
+        >
+          {groupCount}
+        </span>
       </div>
     </div>
   );

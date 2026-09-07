@@ -63,7 +63,7 @@ export function GroupList({
       }
       return [activeGroup, ...groups];
     }
-    const sorted = sortGroupNames(groups, sortDirection, ["Favorites"]);
+    const sorted = sortGroupNames(groups, sortDirection, ["Favorites", "Last Watched"]);
     if (!activeGroup || sorted.includes(activeGroup)) {
       return sorted;
     }
@@ -155,7 +155,7 @@ export function GroupList({
               <input
                 type="checkbox"
                 checked={isGroupVisible(g)}
-                disabled={g === "Favorites"}
+                disabled={g === "Favorites" || g === "Last Watched"}
                 aria-label={`Show or hide ${g}`}
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => onToggleGroupVisible(g, e.target.checked)}
@@ -164,12 +164,17 @@ export function GroupList({
                 type="button"
                 className="group-select-btn"
                 onClick={() => onSelect(g)}
+                aria-label={`${g}, ${groupCounts[g] ?? 0} items`}
               >
-                <span>{g}</span>
-                <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
-                  {groupCounts[g] ?? 0}
-                </span>
+                <span className="group-item-name">{g}</span>
               </button>
+              <span
+                className="group-item-count"
+                aria-hidden="true"
+                onClick={() => onSelect(g)}
+              >
+                {groupCounts[g] ?? 0}
+              </span>
             </div>
           ) : (
             <button
@@ -177,7 +182,7 @@ export function GroupList({
               className="group-select-btn"
               onClick={() => onSelect(g)}
             >
-              <span>{g}</span>
+              <span className="group-item-name">{g}</span>
               <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
                 {groupCounts[g] ?? 0}
               </span>

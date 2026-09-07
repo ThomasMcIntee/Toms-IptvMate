@@ -900,6 +900,8 @@ function isLikelyManifest(contentType: string | string[] | undefined, targetUrl:
   return /\.m3u8(\?|$)/i.test(targetUrl);
 }
 
+const XTREAM_VOD_VARIANT_RE = /^(.*\/(?:movie|series)\/[^/]+\/[^/]+\/\d+)\.(mp4|mkv|ts|m3u8)$/i;
+
 function getMovieVariantFallbackUrls(targetUrl: string): string[] {
   let parsed: URL;
   try {
@@ -909,14 +911,14 @@ function getMovieVariantFallbackUrls(targetUrl: string): string[] {
   }
 
   const pathname = parsed.pathname;
-  const match = pathname.match(/^(.*\/movie\/[^/]+\/[^/]+\/\d+)\.(mp4|mkv|ts|m3u8)$/i);
+  const match = pathname.match(XTREAM_VOD_VARIANT_RE);
   if (!match) return [];
 
   const [, basePath, currentExtRaw] = match;
   const currentExt = currentExtRaw.toLowerCase();
-  // Prefer transport/HLS variants first; keep MKV as final rescue path for
-  // providers where only MKV returns playable bytes for specific movie IDs.
-  const extensionOrder = ["ts", "m3u8", "mkv", "mp4"];
+  const isSeries = /\/series\//i.test(basePath);
+  // Series catalogs are usually MKV; movie IDs more often expose TS/HLS first.
+  const extensionOrder = isSeries ? ["mkv", "ts", "mp4", "m3u8"] : ["ts", "m3u8", "mkv", "mp4"];
   const alternatives = extensionOrder.filter((ext) => ext !== currentExt);
 
   return alternatives.map((ext) => {
@@ -929,7 +931,7 @@ function getMovieVariantFallbackUrls(targetUrl: string): string[] {
 function parseMovieVariant(targetUrl: string): { basePath: string; ext: string; url: URL } | null {
   try {
     const parsed = new URL(targetUrl);
-    const match = parsed.pathname.match(/^(.*\/movie\/[^/]+\/[^/]+\/\d+)\.(mp4|mkv|ts|m3u8)$/i);
+    const match = parsed.pathname.match(XTREAM_VOD_VARIANT_RE);
     if (!match) return null;
 
     return {
@@ -987,7 +989,7 @@ async function fetchAndRelay(
     return;
   }
 
-  // Fast-path cached variant for known problematic movie IDs.
+  // Fast-path cached variant for known movie/series IDs.
   const movieVariant = parseMovieVariant(parsed.toString());
   if (movieVariant) {
     const cachedExt = movieVariantCache.get(movieVariant.basePath);
