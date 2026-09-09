@@ -1,6 +1,6 @@
 /* @refresh reload */
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ChannelList } from "./ui/ChannelList";
 import { EPGGrid } from "./ui/EPGGrid";
 import { PanelsHost } from "./ui/PanelsHost";
@@ -21,11 +21,14 @@ import {
   revealNativePlayerControls,
   setNativeMuted,
   stopNativePlayback,
-  syncNativePlayerBounds
+  syncNativePlayerBounds,
+  exitNativeApp
 } from "./core/nativePlayerBridge";
 import { isCapacitorRuntime, isWebOsRuntime } from "./core/player/platformDetection";
+import { exitWebOsApp } from "./core/webosExit";
 import { GroupList } from "./ui/GroupList";
-import { sortChannelsByName, type ItemSortDirection } from "./ui/groupSorting";
+import { isRemoteTextComposerOpen } from "./ui/RemoteTextComposer";
+import { sortChannelsByName, type GroupSortDirection, type ItemSortDirection } from "./ui/groupSorting";
 import {
   getAllChannels,
   getGroups,
@@ -50,6 +53,9 @@ import {
   getCapacitorVodGroupNames,
   getCapacitorVodGroupCounts,
   loadCapacitorVodGroupChannels,
+  loadCapacitorVodFavoriteChannels,
+  countCapacitorFavoriteRecords,
+  searchCapacitorVodCatalog,
   scheduleCapacitorLegacyCachePurge,
   loadCapacitorVodScopeCache,
   saveCapacitorVodScopeCache,
@@ -59,6 +65,7 @@ import {
   setGroupVisible,
   setGroupsVisible,
   setActiveVisibilityRole,
+  visibilityScopeFromChannel,
   type ChannelVisibilitySnapshot
 } from "./core/channelStore";
 import NowNextOverlay from "./ui/NowNextOverlay";
@@ -87,6 +94,7 @@ import MainMenuScreen from "./ui/MainMenuScreen";
 import { loadChannelsForPlaylist } from "./core/loaders/playlistLoader";
 import { loadXtream, loadXtreamSeriesBundleFromChannel, loadXtreamSeriesEpisodesFromChannel, loadXtreamVodInfoFromChannel, type XtreamSeriesInfo, type XtreamVodInfo } from "./core/loaders/xtreamLoader";
 import { loadXtreamEPGForStream } from "./core/loaders/xtreamEPG";
+import { getBackgroundConcurrency, waitForBackgroundSlot, yieldToMain } from "./core/taskScheduler";
 import SeriesEpisodePicker from "./ui/SeriesEpisodePicker";
 import SeriesDetailsScreen from "./ui/SeriesDetailsScreen";
 import MovieDetailsScreen from "./ui/MovieDetailsScreen";
@@ -112,6 +120,7 @@ const CHILD_PLAYLIST_ID_KEY = "iptvmate_child_playlist_id";
 const SHARED_PLAYLIST_ID_KEY = "iptvmate_shared_playlist_id";
 const MOVIES_SORT_DIRECTION_KEY = "iptvmate_movies_sort_direction";
 const SERIES_SORT_DIRECTION_KEY = "iptvmate_series_sort_direction";
+const GROUP_SORT_DIRECTION_KEY = "iptvmate_group_sort_direction";
 
 function readStoredItem(key: string): string | null {
   try {
@@ -162,22 +171,47 @@ function isTextEntryActive(target: EventTarget | null = document.activeElement):
   return isTextEntryTarget(target) || isTextEntryTarget(document.activeElement);
 }
 
-function isBackKeyEvent(event: KeyboardEvent): boolean {
+function isPlaylistEditFieldButton(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.classList.contains("playlist-edit-field-btn");
+}
+
+function isTextEraseKey(event: KeyboardEvent): boolean {
+  const key = String(event.key || "");
+  if (key === "Backspace" || key === "Delete") return true;
+  const keyCode = Number((event as unknown as { keyCode?: number }).keyCode || 0);
+  return keyCode === 8 || keyCode === 46 || keyCode === 67;
+}
+
+function isHardwareBackKeyEvent(event: KeyboardEvent): boolean {
   const key = String(event.key || "");
   if (
-    key === "Backspace" ||
     key === "Escape" ||
     key === "BrowserBack" ||
     key === "GoBack" ||
     key === "Back" ||
-    key === "XF86Back" ||
-    key === "Return"
+    key === "XF86Back"
   ) {
     return true;
   }
-
   const keyCode = Number((event as unknown as { keyCode?: number }).keyCode || 0);
-  return keyCode === 4 || keyCode === 8 || keyCode === 27 || keyCode === 461 || keyCode === 10009;
+  return keyCode === 4 || keyCode === 27 || keyCode === 461 || keyCode === 10009;
+}
+
+function isBackKeyEvent(event: KeyboardEvent): boolean {
+  if (isHardwareBackKeyEvent(event)) return true;
+  const key = String(event.key || "");
+  if (key === "Backspace" || key === "Return") return true;
+  const keyCode = Number((event as unknown as { keyCode?: number }).keyCode || 0);
+  return keyCode === 8;
+}
+
+function dismissActiveTextEntry(): boolean {
+  const active = document.activeElement;
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+    active.blur();
+    return true;
+  }
+  return false;
 }
 
 export function App({ bootAction = null }: { bootAction?: string | null } = {}) {
@@ -221,13 +255,26 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   const [seriesDetailsLoading, setSeriesDetailsLoading] = useState(false);
   const seriesDetailsTokenRef = useRef(0);
   const [isSeriesSearchComposerOpen, setIsSeriesSearchComposerOpen] = useState(false);
+  const [isMoviesSearchComposerOpen, setIsMoviesSearchComposerOpen] = useState(false);
   const [seriesMainSearchDraft, setSeriesMainSearchDraft] = useState("");
   const [seriesMainSearchDebouncedTerm, setSeriesMainSearchDebouncedTerm] = useState("");
   const [seriesMainSearchResults, setSeriesMainSearchResults] = useState<any[] | null>(null);
   const [moviesMainSearchTerm, setMoviesMainSearchTerm] = useState("");
+  const [moviesMainSearchDraft, setMoviesMainSearchDraft] = useState("");
+  const [moviesMainSearchResults, setMoviesMainSearchResults] = useState<any[] | null>(null);
+  const [moviesSearchBusy, setMoviesSearchBusy] = useState(false);
   const [moviesSortDirection, setMoviesSortDirection] = useState<ItemSortDirection>(() => {
     try {
       const saved = localStorage.getItem(MOVIES_SORT_DIRECTION_KEY);
+      if (saved === "asc" || saved === "desc") return saved;
+    } catch {
+      // Ignore localStorage errors
+    }
+    return null;
+  });
+  const [groupSortDirection, setGroupSortDirection] = useState<GroupSortDirection>(() => {
+    try {
+      const saved = localStorage.getItem(GROUP_SORT_DIRECTION_KEY);
       if (saved === "asc" || saved === "desc") return saved;
     } catch {
       // Ignore localStorage errors
@@ -450,6 +497,18 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
   useEffect(() => {
     try {
+      if (groupSortDirection) {
+        localStorage.setItem(GROUP_SORT_DIRECTION_KEY, groupSortDirection);
+      } else {
+        localStorage.removeItem(GROUP_SORT_DIRECTION_KEY);
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+  }, [groupSortDirection]);
+
+  useEffect(() => {
+    try {
       if (seriesSortDirection) {
         localStorage.setItem(SERIES_SORT_DIRECTION_KEY, seriesSortDirection);
       } else {
@@ -512,11 +571,15 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       contentPage === contentMode ||
       (contentPage === "playlistManager" && (contentMode === "movies" || contentMode === "series"));
     if (!onMoviesOrSeriesScreen) return;
-    if (!activeGroup || activeGroup === ROOT_GROUP || activeGroup === LAST_WATCHED_GROUP) return;
+    if (!activeGroup || activeGroup === LAST_WATCHED_GROUP) return;
 
     let cancelled = false;
     void (async () => {
-      await loadCapacitorVodGroupChannels(contentMode, activeGroup);
+      if (activeGroup === ROOT_GROUP) {
+        await loadCapacitorVodFavoriteChannels(contentMode);
+      } else {
+        await loadCapacitorVodGroupChannels(contentMode, activeGroup);
+      }
       if (!cancelled) {
         setChannelUpdateTick((tick) => tick + 1);
       }
@@ -525,7 +588,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     return () => {
       cancelled = true;
     };
-  }, [activeGroup, contentPage, contentMode]);
+  }, [activeGroup, contentPage, contentMode, favoritesRefreshTick]);
 
   const allChannels = useMemo(() => {
     return getAllChannels().filter((channel) => isChannelRecord(channel));
@@ -587,7 +650,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, [contentChannels, contentMode, channelUpdateTick, currentChannel]);
   const visibleGroups = useMemo(() => {
     return groups.filter((group) => {
-      if (!isGroupVisible(group)) return false;
+      if (!isGroupVisible(group, contentMode)) return false;
       if (applyMasterMinList && contentMode === "tv") {
         return groupMatchesMasterMinList(group);
       }
@@ -606,7 +669,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         if (!isChannelRecord(channel)) return false;
         const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
         return (
-          isGroupVisible(groupName) &&
+          isGroupVisible(groupName, mode) &&
           isChannelVisible(String(channel.id || "")) &&
           (!applyMasterMinList || mode !== "tv" || groupMatchesMasterMinList(groupName))
         );
@@ -667,10 +730,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         Object.entries(vodCounts).forEach(([groupName, count]) => {
           counts[groupName] = count;
         });
-        for (const channel of contentChannels) {
-          if (!isChannelRecord(channel)) continue;
-          if (isFavoriteChannelRecord(channel)) counts[ROOT_GROUP] += 1;
-        }
+        counts[ROOT_GROUP] = countCapacitorFavoriteRecords(contentMode);
         return counts;
       }
     }
@@ -728,7 +788,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       const visibleMovies = movies.filter((channel) => isUnhiddenContentChannel(channel));
 
       if (term) {
-        return rankCatalogSearchMatches(visibleMovies, term, moviesSortDirection);
+        const searched = moviesMainSearchResults ?? [];
+        return searched.filter((channel) => isUnhiddenContentChannel(channel));
       }
 
       const scopedMovies =
@@ -769,6 +830,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, [
     isMainMoviesScreen,
     moviesMainSearchTerm,
+    moviesMainSearchResults,
     contentChannels,
     activeGroup,
     categoryRefreshTick,
@@ -790,10 +852,14 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
   function clearCatalogSearch() {
     setMoviesMainSearchTerm("");
+    setMoviesMainSearchDraft("");
+    setMoviesMainSearchResults(null);
+    setMoviesSearchBusy(false);
     setSeriesMainSearchDraft("");
     setSeriesMainSearchDebouncedTerm("");
     setSeriesMainSearchResults(null);
     setIsSeriesSearchComposerOpen(false);
+    setIsMoviesSearchComposerOpen(false);
   }
 
   function selectBrowseGroup(group: string) {
@@ -802,16 +868,37 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }
 
   function appendSeriesSearchDraft(fragment: string) {
-    setSeriesMainSearchDraft((current) => `${current}${fragment}`.slice(0, 32));
+    setSeriesMainSearchDraft((current) => {
+      const next = `${current}${fragment}`.slice(0, 32);
+      commitSeriesMainSearch(next);
+      return next;
+    });
   }
 
   function backspaceSeriesSearchDraft() {
-    setSeriesMainSearchDraft((current) => current.slice(0, -1));
+    setSeriesMainSearchDraft((current) => {
+      const next = current.slice(0, -1);
+      commitSeriesMainSearch(next);
+      return next;
+    });
   }
 
   function applySeriesSearchDraft() {
     commitSeriesMainSearch(seriesMainSearchDraft);
     setIsSeriesSearchComposerOpen(false);
+  }
+
+  function appendMoviesSearchDraft(fragment: string) {
+    setMoviesMainSearchDraft((current) => `${current}${fragment}`.slice(0, 64));
+  }
+
+  function backspaceMoviesSearchDraft() {
+    setMoviesMainSearchDraft((current) => current.slice(0, -1));
+  }
+
+  function applyMoviesSearchDraft() {
+    setMoviesMainSearchTerm(moviesMainSearchDraft);
+    setIsMoviesSearchComposerOpen(false);
   }
 
   function captureVodProgress(channel: any = currentChannelRef.current) {
@@ -971,7 +1058,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, [activeGroup]);
 
   useEffect(() => {
-    if (isLiveContentPage && !isGroupVisible(activeGroup) && activeGroup !== ROOT_GROUP) {
+    if (isLiveContentPage && !isGroupVisible(activeGroup, "tv") && activeGroup !== ROOT_GROUP) {
       setActiveGroup(ROOT_GROUP);
     }
   }, [isLiveContentPage, activeGroup, categoryRefreshTick]);
@@ -1016,7 +1103,57 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   useEffect(() => {
     if (isMainMoviesScreen) return;
     setMoviesMainSearchTerm("");
+    setMoviesMainSearchDraft("");
+    setMoviesMainSearchResults(null);
+    setMoviesSearchBusy(false);
+    setIsMoviesSearchComposerOpen(false);
   }, [isMainMoviesScreen]);
+
+  useEffect(() => {
+    if (!isMainMoviesScreen) {
+      setMoviesMainSearchResults(null);
+      setMoviesSearchBusy(false);
+      return;
+    }
+
+    const term = String(moviesMainSearchTerm || "").trim().toLowerCase();
+    if (!term) {
+      setMoviesMainSearchResults(null);
+      setMoviesSearchBusy(false);
+      return;
+    }
+
+    let cancelled = false;
+    setMoviesSearchBusy(true);
+    setMoviesMainSearchResults(
+      rankCatalogSearchMatches(
+        contentChannels.filter((channel) => isChannelRecord(channel)),
+        term,
+        moviesSortDirection
+      )
+    );
+
+    void (async () => {
+      const pool = isCapacitorRuntime()
+        ? await searchCapacitorVodCatalog("movies", term)
+        : contentChannels.filter((channel) => isChannelRecord(channel));
+      if (cancelled) return;
+      setMoviesMainSearchResults(rankCatalogSearchMatches(pool, term, moviesSortDirection));
+      setMoviesSearchBusy(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isMainMoviesScreen, moviesMainSearchTerm]);
+
+  useEffect(() => {
+    const term = String(moviesMainSearchTerm || "").trim().toLowerCase();
+    if (!term) return;
+    setMoviesMainSearchResults((current) =>
+      current ? rankCatalogSearchMatches(current, term, moviesSortDirection) : current
+    );
+  }, [moviesSortDirection]);
 
   useEffect(() => {
     if (!isSeriesPage) {
@@ -1034,13 +1171,26 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       return;
     }
 
-    const ranked = rankCatalogSearchMatches(
-      searchableSeriesIndex.map((entry) => entry.channel),
-      term,
-      seriesSortDirection
+    let cancelled = false;
+    setSeriesMainSearchResults(
+      rankCatalogSearchMatches(
+        searchableSeriesIndex.map((entry) => entry.channel),
+        term,
+        seriesSortDirection
+      )
     );
-    setSeriesMainSearchResults(ranked);
-  }, [isSeriesPage, seriesMainSearchDebouncedTerm, searchableSeriesIndex, seriesSortDirection]);
+    void (async () => {
+      const pool = isCapacitorRuntime()
+        ? await searchCapacitorVodCatalog("series", term)
+        : searchableSeriesIndex.map((entry) => entry.channel);
+      if (cancelled) return;
+      setSeriesMainSearchResults(rankCatalogSearchMatches(pool, term, seriesSortDirection));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isSeriesPage, seriesMainSearchDebouncedTerm, searchableSeriesIndex.length, seriesSortDirection]);
 
   useEffect(() => {
     initPlayerEngine();
@@ -1791,12 +1941,14 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       if (playlists.length === 0) return;
 
       void (async () => {
+        await waitForBackgroundSlot();
         for (const playlist of playlists) {
           try {
             await loadEPGForPlaylist(playlist, { forceRefresh: true });
           } catch {
             // Keep refresh resilient if guide endpoints are temporarily unavailable.
           }
+          await waitForBackgroundSlot();
         }
       })();
     };
@@ -1811,7 +1963,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       const channel = custom.detail;
       const channelId = String(channel?.id || "");
       const groupName = (channel?.group && String(channel.group).trim()) || "Uncategorized";
-      if (!isChannelVisible(channelId) || !isGroupVisible(groupName)) {
+      if (!isChannelVisible(channelId) || !isGroupVisible(groupName, visibilityScopeFromChannel(channel))) {
         return;
       }
 
@@ -2135,6 +2287,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return true;
       }
 
+      if (isMoviesSearchComposerOpen) {
+        setIsMoviesSearchComposerOpen(false);
+        return true;
+      }
+
       if (String(seriesMainSearchDebouncedTerm || "").trim() || String(moviesMainSearchTerm || "").trim()) {
         clearCatalogSearch();
         return true;
@@ -2153,31 +2310,12 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
       if (showOpeningScreen && !activePanel) {
         // On main menu - Back should exit the app
-        const isWebOS = /Web0S|NetCast/i.test(navigator.userAgent || "") && !/Android/i.test(navigator.userAgent || "");
         const isCap = !!(window as any).Capacitor || window.location.hostname === "app";
 
-        if (isWebOS) {
-
-          try {
-            if ((window as any).webOS?.platformBack) {
-              (window as any).webOS.platformBack();
-            } else {
-              window.close();
-            }
-          } catch (e) {
-          }
+        if (isWebOsRuntime()) {
+          exitWebOsApp();
         } else if (isCap) {
-          try {
-            // Use the Capacitor global to access plugins
-            const AppPlugin = (window as any).Capacitor?.Plugins?.App;
-            if (AppPlugin && typeof AppPlugin.exitApp === "function") {
-              void AppPlugin.exitApp();
-            } else {
-              window.close();
-            }
-          } catch (e) {
-            window.close();
-          }
+          exitNativeApp();
         }
 
 
@@ -2218,13 +2356,18 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
     // Listen for custom webosBackKey event (dispatched by webOS SDK)
     const handleWebosBack = () => {
-      if (isTextEntryActive()) {
+      if (isRemoteTextComposerOpen()) {
+        document.querySelector<HTMLButtonElement>(".remote-text-composer-done")?.click();
+        return;
+      }
+      if (isTextEntryActive() && dismissActiveTextEntry()) {
         return;
       }
       handleBackNavigation();
     };
     
     window.addEventListener('webosBackKey', handleWebosBack);
+    window.addEventListener('capacitorBackKey', handleWebosBack);
 
     const onKeyboardStateChange = (event: Event) => {
       const detail = (event as CustomEvent<{ visibility?: boolean | string; state?: string }>).detail;
@@ -2242,8 +2385,30 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     // Regular keydown handler
     const onKeyDown = (e: KeyboardEvent) => {
       const isBack = isBackKeyEvent(e);
-      
+      const composerOpen = isRemoteTextComposerOpen();
+      const eraseWhileEditing =
+        isTextEraseKey(e) && (isTextEntryActive(e.target) || isPlaylistEditFieldButton(e.target) || composerOpen);
+
+      if (composerOpen && eraseWhileEditing && !isHardwareBackKeyEvent(e)) {
+        e.preventDefault();
+        document.querySelector<HTMLButtonElement>(".remote-text-composer-backspace:not(:disabled)")?.click();
+        return;
+      }
+
+      if (composerOpen && isBack) {
+        e.preventDefault();
+        document.querySelector<HTMLButtonElement>(".remote-text-composer-done")?.click();
+        return;
+      }
+
+      // Fire TV IME Erase is Backspace. Do not treat that as app Back.
+      if (eraseWhileEditing) {
+        return;
+      }
+
       if (isBack && isTextEntryActive(e.target)) {
+        e.preventDefault();
+        dismissActiveTextEntry();
         return;
       }
       
@@ -2256,6 +2421,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       }
       
       if (isTextEntryTarget(e.target)) return;
+      if (document.querySelector(".series-search-composer") || isRemoteTextComposerOpen()) return;
 
       const navKey = normalizeRemoteNavKey(e);
       if (navKey === "Enter" && isFavoriteFocusTarget(document.activeElement)) {
@@ -2363,6 +2529,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
       window.removeEventListener('webosBackKey', handleWebosBack);
+      window.removeEventListener('capacitorBackKey', handleWebosBack);
       document.removeEventListener("keyboardStateChange", onKeyboardStateChange);
       window.removeEventListener("keydown", onKeyDown, true);
     };
@@ -2414,12 +2581,44 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     if (!isContentIconsView) return;
 
     // Overlay visibility checkbox on a poster tile (playlist manager grids).
-    const tileCheckboxFor = (btn: HTMLElement | null): HTMLInputElement | null => {
-      const cb = btn?.closest(".channel-icon-wrap")?.querySelector<HTMLInputElement>('.channel-icon-toggle input[type="checkbox"]');
+    const tileCheckboxFor = (btn: HTMLElement | null): HTMLElement | null => {
+      const wrap = btn?.closest(".channel-icon-wrap");
+      const toggle = wrap?.querySelector<HTMLButtonElement>(".list-visibility-toggle");
+      if (toggle && !toggle.disabled) return toggle;
+      const cb = wrap?.querySelector<HTMLInputElement>('.channel-icon-toggle input[type="checkbox"]');
       return cb && !cb.disabled ? cb : null;
     };
     const tileFavoriteFor = (btn: HTMLElement | null): HTMLButtonElement | null => {
       return btn?.closest(".channel-icon-wrap")?.querySelector<HTMLButtonElement>(".channel-icon-favorite") ?? null;
+    };
+
+    const searchToolbarControls = (): HTMLElement[] =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>(
+          ".series-main-search-bar > .series-main-search-btn"
+        )
+      ).filter((el) => !(el instanceof HTMLButtonElement && el.disabled));
+
+    const groupToolbarControls = (): HTMLElement[] =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>(".group-list .group-list-toolbar .group-list-bulk-btn")
+      ).filter((el) => !(el instanceof HTMLButtonElement && el.disabled));
+
+    const toolbarControls = (): HTMLElement[] => {
+      const search = searchToolbarControls();
+      return search.length > 0 ? search : groupToolbarControls();
+    };
+
+    const composerControls = (): HTMLElement[] =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>(".series-search-composer button")
+      ).filter((el) => !(el instanceof HTMLButtonElement && el.disabled) && el.offsetParent !== null);
+
+    const focusToolbar = (index = 0): boolean => {
+      const buttons = toolbarControls();
+      if (buttons.length === 0) return false;
+      buttons[Math.max(0, Math.min(index, buttons.length - 1))]?.focus();
+      return true;
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -2427,17 +2626,32 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       if (isSeriesDetailsVisible) return;
       if (isMovieDetailsVisible) return;
       if (vodResumePrompt) return;
-      if (isTextEntryTarget(e.target)) return;
 
       const activeEl = document.activeElement as HTMLElement | null;
       if (!activeEl) return;
 
+      const inComposer = !!activeEl.closest(".series-search-composer");
+      const inToolbar = !!activeEl.closest(".series-main-search-bar");
+      if (isTextEntryTarget(e.target) && !inComposer && !inToolbar) return;
+
       const key = normalizeRemoteNavKey(e);
+      const composerOpen = isSeriesSearchComposerOpen || isMoviesSearchComposerOpen;
       const isOverlayCheckbox =
-        activeEl instanceof HTMLInputElement &&
-        activeEl.type === "checkbox" &&
-        !!activeEl.closest(".channel-icon-toggle");
+        !!activeEl.closest(".channel-icon-toggle") &&
+        ((activeEl instanceof HTMLInputElement && activeEl.type === "checkbox") ||
+          activeEl.classList.contains("list-visibility-toggle"));
       const isFavoriteStar = isFavoriteFocusTarget(activeEl);
+
+      if (composerOpen && e.key.length === 1 && /[a-z0-9 ]/i.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        const wanted = e.key === " " ? "Space" : e.key.toUpperCase();
+        const match = Array.from(document.querySelectorAll<HTMLButtonElement>(".series-search-composer button")).find(
+          (button) => button.textContent?.trim() === wanted
+        );
+        match?.click();
+        return;
+      }
 
       // Remote OK sends Enter; native checkboxes only toggle on Space.
       // Fire TV DPAD_CENTER is keyCode 23 and often will not click a poster unless we do it.
@@ -2447,6 +2661,33 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         if (e.repeat) {
           e.preventDefault();
           e.stopPropagation();
+          return;
+        }
+        if (inComposer) {
+          e.preventDefault();
+          e.stopPropagation();
+          activateFocusedRemoteControl(activeEl);
+          return;
+        }
+        if (inToolbar && activeEl instanceof HTMLButtonElement) {
+          e.preventDefault();
+          e.stopPropagation();
+          activateFocusedRemoteControl(activeEl);
+          return;
+        }
+        if (
+          activeEl instanceof HTMLButtonElement &&
+          activeEl.classList.contains("group-list-bulk-btn")
+        ) {
+          e.preventDefault();
+          e.stopPropagation();
+          activateFocusedRemoteControl(activeEl);
+          return;
+        }
+        if (composerOpen) {
+          e.preventDefault();
+          e.stopPropagation();
+          document.querySelector<HTMLButtonElement>(".series-search-composer .series-search-key")?.focus();
           return;
         }
         if (isOverlayCheckbox) {
@@ -2476,6 +2717,58 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       const inIconGrid = !!activeEl.closest(".channel-list-icons");
       const inModeButtons = !!activeEl.closest(".playlist-manager-actions");
       const inGroupList = !!activeEl.closest(".group-list");
+
+      if (inComposer) {
+        const controls = composerControls();
+        const composerIndex = controls.indexOf(activeEl);
+        const actionButtons = Array.from(
+          document.querySelectorAll<HTMLElement>(".series-search-composer-actions button")
+        ).filter((el) => !(el instanceof HTMLButtonElement && el.disabled) && el.offsetParent !== null);
+        const keyButtons = Array.from(
+          document.querySelectorAll<HTMLElement>(".series-search-composer-grid .series-search-key")
+        ).filter((el) => !(el instanceof HTMLButtonElement && el.disabled) && el.offsetParent !== null);
+        const actionIndex = actionButtons.indexOf(activeEl);
+        const keyIndex = keyButtons.indexOf(activeEl);
+        const firstKeyRect = keyButtons[0]?.getBoundingClientRect();
+        const gridRect = keyButtons[0]?.closest(".series-search-composer-grid")?.getBoundingClientRect();
+        const keyColumns = firstKeyRect && gridRect
+          ? Math.max(1, Math.floor((gridRect.width + 8) / (firstKeyRect.width + 8)))
+          : 6;
+
+        if (actionIndex >= 0) {
+          e.preventDefault();
+          if (key === "ArrowRight") actionButtons[Math.min(actionButtons.length - 1, actionIndex + 1)]?.focus();
+          else if (key === "ArrowLeft") actionButtons[Math.max(0, actionIndex - 1)]?.focus();
+          else if (key === "ArrowDown") (keyButtons[0] || controls[0])?.focus();
+          else if (key === "ArrowUp") {
+            if (!focusToolbar(Math.max(0, toolbarControls().length - 1))) {
+              actionButtons[0]?.focus();
+            }
+          }
+          return;
+        }
+
+        if (keyIndex >= 0) {
+          e.preventDefault();
+          if (key === "ArrowRight") keyButtons[Math.min(keyButtons.length - 1, keyIndex + 1)]?.focus();
+          else if (key === "ArrowLeft") keyButtons[Math.max(0, keyIndex - 1)]?.focus();
+          else if (key === "ArrowDown") keyButtons[Math.min(keyButtons.length - 1, keyIndex + keyColumns)]?.focus();
+          else if (key === "ArrowUp") {
+            if (keyIndex < keyColumns) (actionButtons[actionButtons.length - 1] || actionButtons[0])?.focus();
+            else keyButtons[keyIndex - keyColumns]?.focus();
+          }
+          return;
+        }
+
+        if (composerIndex >= 0) {
+          e.preventDefault();
+          if (key === "ArrowRight") controls[Math.min(controls.length - 1, composerIndex + 1)]?.focus();
+          else if (key === "ArrowLeft") controls[Math.max(0, composerIndex - 1)]?.focus();
+          else if (key === "ArrowDown") controls[Math.min(controls.length - 1, composerIndex + 1)]?.focus();
+          else if (key === "ArrowUp") focusToolbar();
+        }
+        return;
+      }
       const movieButtons = Array.from(
         document.querySelectorAll<HTMLButtonElement>(".channel-list-icons .channel-icon-btn")
       );
@@ -2488,14 +2781,35 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         activeEl === document.documentElement ||
         activeEl instanceof HTMLMediaElement;
 
-      if (!inIconGrid && !inModeButtons && !inGroupList) {
+      if (composerOpen && !inComposer) {
+        e.preventDefault();
+        document.querySelector<HTMLButtonElement>(".series-search-composer .series-search-key")?.focus();
+        return;
+      }
+
+      if (!inIconGrid && !inModeButtons && !inGroupList && !inToolbar) {
         if (!inert) return;
         e.preventDefault();
+        if (focusToolbar()) return;
         (groupButtons.find((button) => button.closest(".group-item.active")) || groupButtons[0] || movieButtons.find((btn) => !btn.disabled) || movieButtons[0])?.focus();
         return;
       }
 
       if (inGroupList) {
+        const bulkButtons = groupToolbarControls();
+        const bulkIndex = bulkButtons.indexOf(activeEl);
+        if (bulkIndex >= 0) {
+          e.preventDefault();
+          if (key === "ArrowRight") bulkButtons[Math.min(bulkButtons.length - 1, bulkIndex + 1)]?.focus();
+          else if (key === "ArrowLeft") bulkButtons[Math.max(0, bulkIndex - 1)]?.focus();
+          else if (key === "ArrowDown") {
+            (groupButtons.find((button) => button.closest(".group-item.active")) || groupButtons[0])?.focus();
+          } else if (key === "ArrowUp") {
+            searchToolbarControls()[0]?.focus();
+          }
+          return;
+        }
+
         const groupRow = activeEl.closest(".group-item");
         const groupBtn = groupRow?.querySelector<HTMLButtonElement>(".group-select-btn");
         const groupIndex = groupBtn ? groupButtons.indexOf(groupBtn) : groupButtons.indexOf(activeEl as HTMLButtonElement);
@@ -2508,6 +2822,13 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         }
         if (key === "ArrowUp") {
           e.preventDefault();
+          if (groupIndex <= 0) {
+            if (focusToolbar()) return;
+            if (bulkButtons[0]) {
+              bulkButtons[0].focus();
+              return;
+            }
+          }
           groupButtons[Math.max(0, groupIndex - 1)]?.focus();
           return;
         }
@@ -2526,7 +2847,41 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return;
       }
 
-      if (!inIconGrid && !inModeButtons) return;
+      if (inToolbar) {
+        const buttons = toolbarControls();
+        const toolbarIndex = buttons.indexOf(activeEl);
+        if (toolbarIndex >= 0) {
+          const index = toolbarIndex;
+          if (key === "ArrowRight") {
+            e.preventDefault();
+            if (index < buttons.length - 1) buttons[index + 1]?.focus();
+            return;
+          }
+          if (key === "ArrowLeft") {
+            e.preventDefault();
+            if (index > 0) buttons[index - 1]?.focus();
+            else {
+              const groupBtn =
+                groupButtons.find((button) => button.closest(".group-item.active")) || groupButtons[0];
+              groupBtn?.focus();
+            }
+            return;
+          }
+          if (key === "ArrowDown") {
+            e.preventDefault();
+            const firstTile = movieButtons.find((btn) => !btn.disabled) || movieButtons[0];
+            if (firstTile) firstTile.focus();
+            else groupButtons[0]?.focus();
+            return;
+          }
+          if (key === "ArrowUp") {
+            e.preventDefault();
+            return;
+          }
+        }
+      }
+
+      if (!inIconGrid && !inModeButtons && !inToolbar) return;
 
       const modeButtons = inModeButtons || (inIconGrid && key === "ArrowUp")
         ? Array.from(document.querySelectorAll<HTMLButtonElement>(".playlist-manager-actions button"))
@@ -2592,6 +2947,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         if (key === "ArrowUp") {
           e.preventDefault();
           if (movieIndex < columns) {
+            if (focusToolbar()) return;
             (modeButtons[1] || modeButtons[0])?.focus();
             return;
           }
@@ -2643,6 +2999,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             return;
           }
           if (movieIndex < columns) {
+            if (focusToolbar()) return;
             focusActiveGroup();
             return;
           }
@@ -2677,6 +3034,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
         if (key === "ArrowUp") {
           e.preventDefault();
+          if (movieIndex < columns) {
+            if (focusToolbar()) return;
+            focusActiveGroup();
+            return;
+          }
           const fav = tileFavoriteFor(tileButton);
           if (fav) {
             fav.focus();
@@ -2685,10 +3047,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
           const cb = tileCheckboxFor(tileButton);
           if (cb) {
             cb.focus();
-            return;
-          }
-          if (movieIndex < columns) {
-            focusActiveGroup();
             return;
           }
           focusTile(movieIndex - columns);
@@ -2723,7 +3081,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isContentIconsView, isSeriesPickerVisible, isSeriesDetailsVisible, isMovieDetailsVisible, vodResumePrompt, filteredChannels.length]);
+  }, [isContentIconsView, isSeriesPickerVisible, isSeriesDetailsVisible, isMovieDetailsVisible, vodResumePrompt, filteredChannels.length, isSeriesSearchComposerOpen, isMoviesSearchComposerOpen]);
 
   useEffect(() => {
     if (!isMainMoviesScreen && !isMainSeriesScreen && !isLiveTvView) return;
@@ -2732,9 +3090,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     if (isMovieDetailsVisible) return;
     if (vodResumePrompt) return;
 
+    if (isSeriesSearchComposerOpen || isMoviesSearchComposerOpen) return;
+
     const timer = window.setTimeout(() => {
       const active = document.activeElement as HTMLElement | null;
-      if (active?.closest(".channel-list-icons, .group-list, .vod-resume-overlay")) return;
+      if (active?.closest(".channel-list-icons, .group-list, .vod-resume-overlay, .series-main-search-bar, .series-search-composer")) return;
       if (posterRestoreId) return;
 
       const poster = document.querySelector<HTMLButtonElement>(
@@ -2747,7 +3107,19 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     }, 80);
 
     return () => window.clearTimeout(timer);
-  }, [isMainMoviesScreen, isMainSeriesScreen, isLiveTvView, isSeriesPickerVisible, isSeriesDetailsVisible, isMovieDetailsVisible, vodResumePrompt, contentPage, channelUpdateTick, posterRestoreId]);
+  }, [isMainMoviesScreen, isMainSeriesScreen, isLiveTvView, isSeriesPickerVisible, isSeriesDetailsVisible, isMovieDetailsVisible, vodResumePrompt, contentPage, channelUpdateTick, posterRestoreId, isSeriesSearchComposerOpen, isMoviesSearchComposerOpen]);
+
+  useEffect(() => {
+    if (!isSeriesSearchComposerOpen && !isMoviesSearchComposerOpen) return;
+    const focusPad = () => {
+      document
+        .querySelector<HTMLButtonElement>(".series-search-composer .series-search-key, .series-search-composer-actions .series-main-search-btn")
+        ?.focus();
+    };
+    focusPad();
+    const timer = window.setTimeout(focusPad, 50);
+    return () => window.clearTimeout(timer);
+  }, [isSeriesSearchComposerOpen, isMoviesSearchComposerOpen]);
 
   useEffect(() => {
     if (showOpeningScreen || contentPage !== "live" || activePanel !== null) return;
@@ -2785,8 +3157,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       return btn && !btn.disabled ? btn : null;
     };
 
-    const enabledCheckbox = (row: HTMLElement | null): HTMLInputElement | null => {
+    const enabledCheckbox = (row: HTMLElement | null): HTMLElement | null => {
       if (!row || row instanceof HTMLButtonElement) return null;
+      const toggle = row.querySelector<HTMLButtonElement>(".list-visibility-toggle");
+      if (toggle && !toggle.disabled) return toggle;
       const cb = row.querySelector<HTMLInputElement>('input[type="checkbox"]');
       return cb && !cb.disabled ? cb : null;
     };
@@ -2801,10 +3175,28 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       enabledButton(row) || enabledCheckbox(row);
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (isTextEntryTarget(e.target)) return;
-
       const active = document.activeElement as HTMLElement | null;
       const key = normalizeRemoteNavKey(e);
+      if (isRemoteTextComposerOpen()) {
+        if (key === "Enter") {
+          if (e.repeat) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
+          e.preventDefault();
+          e.stopPropagation();
+          activateFocusedRemoteControl(active);
+        }
+        return;
+      }
+      const inPlaylistEditForm =
+        e.target instanceof HTMLElement && !!e.target.closest(".playlist-edit-form");
+      // Keep Left/Right and typing inside edit fields; remotes still need
+      // Up/Down to reach Password after Username.
+      if (isTextEntryTarget(e.target) && (!inPlaylistEditForm || (key !== "ArrowUp" && key !== "ArrowDown"))) {
+        return;
+      }
 
       // Remote OK sends Enter; native checkboxes only toggle on Space.
       if (key === "Enter") {
@@ -2813,13 +3205,20 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
           e.stopPropagation();
           return;
         }
-        if (active instanceof HTMLInputElement && active.type === "checkbox") {
+        if (
+          (active instanceof HTMLInputElement && active.type === "checkbox") ||
+          (active instanceof HTMLButtonElement && active.classList.contains("list-visibility-toggle"))
+        ) {
           e.preventDefault();
           e.stopPropagation();
           activateFocusedRemoteControl(active);
         } else if (
           active instanceof HTMLButtonElement &&
-          (active.classList.contains("channel-list-favorite") || active.classList.contains("epg-favorite-btn"))
+          (active.classList.contains("channel-list-favorite") ||
+            active.classList.contains("epg-favorite-btn") ||
+            active.classList.contains("group-list-bulk-btn") ||
+            active.classList.contains("series-main-search-btn") ||
+            !!active.closest(".playlist-edit-form"))
         ) {
           e.preventDefault();
           e.stopPropagation();
@@ -2850,15 +3249,17 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       const channelRows = Array.from(document.querySelectorAll<HTMLElement>(".channel-list .channel-item"))
         .filter((row) => !row.classList.contains("channel-header-item"));
       const toolbarButtons = Array.from(
-        document.querySelectorAll<HTMLElement>(".group-list .group-list-bulk-btn")
-      );
+        document.querySelectorAll<HTMLElement>(
+          ".series-main-search-bar > .series-main-search-btn, .group-list .group-list-toolbar .group-list-bulk-btn"
+        )
+      ).filter((el) => !(el instanceof HTMLButtonElement && el.disabled));
       const loadMoreBtn = document.querySelector<HTMLElement>(".channel-list .channel-load-more-btn");
       const favoriteBtn =
         document.querySelector<HTMLButtonElement>(".player-control-bar-favorite") ||
         document.querySelector<HTMLButtonElement>(".epg-favorite-btn");
-      const cardButtons = playlistCardButtons();
+      const cardStops = playlistCardFocusables();
       const onFavorite = !!active && !!favoriteBtn && active === favoriteBtn;
-      const cardIndex = active instanceof HTMLButtonElement ? cardButtons.indexOf(active) : -1;
+      const cardIndex = active ? cardStops.indexOf(active) : -1;
       const onCard = cardIndex >= 0;
       if (
         modeButtons.length === 0 &&
@@ -2871,7 +3272,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return;
       }
 
-      const isCheckbox = active instanceof HTMLInputElement && active.type === "checkbox";
+      const isCheckbox =
+        (active instanceof HTMLInputElement && active.type === "checkbox") ||
+        !!active?.classList.contains("list-visibility-toggle");
       const isFavoriteStar = !!active?.classList.contains("channel-list-favorite");
       const findRowIndex = (rows: HTMLElement[]) =>
         rows.findIndex((row) => row === active || (!!active && row.contains(active)));
@@ -2911,6 +3314,50 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
           // Older WebViews may not support scrollIntoView options.
         }
       };
+
+      const editForm = document.querySelector<HTMLElement>(".playlist-edit-form");
+      if (editForm) {
+        const editingCard = editForm.closest(".playlist-card");
+        const inForm = !!active && editForm.contains(active);
+        const inEditingCard = !!active && !!editingCard?.contains(active);
+        const formStops = Array.from(
+          editForm.querySelectorAll<HTMLElement>("button, input.playlist-edit-field")
+        ).filter((el) => !(el as HTMLButtonElement).disabled && el.offsetParent !== null);
+        if ((inForm || inEditingCard) && formStops.length > 0) {
+          if (isTextEntryTarget(active) && (key === "ArrowLeft" || key === "ArrowRight")) {
+            return;
+          }
+          if (!inForm && key === "ArrowDown" && active?.closest(".playlist-actions")) {
+            moveTo(formStops[0]);
+            return;
+          }
+          if (inForm) {
+            const index = active ? formStops.indexOf(active) : -1;
+            if (key === "ArrowDown") {
+              moveTo(formStops[Math.min(formStops.length - 1, Math.max(0, index) + 1)]);
+            } else if (key === "ArrowUp") {
+              if (index <= 0) {
+                const actionButtons = Array.from(
+                  editingCard?.querySelectorAll<HTMLButtonElement>(".playlist-actions button") || []
+                ).filter((btn) => !btn.disabled && btn.offsetParent !== null);
+                moveTo(actionButtons[actionButtons.length - 1] || formStops[0]);
+              } else {
+                moveTo(formStops[index - 1]);
+              }
+            } else if (key === "ArrowLeft" || key === "ArrowRight") {
+              const current = formStops[Math.max(0, index)];
+              const currentTop = current.getBoundingClientRect().top;
+              const row = formStops.filter(
+                (el) => Math.abs(el.getBoundingClientRect().top - currentTop) < 18
+              );
+              const rowIndex = row.indexOf(current);
+              const next = key === "ArrowRight" ? row[rowIndex + 1] : row[rowIndex - 1];
+              moveTo(next || current);
+            }
+            return;
+          }
+        }
+      }
 
       // Focus is outside the lists: capture only from inert targets (body,
       // video surface), never steal from other focused buttons (EPG, player).
@@ -4110,8 +4557,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             setActivePlaylistId(playlist.id);
             writeStoredItem(SHARED_PLAYLIST_ID_KEY, playlist.id);
             setChannels(mergedChannels as any[], `playlist-manager-${scope}-load`);
-            setChannelUpdateTick((tick) => tick + 1);
-            setCategoryRefreshTick((tick) => tick + 1);
+            startTransition(() => {
+              setChannelUpdateTick((tick) => tick + 1);
+              setCategoryRefreshTick((tick) => tick + 1);
+            });
 
             const refreshedModeChannels = mergedChannels.filter((channel) => matchesContentMode(channel, content));
             if (refreshedModeChannels.length === 0) continue;
@@ -4317,13 +4766,16 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
     if (candidates.length === 0) return;
 
+    await waitForBackgroundSlot();
+
     guidePrefetchInFlightRef.current = true;
     let updated = 0;
-    const workerCount = Math.min(10, candidates.length);
+    const workerCount = Math.min(getBackgroundConcurrency(10), candidates.length);
     let cursor = 0;
 
     const worker = async () => {
       while (cursor < candidates.length) {
+        await yieldToMain();
         const index = cursor;
         cursor += 1;
         const channel = candidates[index];
@@ -4366,7 +4818,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     }
 
     if (updated > 0) {
-      setCategoryRefreshTick((tick) => tick + 1);
+      startTransition(() => {
+        setCategoryRefreshTick((tick) => tick + 1);
+      });
     }
 
     return updated;
@@ -4677,44 +5131,55 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
           hidden={isVodPlaybackFullscreen || isMovieDetailsVisible || isSeriesDetailsVisible}
           aria-hidden={isVodPlaybackFullscreen || isMovieDetailsVisible || isSeriesDetailsVisible}
         >
-          {isMainSeriesScreen && (
+          {isLiveTvView && (
             <div className="series-main-search-bar">
               <button
                 type="button"
                 className="series-main-search-btn"
-                onClick={() => setSeriesSortDirection((current) => (current === "asc" ? "desc" : "asc"))}
-                aria-label={seriesSortDirection === "asc" ? "Sort Z-A" : "Sort A-Z"}
+                onClick={() => setGroupSortDirection((current) => (current === "asc" ? "desc" : "asc"))}
+                aria-label={groupSortDirection === "asc" ? "Sort Z-A" : "Sort A-Z"}
               >
-                {seriesSortDirection === "asc" ? "Sort Z-A" : "Sort A-Z"}
+                {groupSortDirection === "asc" ? "Sort Z-A" : "Sort A-Z"}
               </button>
-              <button
-                type="button"
-                className="series-main-search-btn"
-                onClick={() => {
-                  setSeriesMainSearchDraft(seriesMainSearchDebouncedTerm);
-                  setIsSeriesSearchComposerOpen((open) => !open);
-                }}
-              >
-                {seriesMainSearchDebouncedTerm.trim() ? "Change Search" : "Search"}
-              </button>
-              {seriesMainSearchDebouncedTerm.trim() && (
+            </div>
+          )}
+          {isMainSeriesScreen && (
+            <div className="series-main-search-bar">
+              {!isSeriesSearchComposerOpen && (
                 <>
                   <button
                     type="button"
                     className="series-main-search-btn"
-                    onClick={() => commitSeriesMainSearch("")}
+                    onClick={() => setSeriesSortDirection((current) => (current === "asc" ? "desc" : "asc"))}
+                    aria-label={seriesSortDirection === "asc" ? "Sort Z-A" : "Sort A-Z"}
                   >
-                    Clear
+                    {seriesSortDirection === "asc" ? "Sort Z-A" : "Sort A-Z"}
                   </button>
-                  <span className="series-main-search-hint" aria-live="polite">
-                    Search all series: {seriesMainSearchDebouncedTerm.trim()}
-                  </span>
+                  <button
+                    type="button"
+                    className="series-main-search-btn"
+                    onClick={() => {
+                      setSeriesMainSearchDraft(seriesMainSearchDebouncedTerm);
+                      setIsSeriesSearchComposerOpen(true);
+                    }}
+                  >
+                    {seriesMainSearchDebouncedTerm.trim() ? seriesMainSearchDebouncedTerm.trim() : "Search"}
+                  </button>
+                  {seriesMainSearchDebouncedTerm.trim() && (
+                    <button
+                      type="button"
+                      className="series-main-search-btn"
+                      onClick={() => commitSeriesMainSearch("")}
+                    >
+                      Clear
+                    </button>
+                  )}
                 </>
               )}
               {isSeriesSearchComposerOpen && (
                 <div className="series-search-composer" role="dialog" aria-label="Series search composer">
                   <div className="series-search-composer-value">
-                    {seriesMainSearchDraft || "Choose characters"}
+                    {seriesMainSearchDraft || "Search series"}
                   </div>
                   <div className="series-search-composer-actions">
                     <button
@@ -4728,7 +5193,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                     <button
                       type="button"
                       className="series-main-search-btn"
-                      onClick={() => setSeriesMainSearchDraft("")}
+                      onClick={() => {
+                        setSeriesMainSearchDraft("");
+                        commitSeriesMainSearch("");
+                      }}
                       disabled={seriesMainSearchDraft.length === 0}
                     >
                       Clear Draft
@@ -4770,37 +5238,99 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             </div>
           )}
           {isMainMoviesScreen && (
-            <div className="movies-main-search-bar">
-              <input
-                type="search"
-                className="movies-main-search-input"
-                value={moviesMainSearchTerm}
-                onChange={(event) => setMoviesMainSearchTerm(event.target.value.slice(0, 64))}
-                placeholder="Search all movies"
-                aria-label="Search all unhidden movies"
-              />
-              {moviesMainSearchTerm.trim() && (
+            <div className="series-main-search-bar">
+              {!isMoviesSearchComposerOpen && (
                 <>
-                <button
-                  type="button"
-                  className="series-main-search-btn"
-                  onClick={() => setMoviesMainSearchTerm("")}
-                >
-                  Clear
-                </button>
-                <span className="series-main-search-hint" aria-live="polite">
-                  All unhidden movies
-                </span>
+                  <button
+                    type="button"
+                    className="series-main-search-btn"
+                    onClick={() => setMoviesSortDirection((current) => (current === "asc" ? "desc" : "asc"))}
+                    aria-label={moviesSortDirection === "asc" ? "Sort Z-A" : "Sort A-Z"}
+                  >
+                    {moviesSortDirection === "asc" ? "Sort Z-A" : "Sort A-Z"}
+                  </button>
+                  <button
+                    type="button"
+                    className="series-main-search-btn"
+                    onClick={() => {
+                      setMoviesMainSearchDraft(moviesMainSearchTerm);
+                      setIsMoviesSearchComposerOpen(true);
+                    }}
+                  >
+                    {moviesMainSearchTerm.trim() ? moviesMainSearchTerm.trim() : "Search"}
+                  </button>
+                  {moviesMainSearchTerm.trim() && (
+                    <button
+                      type="button"
+                      className="series-main-search-btn"
+                      onClick={() => {
+                        setMoviesMainSearchTerm("");
+                        setMoviesMainSearchDraft("");
+                        setMoviesMainSearchResults(null);
+                        setMoviesSearchBusy(false);
+                      }}
+                    >
+                      Clear
+                    </button>
+                  )}
                 </>
               )}
-              <button
-                type="button"
-                className="series-main-search-btn"
-                onClick={() => setMoviesSortDirection((current) => (current === "asc" ? "desc" : "asc"))}
-                aria-label={moviesSortDirection === "asc" ? "Sort Z-A" : "Sort A-Z"}
-              >
-                {moviesSortDirection === "asc" ? "Sort Z-A" : "Sort A-Z"}
-              </button>
+              {isMoviesSearchComposerOpen && (
+                <div className="series-search-composer" role="dialog" aria-label="Movies search composer">
+                  <div className="series-search-composer-value">
+                    {moviesMainSearchDraft || "Search movies"}
+                  </div>
+                  <div className="series-search-composer-actions">
+                    <button
+                      type="button"
+                      className="series-main-search-btn"
+                      onClick={backspaceMoviesSearchDraft}
+                      disabled={moviesMainSearchDraft.length === 0}
+                    >
+                      Backspace
+                    </button>
+                    <button
+                      type="button"
+                      className="series-main-search-btn"
+                      onClick={() => setMoviesMainSearchDraft("")}
+                      disabled={moviesMainSearchDraft.length === 0}
+                    >
+                      Clear Draft
+                    </button>
+                    <button
+                      type="button"
+                      className="series-main-search-btn"
+                      onClick={() => appendMoviesSearchDraft(" ")}
+                      disabled={moviesMainSearchDraft.length >= 64}
+                    >
+                      Space
+                    </button>
+                    <button
+                      type="button"
+                      className="series-main-search-btn"
+                      onClick={applyMoviesSearchDraft}
+                    >
+                      Apply
+                    </button>
+                  </div>
+                  <div className="series-search-composer-grid">
+                    {SERIES_SEARCH_KEY_ROWS.flat().map((key) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className="series-search-key"
+                        onClick={() => appendMoviesSearchDraft(key)}
+                        disabled={moviesMainSearchDraft.length >= 64}
+                      >
+                        {key}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="series-main-search-hint" aria-live="polite">
+                    Build the term with buttons, then choose Apply to search all unhidden movies
+                  </span>
+                </div>
+              )}
             </div>
           )}
           {isPlaylistManagerPage ? (
@@ -4810,9 +5340,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                   groups={groups}
                   groupCounts={groupCounts}
                   selectedKey={selectedMasterKey}
-                  isGroupVisible={isGroupVisible}
+                  isGroupVisible={(group) => isGroupVisible(group, contentMode)}
                   onToggleCategory={(groupNames, visible) => {
-                    setGroupsVisible(groupNames, visible);
+                    setGroupsVisible(groupNames, visible, false, contentMode);
                     setCategoryRefreshTick((tick) => tick + 1);
                   }}
                   onSelectKey={(key) => {
@@ -4828,23 +5358,23 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                   onSelect={(group) => {
                     selectBrowseGroup(group);
                   }}
-                  isGroupVisible={isGroupVisible}
+                  isGroupVisible={(group) => isGroupVisible(group, contentMode)}
                   onToggleGroupVisible={(group, visible) => {
-                    setGroupVisible(group, visible);
+                    setGroupVisible(group, visible, contentMode);
                     setCategoryRefreshTick((tick) => tick + 1);
                   }}
                   showVisibilityControls={isPlaylistManagerPage}
                   className={isMainMoviesScreen ? "group-list-movies-right" : ""}
                   batchSize={isCapacitorRuntime() && (isLiveContentPage || isPlaylistManagerPage) ? 60 : undefined}
                   autoLoadOnScroll={isCapacitorRuntime() && (isLiveContentPage || isPlaylistManagerPage)}
-                  onSetAllVisible={
-                    isPlaylistManagerPage
-                      ? (visible) => {
-                          setGroupsVisible(groupsForList, visible, true);
-                          setCategoryRefreshTick((tick) => tick + 1);
-                        }
-                      : undefined
-                  }
+                  sortDirection={groupSortDirection}
+                  onSortDirectionChange={setGroupSortDirection}
+                  showSortButton
+                  showBulkVisibilityButtons
+                  onSetAllVisible={(visible) => {
+                    setGroupsVisible(groupsForList, visible, true, contentMode);
+                    setCategoryRefreshTick((tick) => tick + 1);
+                  }}
                 />
                 <ChannelList
                   channels={filteredChannelsForDisplay}
@@ -4879,19 +5409,22 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             onSelect={(group) => {
               selectBrowseGroup(group);
             }}
-            isGroupVisible={isGroupVisible}
+            isGroupVisible={(group) => isGroupVisible(group, contentMode)}
             onToggleGroupVisible={(group, visible) => {
-              setGroupVisible(group, visible);
+              setGroupVisible(group, visible, contentMode);
               setCategoryRefreshTick((tick) => tick + 1);
             }}
             showVisibilityControls={isPlaylistManagerPage}
             className={isMainMoviesScreen ? "group-list-movies-right" : ""}
             batchSize={isCapacitorRuntime() && (isLiveContentPage || isPlaylistManagerPage) ? 60 : undefined}
             autoLoadOnScroll={isCapacitorRuntime() && (isLiveContentPage || isPlaylistManagerPage)}
+            sortDirection={groupSortDirection}
+            onSortDirectionChange={setGroupSortDirection}
+            showSortButton={false}
             onSetAllVisible={
               isPlaylistManagerPage
                 ? (visible) => {
-                    setGroupsVisible(groups, visible, true);
+                    setGroupsVisible(groups, visible, true, contentMode);
                     setCategoryRefreshTick((tick) => tick + 1);
                   }
                 : undefined
@@ -5142,19 +5675,35 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
   const tag = target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  if (tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag !== "INPUT") return false;
+  const type = String((target as HTMLInputElement).type || "text").toLowerCase();
+  return type !== "checkbox" && type !== "radio" && type !== "button" && type !== "submit";
+}
+
+function isVisiblePlaylistCardStop(el: HTMLElement): boolean {
+  if ((el as HTMLButtonElement | HTMLInputElement).disabled) return false;
+  if (el.offsetParent === null) return false;
+  const rect = el.getBoundingClientRect();
+  return rect.width >= 2 && rect.height >= 2;
 }
 
 function playlistCardButtons(): HTMLButtonElement[] {
   return Array.from(document.querySelectorAll<HTMLButtonElement>(".playlist-card button")).filter(
-    (btn) => !btn.disabled && btn.offsetParent !== null
+    (btn) => isVisiblePlaylistCardStop(btn)
   );
+}
+
+function playlistCardFocusables(): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>(".playlist-card button, .playlist-card .playlist-edit-form input")
+  ).filter((el) => isVisiblePlaylistCardStop(el));
 }
 
 function firstPlaylistCardButton(): HTMLButtonElement | null {
   const loaded = Array.from(
     document.querySelectorAll<HTMLButtonElement>(".playlist-card-loaded button")
-  ).find((btn) => !btn.disabled && btn.offsetParent !== null);
+  ).find((btn) => isVisiblePlaylistCardStop(btn));
   return loaded || playlistCardButtons()[0] || null;
 }
 
@@ -5167,29 +5716,32 @@ function stepPlaylistCardFocus(
   active: HTMLElement | null,
   key: "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight"
 ): HTMLElement | null | undefined {
-  const buttons = playlistCardButtons();
-  if (buttons.length === 0) return undefined;
-  const index = active instanceof HTMLButtonElement ? buttons.indexOf(active) : -1;
+  const stops = playlistCardFocusables();
+  if (stops.length === 0) return undefined;
+  const index = active ? stops.indexOf(active) : -1;
   if (index < 0) return undefined;
 
-  const current = buttons[index];
+  const current = stops[index];
   const currentRect = current.getBoundingClientRect();
-  const sameRow = (btn: HTMLButtonElement) =>
-    Math.abs(btn.getBoundingClientRect().top - currentRect.top) < 18;
+  const sameRow = (el: HTMLElement) =>
+    Math.abs(el.getBoundingClientRect().top - currentRect.top) < 18;
 
   if (key === "ArrowLeft" || key === "ArrowRight") {
-    const row = buttons.filter(sameRow);
+    const row = stops.filter(sameRow);
     const rowIndex = row.indexOf(current);
     const next = key === "ArrowRight" ? row[rowIndex + 1] : row[rowIndex - 1];
     return next || current;
   }
 
   const downward = key === "ArrowDown";
-  const candidates = buttons.filter((btn) => {
-    const top = btn.getBoundingClientRect().top;
+  const candidates = stops.filter((el) => {
+    const top = el.getBoundingClientRect().top;
     return downward ? top > currentRect.top + 10 : top < currentRect.top - 10;
   });
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) {
+    const linear = downward ? stops[index + 1] : stops[index - 1];
+    return linear || null;
+  }
 
   const center = currentRect.left + currentRect.width / 2;
   candidates.sort((a, b) => {
@@ -5234,7 +5786,7 @@ function isChannelRecord(channel: any): channel is Record<string, any> {
 function isUnhiddenContentChannel(channel: any): boolean {
   if (!isChannelRecord(channel)) return false;
   const groupName = (channel.group && String(channel.group).trim()) || "Uncategorized";
-  return isGroupVisible(groupName) && isChannelVisible(String(channel.id || ""));
+  return isGroupVisible(groupName, visibilityScopeFromChannel(channel)) && isChannelVisible(String(channel.id || ""));
 }
 
 function searchableCatalogTitle(name: string): string {
@@ -5271,6 +5823,7 @@ function catalogSearchRank(name: string, group: string, term: string): number {
 
   const tokens = `${core} ${title}`.split(/[^a-z0-9]+/).filter(Boolean);
   if (tokens.some((token) => token.startsWith(query))) return 1;
+  if (query.length === 1) return -1;
   if (
     core.includes(query) ||
     title.includes(query) ||

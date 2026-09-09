@@ -20,6 +20,13 @@ import {
   isWebOsRelayUrl,
   markWebOsPcRelayOriginDown
 } from "./webosStreamRelay";
+import { setPlaybackActive } from "./taskScheduler";
+import {
+  applyPreferredStreamFormat,
+  forgetWorkingStreamFormat,
+  orderFormatsByLastGood,
+  rememberWorkingStreamFormat
+} from "./streamFormatPreference";
 
 let hls: Hls | null = null;
 type HlsConstructor = typeof import("hls.js").default;
@@ -321,6 +328,9 @@ function emitPlayerPlaying() {
   if (shouldSuppressPlayerEvents()) return;
   // Successful playback should reset retry-chain protection.
   rapidRetryChain = { rootUrl: null, count: 0, lastAt: 0 };
+  if (lastRootSourceUrl) {
+    rememberWorkingStreamFormat(lastRootSourceUrl);
+  }
   window.dispatchEvent(new CustomEvent("playerPlaying"));
 }
 
@@ -545,11 +555,17 @@ function listXtreamVodContainerUrls(url: string, preferBrowserSafe: boolean): st
   const queryIndex = url.indexOf("?");
   const query = queryIndex >= 0 ? url.slice(queryIndex) : "";
   const isSeries = /\/series\//i.test(url);
-  const preferred = preferBrowserSafe
-    ? isSeries
-      ? ["mp4", "ts", "mkv", "m3u8"]
-      : ["mp4", "m3u8", "ts", "mkv"]
-    : [current, "mp4", "m3u8", "ts", "mkv"];
+  // Simulator Chromium: keep the catalog extension first. Host-wide last-good
+  // m3u8 is a common 551 on Xtream VOD. Real TVs can still reuse last-good.
+  const preferred = orderFormatsByLastGood(
+    preferBrowserSafe
+      ? isSeries
+        ? [current, "mp4", "mkv", "ts", "m3u8"]
+        : [current, "mp4", "mkv", "ts", "m3u8"]
+      : [current, "mp4", "m3u8", "ts", "mkv"],
+    url,
+    { hostFallback: !preferBrowserSafe }
+  );
   const seen = new Set<string>();
   const out: string[] = [];
   for (const ext of preferred) {
@@ -1510,6 +1526,7 @@ export function initPlayerEngine() {
 }
 
 export function stopPlayback() {
+  setPlaybackActive(false);
   playRequestToken += 1;
   invalidateGlobalPlayAttempts();
   suppressPlayerEventsUntil = Date.now() + 3000;
@@ -1565,6 +1582,7 @@ export function playUrl(
   hasRetriedTranscodeBootstrap = false,
   contentType: ContentType = "live"
 ) {
+  setPlaybackActive(true);
   // Always re-bind to the current DOM element in case React re-rendered and
   // replaced the element reference since the last initPlayerEngine() call.
   videoEl = document.getElementById("player-main") as HTMLVideoElement | null;
@@ -1585,10 +1603,31 @@ export function playUrl(
     }
   }
   const isLiveContent = contentType === "live";
+  const isVodContent = contentType === "movie" || contentType === "series";
+
+  // Last container that played for this stream/provider goes first.
+  if (isLiveContent && !isWebOsRuntime() && !normalizedUrl.includes("/__transcode")) {
+    normalizedUrl = applyPreferredStreamFormat(normalizedUrl, ["ts", "m3u8"]);
+  }
+  if (isVodContent && !normalizedUrl.includes("/__transcode")) {
+    if (isWebOsRuntime()) {
+      normalizedUrl = rewriteHttpsToHttpUrl(normalizedUrl);
+    }
+    const variants = listXtreamVodContainerUrls(
+      normalizedUrl,
+      isWebOsSimulator() || isCapacitorRuntime()
+    );
+    if (variants.length > 0) {
+      normalizedUrl = variants[Math.min(Math.max(proxyFallbackStage, 0), variants.length - 1)];
+    }
+  }
+
   const rootSourceUrlEarly = resolveRootSourceUrl(normalizedUrl);
+  if (!isTranscodeSessionUrl(normalizedUrl)) {
+    lastRootSourceUrl = rootSourceUrlEarly;
+  }
 
   const nativeBridgeReady = isNativePlayerAvailable();
-  const isVodContent = contentType === "movie" || contentType === "series";
   // ExoPlayer has no AVI/WMV extractor — keep the WebView fallback chain for those.
   const isExoUnsupportedVodContainer = isVodContent && /\.(avi|wmv)(?:[?#]|$)/i.test(rootSourceUrlEarly);
   const isNativeContent = isLiveContent || (isVodContent && !isExoUnsupportedVodContainer);
@@ -1608,17 +1647,6 @@ export function playUrl(
   const globalAttemptId = nextGlobalPlayAttemptId();
   const isStaleRequest = () => token !== playRequestToken || !isCurrentGlobalPlayAttempt(globalAttemptId);
   let hasPlaybackStarted = false;
-
-  // webOS movies/series play from the provider URL on the TV. Do not block
-  // VOD on a PC FFmpeg relay the TV may not have.
-
-  if (isWebOsRuntime() && isVodContent && !normalizedUrl.includes("/__transcode")) {
-    normalizedUrl = rewriteHttpsToHttpUrl(normalizedUrl);
-    const variants = listXtreamVodContainerUrls(normalizedUrl, isWebOsSimulator());
-    if (variants.length > 0) {
-      normalizedUrl = variants[Math.min(Math.max(proxyFallbackStage, 0), variants.length - 1)];
-    }
-  }
 
   const markPlaybackStarted = () => {
     if (isStaleRequest()) return;
@@ -1711,6 +1739,25 @@ export function playUrl(
           emitPlayerError(detail?.message || "Native playback failed");
           return;
         }
+        const nativeVariants = listXtreamVodContainerUrls(
+          rootSourceUrlEarly,
+          isWebOsSimulator() || isCapacitorRuntime()
+        );
+        const nextNativeStage = proxyFallbackStage + 1;
+        if (nextNativeStage < nativeVariants.length) {
+          emitPlayerTranscoding("Trying last-known stream format alternatives...");
+          playUrl(
+            url,
+            hasRetriedHttpFallback,
+            false,
+            nextNativeStage,
+            false,
+            hasTriedTranscodeFallback,
+            hasRetriedTranscodeBootstrap,
+            contentType
+          );
+          return;
+        }
         console.warn("[playUrl-native-exo] Native ExoPlayer failed, falling back to WebView relay");
         emitPlayerTranscoding("Native player failed, trying relay playback...");
         playUrl(
@@ -1727,7 +1774,10 @@ export function playUrl(
       window.addEventListener("playerError", onNativeExoError as EventListener);
       window.addEventListener(
         "playerPlaying",
-        () => window.removeEventListener("playerError", onNativeExoError as EventListener),
+        () => {
+          window.removeEventListener("playerError", onNativeExoError as EventListener);
+          rememberWorkingStreamFormat(nativeUrl);
+        },
         { once: true }
       );
       return;
@@ -1838,10 +1888,15 @@ export function playUrl(
 
   const fallbackBaseUrl = /^https?:\/\//i.test(rootSourceUrl) ? rootSourceUrl : normalizedUrl;
   const tryWebOsVodVariant = (reason: string): boolean => {
-    if (!isWebOsRuntime() || isLiveContent) return false;
-    const variants = listXtreamVodContainerUrls(fallbackBaseUrl, isWebOsSimulator());
+    if (isLiveContent) return false;
+    const variants = listXtreamVodContainerUrls(
+      fallbackBaseUrl,
+      isWebOsSimulator() || isCapacitorRuntime()
+    );
     const nextStage = proxyFallbackStage + 1;
     if (nextStage >= variants.length) return false;
+    forgetWorkingStreamFormat(fallbackBaseUrl);
+    emitPlayerTranscoding("This file format is not available, trying another...");
     playUrl(
       fallbackBaseUrl,
       hasRetriedHttpFallback,
@@ -1959,8 +2014,9 @@ export function playUrl(
   } else if (
     isVodContent &&
     isWebOsSimulator() &&
-    !isHlsManifestPlaybackUrl(playbackUrl) &&
-    !playbackUrl.includes("/__stream")
+    !playbackUrl.includes("/__stream") &&
+    !playbackUrl.includes("/__transcode") &&
+    !playbackUrl.startsWith("blob:")
   ) {
     const relayed = toWebOsPcStreamUrl(playbackUrl);
     if (relayed) playbackUrl = relayed;
@@ -3217,10 +3273,19 @@ export function playUrl(
           fatalDetails === "manifestLoadTimeOut" ||
           fatalDetails === "levelLoadError" ||
           /network error|status 0|ERR_CONNECTION/i.test(`${errorMsg} ${fatalDetails}`);
+        const hlsStatusCode = Number(
+          (data as { response?: { code?: number } }).response?.code || 0
+        );
+        const isMissingVodContainer =
+          hlsStatusCode === 551 ||
+          hlsStatusCode === 404 ||
+          hlsStatusCode === 410 ||
+          hlsStatusCode === 422;
 
         if (isWebOsRuntime() && isNetworkManifestFailure) {
           if (isWebOsSimulator()) {
             if (!isLiveContent) {
+              if (isMissingVodContainer) forgetWorkingStreamFormat(fallbackBaseUrl);
               if (tryWebOsVodVariant("hls-network")) return;
               if (!hasTriedTranscodeFallback && allowTranscodeFallback) {
                 const transcodeUrl = toTranscodeFallbackUrl(rootSourceUrl, false, "compat");

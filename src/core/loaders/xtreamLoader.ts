@@ -16,16 +16,13 @@ import type { PlaylistLoadScope } from "./playlistLoader";
 import type { PlaylistCatalogTotals } from "../playlistStore";
 import { parseXtreamAccountInfo, type XtreamAccountInfo } from "../xtreamAccount";
 import { fetchWebOsRemote, fetchWebOsRemoteJson } from "../webosStreamRelay";
+import { getBackgroundConcurrency, yieldToMain } from "../taskScheduler";
 
 const CAPACITOR_PERSIST_GROUP_CAP = 8000;
 const CAPACITOR_CATEGORY_CONCURRENCY = 8;
 const CAPACITOR_XTREAM_JSON_MAX_BYTES = 3_500_000;
 const CAPACITOR_XTREAM_CATALOG_MAX_BYTES = 20_000_000;
 export type XtreamLoadProgress = (status: string) => void;
-
-function yieldToMain(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 0));
-}
 
 let capacitorNativeApiPath: "/__api" | "/__stream" | null = null;
 
@@ -224,7 +221,7 @@ function mapLiveStream(
   return {
     id: `live_${item.stream_id}`,
     name: item.name || `Stream ${item.stream_id}`,
-    logo: isCapacitorRuntime() ? undefined : item.stream_icon,
+    logo: String(item.stream_icon || "").trim() || undefined,
     url: `${baseUrl}/live/${user}/${pass}/${item.stream_id}.${liveExtension}`,
     group: `TV: ${group}`,
     contentType: "live" as ContentType,
@@ -344,8 +341,10 @@ async function persistCategoriesInPairs(
   const categories = categoryItems.filter((category) => category?.category_id != null);
   let saved = 0;
 
-  for (let index = 0; index < categories.length; index += CAPACITOR_CATEGORY_CONCURRENCY) {
-    const slice = categories.slice(index, index + CAPACITOR_CATEGORY_CONCURRENCY);
+  for (let index = 0; index < categories.length; ) {
+    const sliceSize = getBackgroundConcurrency(CAPACITOR_CATEGORY_CONCURRENCY);
+    const slice = categories.slice(index, index + sliceSize);
+    index += slice.length;
     const batches = await Promise.all(
       slice.map((category) =>
         fetchAndMapCategory(category, categoryMap, baseUrl, user, pass, useProxy, streamsAction, mapItem).catch(
@@ -367,7 +366,7 @@ async function persistCategoriesInPairs(
       for (const item of toSave) item.list.length = 0;
     }
     onProgress?.(
-      `${label} ${Math.min(index + slice.length, categories.length)}/${categories.length} categories (${saved.toLocaleString()} titles)…`
+      `${label} ${Math.min(index, categories.length)}/${categories.length} categories (${saved.toLocaleString()} titles)…`
     );
     await yieldToMain();
   }
@@ -1020,16 +1019,19 @@ async function readResponseJsonCapped(
   }
 
   if (declaredLength > 0) {
+    await yieldToMain();
     return response.json();
   }
 
   const reader = response.body?.getReader();
   if (!reader) {
+    await yieldToMain();
     return response.json();
   }
 
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let readChunks = 0;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -1041,6 +1043,10 @@ async function readResponseJsonCapped(
         return null;
       }
       chunks.push(value);
+      readChunks += 1;
+      if (readChunks % 8 === 0) {
+        await yieldToMain();
+      }
     }
   }
 
@@ -1051,6 +1057,7 @@ async function readResponseJsonCapped(
     offset += chunk.byteLength;
   }
   chunks.length = 0;
+  await yieldToMain();
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
+import { VisibilityToggle } from "./VisibilityToggle";
 import {
   collectMasterBouquetEntries,
   extractMasterBouquetKey,
@@ -72,28 +73,16 @@ function MasterCategoryRow({
   onToggleCategory: (groups: string[], visible: boolean) => void;
   onSelect: () => void;
 }) {
-  const checkboxRef = useRef<HTMLInputElement | null>(null);
   const visibleCount = categoryGroups.filter((group) => isGroupVisible(group)).length;
   const allVisible = categoryGroups.length > 0 && visibleCount === categoryGroups.length;
-  const noneVisible = visibleCount === 0;
-
-  useEffect(() => {
-    if (checkboxRef.current) {
-      checkboxRef.current.indeterminate = !allVisible && !noneVisible;
-    }
-  }, [allVisible, noneVisible]);
 
   return (
     <div className={"group-item" + (selected ? " active" : "") + (allVisible ? "" : " hidden")}>
       <div className="list-toggle-row">
-        <input
-          ref={checkboxRef}
-          type="checkbox"
+        <VisibilityToggle
           checked={allVisible}
-          aria-label={`Show or hide ${label}`}
-          onClick={(event) => event.stopPropagation()}
-          onChange={(event) => {
-            const next = event.target.checked;
+          label={`Show or hide ${label}`}
+          onToggle={(next) => {
             if (isLiveMasterBouquetKey(categoryKey)) {
               setMasterMinKeyEnabled(categoryKey, next);
             }

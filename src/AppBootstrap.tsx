@@ -63,7 +63,7 @@ function BootFallback() {
         justifyContent: "center"
       }}
     >
-      Loading Toms IPTVmate...
+      Loading Tom's IPTVmate...
     </div>
   );
 }

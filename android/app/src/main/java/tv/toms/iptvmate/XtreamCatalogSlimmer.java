@@ -57,7 +57,7 @@ final class XtreamCatalogSlimmer {
                 } else if (vod) {
                     copy(item, slim, "stream_id", "name", "category_id", "category_name", "container_extension", "stream_icon", "cover");
                 } else {
-                    copy(item, slim, "stream_id", "name", "category_id", "category_name", "container_extension", "epg_channel_id");
+                    copy(item, slim, "stream_id", "name", "category_id", "category_name", "container_extension", "epg_channel_id", "stream_icon");
                 }
                 out.put(slim);
             }

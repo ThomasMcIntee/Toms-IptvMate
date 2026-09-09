@@ -187,7 +187,6 @@ body.theme-light .recording-setup-panel {
 }
 
 body.theme-light input,
-body.theme-light .movies-main-search-input,
 body.theme-light .series-main-search-input {
   background: rgba(255, 255, 255, 0.98);
   color: #111827;
@@ -1256,17 +1255,61 @@ input {
   display: flex;
   align-items: stretch;
   gap: 8px;
+  width: 100%;
+  min-width: 0;
 }
 
 .password-input-row input {
-  flex: 1;
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.password-masked-input {
+  -webkit-text-security: disc;
+  text-security: disc;
 }
 
 .password-toggle-btn {
+  flex: 0 0 auto;
   width: auto;
   min-width: 84px;
   margin-top: 0;
   padding: 10px 12px;
+}
+
+.playlist-edit-form input:focus,
+.playlist-edit-field:focus,
+.playlist-edit-field-btn:focus {
+  outline: 2px solid #7ec5ff;
+  outline-offset: 2px;
+}
+
+.playlist-edit-field-btn {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.password-input-row .playlist-edit-field-btn {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+}
+
+body.theme-light .playlist-edit-field-btn {
+  background: rgba(17, 24, 39, 0.08);
+  color: #111827;
 }
 
 body.theme-light .playlist-edit-form {
@@ -1512,6 +1555,18 @@ body.is-webos .app-root.is-playlist-manager .playlist-edit-form label {
   flex: 0 0 auto;
 }
 
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-list:not(.group-list-movies-right) {
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
+}
+
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-list .group-list-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .master-min-list {
   width: 300px;
   min-width: 300px;
@@ -1628,8 +1683,17 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   width: 360px;
   bottom: 0;
   background: rgba(0,0,0,0.75);
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding-top: 10px;
+}
+
+.group-list-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .group-list.group-list-movies-right {
@@ -1692,10 +1756,42 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   cursor: pointer;
 }
 
+.group-list-bulk-btn:focus,
 .group-list-bulk-btn:focus-visible,
 .group-list-bulk-btn:hover {
-  outline: none;
+  outline: 3px solid #7ec5ff;
+  outline-offset: 2px;
   background: rgba(255, 255, 255, 0.18);
+}
+
+.list-visibility-toggle {
+  flex: 0 0 auto;
+  min-width: 48px;
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.list-visibility-toggle.is-on {
+  background: rgba(126, 197, 255, 0.22);
+  border-color: rgba(126, 197, 255, 0.7);
+}
+
+.list-visibility-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.list-visibility-toggle:focus,
+.list-visibility-toggle:focus-visible {
+  outline: 3px solid #7ec5ff;
+  outline-offset: 2px;
 }
 
 .epg-search-categories-header {
@@ -2806,31 +2902,6 @@ body.is-capacitor .opening-btn-quick {
   gap: 8px;
 }
 
-.movies-main-search-bar {
-  position: absolute;
-  top: 10px;
-  left: 380px;
-  right: 12px;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.movies-main-search-input {
-  margin: 0;
-  width: min(520px, 100%);
-  border: 1px solid rgba(255, 255, 255, 0.24);
-  border-radius: 8px;
-  background: rgba(18, 23, 30, 0.92);
-  color: #fff;
-  padding: 8px 10px;
-}
-
-.movies-main-search-input::placeholder {
-  color: rgba(255, 255, 255, 0.62);
-}
-
 .series-main-search-btn {
   border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 8px;
@@ -2860,6 +2931,73 @@ body.is-capacitor .opening-btn-quick {
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.remote-text-composer-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 420;
+}
+
+.remote-text-composer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.remote-text-composer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(720px, calc(100vw - 24px));
+  max-height: min(88vh, 680px);
+  overflow-y: auto;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  background: rgba(12, 17, 24, 0.98);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+  display: grid;
+  gap: 10px;
+}
+
+.remote-text-composer-label {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #f2f6ff;
+}
+
+.remote-text-composer-value {
+  min-height: 40px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.remote-text-composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.remote-text-composer-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.remote-text-composer-actions .series-main-search-btn {
+  min-height: 44px;
+}
+
+.remote-text-composer .series-search-key:focus,
+.remote-text-composer .series-main-search-btn:focus {
+  outline: 2px solid #7ec5ff;
+  outline-offset: 2px;
 }
 
 .series-search-composer {
@@ -2919,8 +3057,10 @@ body.is-capacitor .opening-btn-quick {
   cursor: default;
 }
 
+.series-main-search-btn:focus,
 .series-main-search-btn:focus-visible,
 .series-main-search-input:focus-visible,
+.series-search-key:focus,
 .series-search-key:focus-visible {
   outline: 2px solid #7ec5ff;
   outline-offset: 2px;

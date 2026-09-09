@@ -16,6 +16,8 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import androidx.core.content.ContextCompat;
+
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
 
@@ -160,8 +162,21 @@ public class MainActivity extends BridgeActivity {
         filter.addAction(NativePlayerEvents.ACTION_READY);
         filter.addAction(NativePlayerEvents.ACTION_ERROR);
         filter.addAction(NativePlayerEvents.ACTION_STOPPED);
-        registerReceiver(nativePlayerReceiver, filter);
-        nativePlayerReceiverRegistered = true;
+        try {
+            // Android 13+ / targetSdk 33+ requires RECEIVER_NOT_EXPORTED.
+            // Fire OS still accepts the old 2-arg call; Google TV does not.
+            ContextCompat.registerReceiver(
+                this,
+                nativePlayerReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            );
+            nativePlayerReceiverRegistered = true;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to register native player receiver", e);
+            nativePlayerReceiver = null;
+            nativePlayerReceiverRegistered = false;
+        }
     }
 
     private void unregisterNativePlayerReceiver() {
@@ -176,6 +191,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void setupWebViewFocus() {
+        if (getBridge() == null) return;
         WebView webView = getBridge().getWebView();
         if (webView == null) return;
 
@@ -375,7 +391,7 @@ public class MainActivity extends BridgeActivity {
 
     public ExoPlayerManager getOrCreateExoPlayerManager() {
         if (exoPlayerManager == null) {
-            WebView webView = getBridge().getWebView();
+            WebView webView = getBridge() != null ? getBridge().getWebView() : null;
             exoPlayerManager = new ExoPlayerManager(
                 this,
                 APP_USER_AGENT,
@@ -396,15 +412,24 @@ public class MainActivity extends BridgeActivity {
         if (now - lastBackDispatchMs < 250) return;
         lastBackDispatchMs = now;
 
-        WebView webView = getBridge().getWebView();
+        WebView webView = getActivityWebView();
         if (webView == null) return;
 
         webView.post(() -> webView.evaluateJavascript(
             "(function(){" +
-            "var e=new KeyboardEvent('keydown',{" +
-            "key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true" +
-            "});" +
+            "try{window.dispatchEvent(new CustomEvent('capacitorBackKey',{bubbles:false}));}catch(e){}" +
+            "try{" +
+            "var e=document.createEvent('Event');" +
+            "e.initEvent('keydown',true,true);" +
+            "try{" +
+            "Object.defineProperty(e,'key',{get:function(){return 'Escape';}});" +
+            "Object.defineProperty(e,'code',{get:function(){return 'Escape';}});" +
+            "Object.defineProperty(e,'keyCode',{get:function(){return 27;}});" +
+            "Object.defineProperty(e,'which',{get:function(){return 27;}});" +
+            "}catch(x){}" +
             "window.dispatchEvent(e);" +
+            "document.dispatchEvent(e);" +
+            "}catch(e2){}" +
             "})();",
             null
         ));

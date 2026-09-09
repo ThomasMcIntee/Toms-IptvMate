@@ -1,5 +1,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { VisibilityToggle } from "./VisibilityToggle";
 
 function isHeaderChannel(channel: any) {
   return String(channel?.name || "").includes("##");
@@ -70,11 +71,10 @@ function ChannelItem({
         <div className="channel-icon-wrap">
           {showVisibilityControls && (
             <label className="channel-icon-toggle" onClick={(e) => e.stopPropagation()}>
-              <input
-                type="checkbox"
+              <VisibilityToggle
                 checked={visible}
-                aria-label={`Show or hide ${ch.name}`}
-                onChange={(e) => onToggleChannelVisible(ch.id, e.target.checked)}
+                label={`Show or hide ${ch.name}`}
+                onToggle={(next) => onToggleChannelVisible(ch.id, next)}
               />
             </label>
           )}
@@ -124,12 +124,10 @@ function ChannelItem({
       <div className={itemClass} onClick={handleClick}>
         <div className="list-toggle-row">
           {showVisibilityControls && (
-            <input
-              type="checkbox"
+            <VisibilityToggle
               checked={visible}
-              aria-label={`Show or hide ${ch.name}`}
-              onClick={(e) => e.stopPropagation()}
-              onChange={(e) => onToggleChannelVisible(ch.id, e.target.checked)}
+              label={`Show or hide ${ch.name}`}
+              onToggle={(next) => onToggleChannelVisible(ch.id, next)}
             />
           )}
           <button
