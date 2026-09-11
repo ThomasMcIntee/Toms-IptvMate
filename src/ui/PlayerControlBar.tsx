@@ -211,13 +211,15 @@ export function PlayerControlBar({
       className={`player-control-bar${revealed ? "" : " player-control-bar-hidden"}`}
       role="group"
       aria-label="Player controls"
-      inert={!revealed || undefined}
       onFocusCapture={(event) => {
+        if (Date.now() < ignoreFocusUntilRef.current) {
+          return;
+        }
         if (
-          Date.now() < ignoreFocusUntilRef.current ||
-          barRef.current?.classList.contains("player-control-bar-hidden")
+          barRef.current?.classList.contains("player-control-bar-hidden") &&
+          event.target instanceof HTMLElement &&
+          !event.target.classList.contains("is-remote-focused")
         ) {
-          if (event.target instanceof HTMLElement) event.target.blur();
           return;
         }
         focusedRef.current = true;
@@ -278,6 +280,7 @@ export function PlayerControlBar({
         <button
           type="button"
           className="player-control-bar-btn"
+          data-playbar-btn="play"
           tabIndex={revealed ? 0 : -1}
           onClick={onPlayPause}
           aria-label={paused ? "Play" : "Pause"}
@@ -296,6 +299,7 @@ export function PlayerControlBar({
           <button
             type="button"
             className="player-control-bar-btn player-control-bar-stop"
+            data-playbar-btn="stop"
             tabIndex={revealed ? 0 : -1}
             onClick={onStop}
             aria-label="Stop playback"
@@ -311,6 +315,7 @@ export function PlayerControlBar({
         <button
           type="button"
           className="player-control-bar-btn"
+          data-playbar-btn="mute"
           tabIndex={revealed ? 0 : -1}
           onClick={onMute}
           aria-label={muted ? "Unmute" : "Mute"}
@@ -336,6 +341,7 @@ export function PlayerControlBar({
           <button
             type="button"
             className={`player-control-bar-btn player-control-bar-favorite${isFavorite ? " is-favorite" : ""}`}
+            data-playbar-btn="favorite"
             tabIndex={revealed ? 0 : -1}
             onClick={onToggleFavorite}
             aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
@@ -483,7 +489,7 @@ function PlayBarLanguageButton({ revealed }: { revealed: boolean }) {
     window.addEventListener("playerAudioTracks", refresh);
     window.addEventListener("playerPlaying", refresh);
     const poll = window.setInterval(refresh, 1000);
-    const stopPoll = window.setTimeout(() => window.clearInterval(poll), 8000);
+    const stopPoll = window.setTimeout(() => window.clearInterval(poll), 30000);
     return () => {
       window.clearInterval(poll);
       window.clearTimeout(stopPoll);
@@ -562,15 +568,15 @@ function PlayBarLanguageButton({ revealed }: { revealed: boolean }) {
       <button
         type="button"
         className="player-control-bar-btn vod-language-btn"
+        data-playbar-btn="language"
         tabIndex={revealed ? 0 : -1}
         aria-label={selectedLabel}
         aria-expanded={open}
         onClick={() => {
-          if (tracks.length < 2) {
-            void refreshAudioTracks();
-            return;
-          }
-          setOpen((current) => !current);
+          void refreshAudioTracks().then((latest) => {
+            if (latest.length < 2) return;
+            setOpen((current) => !current);
+          });
         }}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -622,7 +628,11 @@ export function VodLanguageSelect({ visible }: { visible: boolean }) {
     };
     window.addEventListener("playerAudioTracks", refresh);
     window.addEventListener("playerPlaying", refresh);
+    const poll = window.setInterval(refresh, 1000);
+    const stopPoll = window.setTimeout(() => window.clearInterval(poll), 30000);
     return () => {
+      window.clearInterval(poll);
+      window.clearTimeout(stopPoll);
       window.removeEventListener("playerAudioTracks", refresh);
       window.removeEventListener("playerPlaying", refresh);
       setAudioLanguagePickerOpen(false);

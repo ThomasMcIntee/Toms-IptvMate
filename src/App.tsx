@@ -999,6 +999,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }
 
   function exitVodPlayback() {
+    setAudioLanguagePickerOpen(false);
+    window.dispatchEvent(new Event("closeAudioLanguagePicker"));
     captureVodProgress();
     const playing = currentChannelRef.current;
     const playingSeriesEpisode =
@@ -2308,6 +2310,21 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return true;
       }
 
+      if (document.querySelector(".vod-language-panel")) {
+        setAudioLanguagePickerOpen(false);
+        window.dispatchEvent(new Event("closeAudioLanguagePicker"));
+        return true;
+      }
+
+      if (
+        isVodPlaybackFullscreen ||
+        document.querySelector(".vod-playback-shell") ||
+        document.querySelector(".vod-exit-btn")
+      ) {
+        exitVodPlayback();
+        return true;
+      }
+
       if (isSeriesPickerVisible) {
         setIsSeriesPickerVisible(false);
         return true;
@@ -2341,11 +2358,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
       if (String(seriesMainSearchDebouncedTerm || "").trim() || String(moviesMainSearchTerm || "").trim()) {
         clearCatalogSearch();
-        return true;
-      }
-
-      if (isVodPlaybackFullscreen) {
-        exitVodPlayback();
         return true;
       }
 
@@ -2403,6 +2415,14 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
     // Listen for custom webosBackKey event (dispatched by webOS SDK)
     const handleWebosBack = () => {
+      if (
+        document.querySelector(".vod-playback-shell") ||
+        document.querySelector(".vod-exit-btn") ||
+        document.querySelector(".vod-language-panel")
+      ) {
+        handleBackNavigation();
+        return;
+      }
       if (isRemoteTextComposerOpen()) {
         document.querySelector<HTMLButtonElement>(".remote-text-composer-done")?.click();
         return;
@@ -2413,8 +2433,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       handleBackNavigation();
     };
     
-    window.addEventListener('webosBackKey', handleWebosBack);
-    window.addEventListener('capacitorBackKey', handleWebosBack);
+    window.addEventListener("webosBackKey", handleWebosBack);
+    document.addEventListener("webosBackKey", handleWebosBack);
+    window.addEventListener("capacitorBackKey", handleWebosBack);
 
     const onKeyboardStateChange = (event: Event) => {
       const detail = (event as CustomEvent<{ visibility?: boolean | string; state?: string }>).detail;
@@ -2513,42 +2534,36 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             return;
           }
         } else {
-        const barButtons = Array.from(
-          document.querySelectorAll<HTMLButtonElement>(
-            ".vod-playback-shell .player-control-bar-btn"
-          )
-        );
-        const activeBtn = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
-        const barIndex = activeBtn ? barButtons.indexOf(activeBtn) : -1;
+        const barButtons = vodPlayBarButtons();
+        const barIndex = focusedVodPlayBarIndex(barButtons);
         if (navKey === "ArrowDown" || navKey === "ArrowUp") {
           e.preventDefault();
-          focusPlayBarRemoteButton(barButtons[0] || null);
-          return;
-        }
-        if (barIndex >= 0 && navKey === "ArrowLeft") {
-          e.preventDefault();
-          focusPlayBarRemoteButton(barButtons[Math.max(0, barIndex - 1)] || null);
-          return;
-        }
-        if (barIndex >= 0 && navKey === "ArrowRight") {
-          e.preventDefault();
-          focusPlayBarRemoteButton(barButtons[Math.min(barButtons.length - 1, barIndex + 1)] || null);
+          focusPlayBarRemoteButton(barButtons[barIndex >= 0 ? barIndex : 0] || null);
           return;
         }
         if (navKey === "ArrowLeft") {
           e.preventDefault();
-          seekPlayback(-15);
+          if (barIndex < 0) {
+            focusPlayBarRemoteButton(barButtons[0] || null);
+          } else {
+            focusPlayBarRemoteButton(barButtons[Math.max(0, barIndex - 1)] || null);
+          }
           return;
         }
         if (navKey === "ArrowRight") {
           e.preventDefault();
-          seekPlayback(15);
+          if (barIndex < 0) {
+            focusPlayBarRemoteButton(barButtons[0] || null);
+          } else {
+            focusPlayBarRemoteButton(barButtons[Math.min(barButtons.length - 1, barIndex + 1)] || null);
+          }
           return;
         }
         if (navKey === "Enter") {
           e.preventDefault();
-          if (barIndex >= 0 && activeBtn) {
-            activeBtn.click();
+          const current = barIndex >= 0 ? barButtons[barIndex] : null;
+          if (current) {
+            current.click();
           } else {
             togglePlayPause();
           }
@@ -2592,8 +2607,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     // Use capture phase so we get the event before webOS shell
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
-      window.removeEventListener('webosBackKey', handleWebosBack);
-      window.removeEventListener('capacitorBackKey', handleWebosBack);
+      window.removeEventListener("webosBackKey", handleWebosBack);
+      document.removeEventListener("webosBackKey", handleWebosBack);
+      window.removeEventListener("capacitorBackKey", handleWebosBack);
       document.removeEventListener("keyboardStateChange", onKeyboardStateChange);
       window.removeEventListener("keydown", onKeyDown, true);
     };
@@ -5850,13 +5866,30 @@ function stepPlaylistCardFocus(
   return candidates[0];
 }
 
+function vodPlayBarButtons(): HTMLButtonElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLButtonElement>(".vod-playback-shell .player-control-bar-row [data-playbar-btn]")
+  );
+}
+
+function focusedVodPlayBarIndex(buttons: HTMLButtonElement[]): number {
+  const remote = buttons.findIndex((btn) => btn.classList.contains("is-remote-focused"));
+  if (remote >= 0) return remote;
+  const active = document.activeElement;
+  return active instanceof HTMLButtonElement ? buttons.indexOf(active) : -1;
+}
+
 function focusPlayBarRemoteButton(btn: HTMLButtonElement | null): void {
-  document.querySelectorAll(".player-control-bar-btn.is-remote-focused").forEach((el) => {
+  document.querySelectorAll(".is-remote-focused").forEach((el) => {
     el.classList.remove("is-remote-focused");
   });
   if (!btn) return;
   btn.classList.add("is-remote-focused");
-  btn.focus();
+  try {
+    btn.focus({ preventScroll: true });
+  } catch {
+    btn.focus();
+  }
 }
 
 function isFavoriteFocusTarget(el: Element | null): el is HTMLButtonElement {

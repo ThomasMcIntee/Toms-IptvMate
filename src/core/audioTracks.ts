@@ -37,9 +37,23 @@ function isNativePlaybackActive(): boolean {
   return isCapacitorRuntime() && isNativePlayerAvailable() && document.body.classList.contains("native-exo-active");
 }
 
+function htmlAudioTrackList(
+  video: (HTMLVideoElement & {
+    audioTracks?: BrowserAudioTrackList;
+    webkitAudioTracks?: BrowserAudioTrackList;
+  }) | null
+): BrowserAudioTrackList | null {
+  if (!video) return null;
+  const list = video.audioTracks || video.webkitAudioTracks;
+  return list && list.length ? list : null;
+}
+
 function collectHtmlAudioTracks(): PlaybackAudioTrack[] {
-  const video = getActiveVideoElement() as (HTMLVideoElement & { audioTracks?: BrowserAudioTrackList }) | null;
-  const list = video?.audioTracks;
+  const video = getActiveVideoElement() as (HTMLVideoElement & {
+    audioTracks?: BrowserAudioTrackList;
+    webkitAudioTracks?: BrowserAudioTrackList;
+  }) | null;
+  const list = htmlAudioTrackList(video);
   if (!list || !list.length) return [];
 
   const tracks: PlaybackAudioTrack[] = [];
@@ -71,7 +85,44 @@ function collectHlsAudioTracks(): PlaybackAudioTrack[] {
 
 function collectShakaAudioTracks(): PlaybackAudioTrack[] {
   const player = getActiveShakaPlayer();
-  if (!player?.getAudioLanguagesAndRoles) return [];
+  if (!player) return [];
+
+  try {
+    const variants =
+      typeof player.getVariantTracks === "function"
+        ? (player.getVariantTracks() as Array<{
+            language?: string;
+            audioLanguage?: string;
+            label?: string;
+            audioId?: number;
+            id?: number;
+            active?: boolean;
+          }>)
+        : [];
+    const seen = new Map<string, PlaybackAudioTrack>();
+    for (const track of variants) {
+      const language = String(track.audioLanguage || track.language || "");
+      const key = language || String(track.audioId ?? track.id ?? seen.size);
+      if (seen.has(key)) {
+        if (track.active) {
+          const current = seen.get(key);
+          if (current) current.selected = true;
+        }
+        continue;
+      }
+      seen.set(key, {
+        id: `shaka:${language}:${track.audioId ?? track.id ?? seen.size}`,
+        language,
+        label: audioTrackDisplayLabel(track.label, language, seen.size),
+        selected: !!track.active
+      });
+    }
+    if (seen.size) return Array.from(seen.values());
+  } catch {
+    // Fall through to language/role list.
+  }
+
+  if (!player.getAudioLanguagesAndRoles) return [];
   try {
     const options = player.getAudioLanguagesAndRoles() as Array<{ language?: string; role?: string }>;
     if (!Array.isArray(options) || !options.length) return [];
@@ -124,7 +175,30 @@ export function setAudioLanguagePickerOpen(open: boolean): void {
   emit();
 }
 
+function bindHtmlAudioTrackListeners(): void {
+  const video = getActiveVideoElement() as (HTMLVideoElement & {
+    audioTracks?: BrowserAudioTrackList & {
+      addEventListener?: (name: string, listener: () => void) => void;
+      __iptvBound?: boolean;
+    };
+    webkitAudioTracks?: BrowserAudioTrackList & {
+      addEventListener?: (name: string, listener: () => void) => void;
+      __iptvBound?: boolean;
+    };
+  }) | null;
+  const list = video?.audioTracks || video?.webkitAudioTracks;
+  if (!list || list.__iptvBound) return;
+  const refresh = () => {
+    void refreshAudioTracks();
+  };
+  list.addEventListener?.("addtrack", refresh);
+  list.addEventListener?.("change", refresh);
+  list.addEventListener?.("removetrack", refresh);
+  list.__iptvBound = true;
+}
+
 export async function refreshAudioTracks(): Promise<PlaybackAudioTrack[]> {
+  bindHtmlAudioTrackListeners();
   if (isNativePlaybackActive()) {
     const nativeTracks = await getNativeAudioTracks();
     cachedTracks = nativeTracks
@@ -168,8 +242,11 @@ export async function selectAudioTrack(id: string): Promise<boolean> {
   }
 
   if (id.startsWith("html:")) {
-    const video = getActiveVideoElement() as (HTMLVideoElement & { audioTracks?: BrowserAudioTrackList }) | null;
-    const list = video?.audioTracks;
+    const video = getActiveVideoElement() as (HTMLVideoElement & {
+      audioTracks?: BrowserAudioTrackList;
+      webkitAudioTracks?: BrowserAudioTrackList;
+    }) | null;
+    const list = htmlAudioTrackList(video);
     if (list) {
       const targetId = id.slice(5);
       for (let index = 0; index < list.length; index += 1) {

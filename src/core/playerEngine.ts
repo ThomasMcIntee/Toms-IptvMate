@@ -333,6 +333,7 @@ function emitPlayerPlaying() {
     rememberWorkingStreamFormat(lastRootSourceUrl);
   }
   window.dispatchEvent(new CustomEvent("playerPlaying"));
+  emitPlayerAudioTracks();
 }
 
 function emitPlayerTranscoding(message: string) {

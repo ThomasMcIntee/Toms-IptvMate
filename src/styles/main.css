@@ -661,6 +661,12 @@ body.theme-light .vod-resume-copy {
   pointer-events: none;
 }
 
+.player-control-bar:has(.is-remote-focused) {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
 body.is-capacitor.native-exo-active .player-control-bar {
   visibility: hidden;
   pointer-events: none;
@@ -836,6 +842,7 @@ body.is-capacitor.native-exo-active .player-control-bar {
 .play-bar-language {
   position: relative;
   flex: 0 0 auto;
+  display: inline-flex;
 }
 
 .play-bar-language-panel {
