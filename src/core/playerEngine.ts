@@ -554,14 +554,11 @@ function listXtreamVodContainerUrls(url: string, preferBrowserSafe: boolean): st
   const current = match[2].toLowerCase();
   const queryIndex = url.indexOf("?");
   const query = queryIndex >= 0 ? url.slice(queryIndex) : "";
-  const isSeries = /\/series\//i.test(url);
-  // Simulator Chromium: keep the catalog extension first. Host-wide last-good
-  // m3u8 is a common 551 on Xtream VOD. Real TVs can still reuse last-good.
+  // Android TV emulator / WebView cannot decode HEVC-in-MKV. Prefer MP4 first
+  // on Capacitor; real TVs still reuse last-good when hostFallback is on.
   const preferred = orderFormatsByLastGood(
     preferBrowserSafe
-      ? isSeries
-        ? [current, "mp4", "mkv", "ts", "m3u8"]
-        : [current, "mp4", "mkv", "ts", "m3u8"]
+      ? ["mp4", current, "m3u8", "ts", "mkv"]
       : [current, "mp4", "m3u8", "ts", "mkv"],
     url,
     { hostFallback: !preferBrowserSafe }
@@ -1745,7 +1742,7 @@ export function playUrl(
         );
         const nextNativeStage = proxyFallbackStage + 1;
         if (nextNativeStage < nativeVariants.length) {
-          emitPlayerTranscoding("Trying last-known stream format alternatives...");
+          emitPlayerTranscoding("This file format is not available, trying another...");
           playUrl(
             url,
             hasRetriedHttpFallback,

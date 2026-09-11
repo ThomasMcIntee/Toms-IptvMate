@@ -122,6 +122,18 @@ const MOVIES_SORT_DIRECTION_KEY = "iptvmate_movies_sort_direction";
 const SERIES_SORT_DIRECTION_KEY = "iptvmate_series_sort_direction";
 const GROUP_SORT_DIRECTION_KEY = "iptvmate_group_sort_direction";
 
+function friendlyPlaybackError(message?: string | null): string {
+  const raw = String(message || "").trim();
+  const lower = raw.toLowerCase();
+  if (
+    /hevc|h265|hvc1|hev1/.test(lower) ||
+    (/mkv|matroska/.test(lower) && /cannot|fail|unsupported|format_supported=no|mediacodec/.test(lower))
+  ) {
+    return "This Android TV emulator cannot play HEVC/MKV. Trying MP4, or play this title on a real Fire TV.";
+  }
+  return raw;
+}
+
 function readStoredItem(key: string): string | null {
   try {
     const local = localStorage.getItem(key);
@@ -2024,8 +2036,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       if (suppressPlayerEventsRef.current) return;
       if (!currentChannelRef.current) return;
 
-      const custom = e as CustomEvent<{ message?: string }>;
-      const message = custom.detail?.message || "Playback failed for this stream.";
+      const custom = e as CustomEvent<{ message?: string; source?: string }>;
+      const message = friendlyPlaybackError(custom.detail?.message) || "Playback failed for this stream.";
       setPlayerStatus(null);
       setPlayerWarning(null);
       setPlayerError(message);
