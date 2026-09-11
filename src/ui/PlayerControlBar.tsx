@@ -8,6 +8,7 @@ import {
 import { getEPGForChannel, getEPGVersion, subscribeEPG } from "../core/epgStore";
 import { formatEpgTime } from "../core/epgTime";
 import { setNativePlayerGuide } from "../core/nativePlayerBridge";
+import { isWebOsRuntime } from "../core/player/platformDetection";
 import { normalizeRemoteNavKey } from "../core/remoteKeys";
 
 const CONTROLS_HIDE_MS = 3500;
@@ -165,6 +166,10 @@ export function PlayerControlBar({
     if (isVod) {
       document.addEventListener("pointerdown", onPointer);
       document.addEventListener("mousedown", onPointer);
+      if (!isWebOsRuntime()) {
+        shell?.addEventListener("mousemove", onPointer);
+        document.addEventListener("mousemove", onPointer);
+      }
     }
 
     const onPlayerReveal = () => reveal();
@@ -177,6 +182,10 @@ export function PlayerControlBar({
       if (isVod) {
         document.removeEventListener("pointerdown", onPointer);
         document.removeEventListener("mousedown", onPointer);
+        if (!isWebOsRuntime()) {
+          shell?.removeEventListener("mousemove", onPointer);
+          document.removeEventListener("mousemove", onPointer);
+        }
       }
       window.removeEventListener("playerRevealControls", onPlayerReveal);
     };
@@ -573,10 +582,8 @@ function PlayBarLanguageButton({ revealed }: { revealed: boolean }) {
         aria-label={selectedLabel}
         aria-expanded={open}
         onClick={() => {
-          void refreshAudioTracks().then((latest) => {
-            if (latest.length < 2) return;
-            setOpen((current) => !current);
-          });
+          void refreshAudioTracks();
+          setOpen((current) => !current);
         }}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -586,8 +593,11 @@ function PlayBarLanguageButton({ revealed }: { revealed: boolean }) {
           />
         </svg>
       </button>
-      {open && tracks.length >= 2 && (
+      {open && (
         <div className="vod-language-panel play-bar-language-panel" role="listbox" aria-label="Audio language">
+          {tracks.length === 0 && (
+            <div className="vod-language-empty">Looking for audio tracks…</div>
+          )}
           {tracks.map((track) => (
             <button
               key={track.id}
@@ -723,23 +733,27 @@ export function VodLanguageSelect({ visible }: { visible: boolean }) {
   return (
     <div
       ref={rootRef}
-      className={`vod-language-select${revealed || open ? "" : " vod-language-select-hidden"}`}
+      className="vod-language-select"
     >
       <button
         type="button"
         className="player-control-bar-btn vod-language-btn"
+        data-playbar-btn="language-select"
         aria-label={`Audio language: ${selectedLabel}`}
         aria-expanded={open}
         onClick={() => {
-          if (tracks.length < 2) return;
+          void refreshAudioTracks();
           setOpen((current) => !current);
         }}
         onFocus={() => setRevealed(true)}
       >
         {selectedLabel}
       </button>
-      {open && tracks.length >= 2 && (
+      {open && (
         <div className="vod-language-panel" role="listbox" aria-label="Audio language">
+          {tracks.length === 0 && (
+            <div className="vod-language-empty">Looking for audio tracks…</div>
+          )}
           {tracks.map((track) => (
             <button
               key={track.id}

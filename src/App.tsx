@@ -2518,8 +2518,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return;
       }
 
-      if (isVodPlaybackFullscreen && !isAudioLanguagePickerOpen()) {
+      if (isVodPlaybackFullscreen) {
         window.dispatchEvent(new Event("playerRevealControls"));
+        if (document.querySelector(".vod-language-panel")) {
+          return;
+        }
         if (document.body.classList.contains("native-exo-active")) {
           if (navKey === "ArrowDown" || navKey === "ArrowUp") {
             e.preventDefault();
@@ -5147,6 +5150,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
               onStop={exitVodPlayback}
             />
           )}
+          <VodLanguageSelect visible={isVodPlaybackFullscreen} />
         </div>
       )}
       {shouldRenderMainVideo && !useLivePreviewShell && !useVodPlaybackShell && (
@@ -5868,7 +5872,7 @@ function stepPlaylistCardFocus(
 
 function vodPlayBarButtons(): HTMLButtonElement[] {
   return Array.from(
-    document.querySelectorAll<HTMLButtonElement>(".vod-playback-shell .player-control-bar-row [data-playbar-btn]")
+    document.querySelectorAll<HTMLButtonElement>(".vod-playback-shell [data-playbar-btn]")
   );
 }
 

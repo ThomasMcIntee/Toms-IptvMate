@@ -20,6 +20,7 @@ import android.widget.TextView;
 import androidx.coordinatorlayout.widget.CoordinatorLayout;
 import androidx.media3.ui.PlayerView;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -67,6 +68,7 @@ public class ExoPlayerManager {
     private long guideEndMs;
     private boolean overlayLooksFullscreen;
     private boolean languagePickerOpen;
+    private int selectedControlIndex = -1;
 
     private int boundLeft;
     private int boundTop;
@@ -166,9 +168,6 @@ public class ExoPlayerManager {
                 silenceWebViewMedia();
                 playBound(trimmed, isLive);
                 startControlsTicker();
-                if (!isLive) {
-                    setWebViewTakesFocus(false);
-                }
                 revealControls();
                 requestJsBoundsOnMain();
             } catch (RuntimeException e) {
@@ -280,7 +279,7 @@ public class ExoPlayerManager {
             closeLanguagePickerOnMain();
             stopControlsTicker();
             cancelHideControls();
-            setWebViewTakesFocus(true);
+            clearControlSelection();
             jsNotifier.evaluateJs(
                 "document.body.classList.remove('native-exo-active');" +
                 "document.body.classList.remove('native-exo-vod');"
@@ -298,7 +297,7 @@ public class ExoPlayerManager {
             cancelHideOverlay();
             stopControlsTicker();
             cancelHideControls();
-            setWebViewTakesFocus(true);
+            clearControlSelection();
             hideNativeSurface();
             setWebViewOpaque(true);
             jsNotifier.evaluateJs(
@@ -355,34 +354,28 @@ public class ExoPlayerManager {
             return handleLanguagePickerKeyOnMain(code);
         }
 
-        View focused = activity.getCurrentFocus();
-        boolean onControls = isControlButton(focused);
-
         if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
-            if (!onControls) {
+            ImageButton current = selectedControl();
+            if (current == null) {
                 focusDefaultControlOnMain();
                 return true;
             }
-            focused.performClick();
+            current.performClick();
             return true;
         }
 
-        if (!onControls) {
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT) {
+            moveControlSelection(-1);
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            moveControlSelection(1);
+            return true;
+        }
+
+        if (selectedControl() == null) {
             focusDefaultControlOnMain();
-            return true;
         }
-
-        if (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT) {
-            View next = controlFocusNeighbor(
-                focused,
-                code == KeyEvent.KEYCODE_DPAD_LEFT ? View.FOCUS_LEFT : View.FOCUS_RIGHT
-            );
-            if (next != null) {
-                next.requestFocus();
-            }
-            return true;
-        }
-
         return true;
     }
 
@@ -408,39 +401,59 @@ public class ExoPlayerManager {
     }
 
     private void focusDefaultControlOnMain() {
-        if (playButton == null) return;
-        makeControlFocusable(playButton);
-        playButton.requestFocus();
+        List<ImageButton> controls = visibleControls();
+        paintControlSelection(controls.isEmpty() ? playButton : controls.get(0));
     }
 
-    private View controlFocusNeighbor(View focused, int direction) {
-        int id = direction == View.FOCUS_LEFT
-            ? focused.getNextFocusLeftId()
-            : focused.getNextFocusRightId();
-        View next = visibleFocusable(id);
-        if (next != null) return next;
-        if (id == View.NO_ID || overlay == null) return null;
-        View skipped = overlay.findViewById(id);
-        if (skipped == null) return null;
-        int hop = direction == View.FOCUS_LEFT
-            ? skipped.getNextFocusLeftId()
-            : skipped.getNextFocusRightId();
-        return visibleFocusable(hop);
+    private void moveControlSelection(int delta) {
+        List<ImageButton> controls = visibleControls();
+        if (controls.isEmpty()) return;
+        if (selectedControl() == null) {
+            paintControlSelection(controls.get(0));
+            return;
+        }
+        int next = Math.max(0, Math.min(controls.size() - 1, selectedControlIndex + delta));
+        paintControlSelection(controls.get(next));
     }
 
-    private View visibleFocusable(int id) {
-        if (id == View.NO_ID || overlay == null) return null;
-        View view = overlay.findViewById(id);
-        if (view == null || view.getVisibility() != View.VISIBLE) return null;
-        if (!view.isFocusable() || !view.isEnabled()) return null;
-        return view;
+    private ImageButton selectedControl() {
+        List<ImageButton> controls = visibleControls();
+        if (selectedControlIndex < 0 || selectedControlIndex >= controls.size()) return null;
+        return controls.get(selectedControlIndex);
     }
 
-    private boolean isControlButton(View view) {
-        return view == playButton
-            || view == languageButton
-            || view == muteButton
-            || view == fullscreenButton;
+    private List<ImageButton> visibleControls() {
+        List<ImageButton> out = new ArrayList<>();
+        ImageButton[] order = new ImageButton[] { playButton, languageButton, muteButton, fullscreenButton };
+        for (ImageButton button : order) {
+            if (button != null && button.getVisibility() == View.VISIBLE) {
+                makeControlFocusable(button);
+                out.add(button);
+            }
+        }
+        return out;
+    }
+
+    private void paintControlSelection(ImageButton target) {
+        List<ImageButton> controls = visibleControls();
+        selectedControlIndex = -1;
+        for (int i = 0; i < controls.size(); i++) {
+            ImageButton button = controls.get(i);
+            boolean on = button == target;
+            button.setSelected(on);
+            if (on) {
+                selectedControlIndex = i;
+                button.requestFocus();
+            }
+        }
+    }
+
+    private void clearControlSelection() {
+        selectedControlIndex = -1;
+        ImageButton[] order = new ImageButton[] { playButton, languageButton, muteButton, fullscreenButton };
+        for (ImageButton button : order) {
+            if (button != null) button.setSelected(false);
+        }
     }
 
     private static boolean isRemoteControlKey(int code) {
@@ -468,16 +481,6 @@ public class ExoPlayerManager {
         button.setFocusableInTouchMode(true);
     }
 
-    private void setWebViewTakesFocus(boolean take) {
-        WebView webView = activity.getBridge() != null ? activity.getBridge().getWebView() : null;
-        if (webView == null) return;
-        webView.setFocusable(take);
-        webView.setFocusableInTouchMode(take);
-        webView.setDescendantFocusability(
-            take ? ViewGroup.FOCUS_AFTER_DESCENDANTS : ViewGroup.FOCUS_BLOCK_DESCENDANTS
-        );
-    }
-
     void handleNativePlaybackReady() {
         refreshLanguageControlsOnMain();
         jsNotifier.evaluateJs(
@@ -493,7 +496,7 @@ public class ExoPlayerManager {
             ? message.replace("\\", "\\\\").replace("'", "\\'")
             : "Native playback failed";
         mainHandler.post(() -> {
-            setWebViewTakesFocus(true);
+            clearControlSelection();
             hideNativeSurface();
             setWebViewOpaque(true);
         });
@@ -506,7 +509,6 @@ public class ExoPlayerManager {
     }
 
     void handleNativePlaybackStopped() {
-        setWebViewTakesFocus(true);
         jsNotifier.evaluateJs(
             "document.body.classList.remove('native-exo-active');" +
             "document.body.classList.remove('native-exo-vod');"
@@ -776,7 +778,7 @@ public class ExoPlayerManager {
     private void revealControlsOnMain() {
         controlsRevealed = true;
         applyControlsVisibilityOnMain();
-        if (controlsHaveFocus()) {
+        if (languagePickerOpen) {
             cancelHideControls();
             return;
         }
@@ -791,9 +793,10 @@ public class ExoPlayerManager {
         cancelHideControls();
         hideControlsRunnable = () -> {
             hideControlsRunnable = null;
-            if (controlsHaveFocus()) {
+            if (languagePickerOpen) {
                 return;
             }
+            clearControlSelection();
             controlsRevealed = false;
             applyControlsVisibilityOnMain();
         };

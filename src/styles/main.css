@@ -698,6 +698,7 @@ body.is-capacitor.native-exo-active .player-control-bar {
 
 .player-control-bar-btn {
   flex: 0 0 auto;
+  flex-shrink: 0;
   width: 36px;
   height: 36px;
   padding: 6px;
@@ -856,6 +857,17 @@ body.is-capacitor.native-exo-active .player-control-bar {
   top: 20px;
   right: 112px;
   z-index: 140;
+}
+
+.vod-playback-shell .vod-language-select {
+  top: 20px;
+  right: 20px;
+  z-index: 8;
+}
+
+.vod-language-empty {
+  padding: 10px 14px;
+  color: rgba(255, 255, 255, 0.75);
 }
 
 .vod-language-select.vod-language-select-hidden {
