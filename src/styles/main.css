@@ -708,7 +708,8 @@ body.is-capacitor.native-exo-active .player-control-bar {
 }
 
 .player-control-bar-btn:focus,
-.player-control-bar-btn:focus-visible {
+.player-control-bar-btn:focus-visible,
+.player-control-bar-btn.is-remote-focused {
   outline: none;
   background: #b5e61d;
   color: #111;
@@ -717,7 +718,8 @@ body.is-capacitor.native-exo-active .player-control-bar {
 }
 
 .player-control-bar-btn.is-favorite:focus,
-.player-control-bar-btn.is-favorite:focus-visible {
+.player-control-bar-btn.is-favorite:focus-visible,
+.player-control-bar-btn.is-favorite.is-remote-focused {
   background: #ffd45c;
   color: #111;
   box-shadow: 0 0 0 2px rgba(255, 212, 92, 0.55);
@@ -854,7 +856,7 @@ body.is-capacitor.native-exo-active .player-control-bar {
   pointer-events: none;
 }
 
-.vod-language-btn,
+.vod-language-select .vod-language-btn,
 .vod-language-option {
   padding: 10px 14px;
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -865,10 +867,12 @@ body.is-capacitor.native-exo-active .player-control-bar {
   cursor: pointer;
 }
 
-.vod-language-btn:focus,
-.vod-language-btn:focus-visible,
+.vod-language-select .vod-language-btn:focus,
+.vod-language-select .vod-language-btn:focus-visible,
+.vod-language-select .vod-language-btn.is-remote-focused,
 .vod-language-option:focus,
-.vod-language-option:focus-visible {
+.vod-language-option:focus-visible,
+.vod-language-option.is-remote-focused {
   outline: none;
   background: #b5e61d;
   color: #111;
@@ -904,7 +908,9 @@ body.is-capacitor.native-exo-active .vod-language-select {
 }
 
 body.is-webos .vod-language-btn:focus,
-body.is-webos .vod-language-option:focus {
+body.is-webos .vod-language-btn.is-remote-focused,
+body.is-webos .vod-language-option:focus,
+body.is-webos .vod-language-option.is-remote-focused {
   outline: none !important;
   background: #b5e61d !important;
   color: #111 !important;
@@ -1520,7 +1526,8 @@ body.is-webos .channel-icon-btn:focus {
   box-shadow: 0 0 0 2px rgba(77, 163, 255, 0.35);
 }
 
-body.is-webos .player-control-bar-btn:focus {
+body.is-webos .player-control-bar-btn:focus,
+body.is-webos .player-control-bar-btn.is-remote-focused {
   outline: none !important;
   background: #b5e61d !important;
   color: #111 !important;

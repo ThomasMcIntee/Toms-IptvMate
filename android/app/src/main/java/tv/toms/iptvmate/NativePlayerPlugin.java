@@ -105,6 +105,14 @@ public class NativePlayerPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void focusControls(PluginCall call) {
+        ExoPlayerManager player = manager();
+        if (!requireManager(call, player)) return;
+        player.focusControls();
+        call.resolve();
+    }
+
+    @PluginMethod
     public void stop(PluginCall call) {
         ExoPlayerManager player = manager();
         if (!requireManager(call, player)) return;

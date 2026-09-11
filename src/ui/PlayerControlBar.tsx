@@ -146,6 +146,8 @@ export function PlayerControlBar({
     const reveal = () => {
       ignoreFocusUntilRef.current = 0;
       setRevealed(true);
+      barRef.current?.classList.remove("player-control-bar-hidden");
+      if (barRef.current) barRef.current.inert = false;
       scheduleHide();
     };
 
@@ -480,7 +482,11 @@ function PlayBarLanguageButton({ revealed }: { revealed: boolean }) {
     };
     window.addEventListener("playerAudioTracks", refresh);
     window.addEventListener("playerPlaying", refresh);
+    const poll = window.setInterval(refresh, 1000);
+    const stopPoll = window.setTimeout(() => window.clearInterval(poll), 8000);
     return () => {
+      window.clearInterval(poll);
+      window.clearTimeout(stopPoll);
       window.removeEventListener("playerAudioTracks", refresh);
       window.removeEventListener("playerPlaying", refresh);
       setAudioLanguagePickerOpen(false);
@@ -493,9 +499,59 @@ function PlayBarLanguageButton({ revealed }: { revealed: boolean }) {
 
   useEffect(() => {
     if (!open) return;
+    const root = document.querySelector(".play-bar-language");
+    const selected =
+      root?.querySelector<HTMLButtonElement>(".vod-language-option.is-selected") ||
+      root?.querySelector<HTMLButtonElement>(".vod-language-option");
+    if (selected) {
+      document.querySelectorAll(".player-control-bar-btn.is-remote-focused").forEach((el) => {
+        el.classList.remove("is-remote-focused");
+      });
+      selected.classList.add("is-remote-focused");
+      selected.focus();
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const key = normalizeRemoteNavKey(event);
+      const panel = document.querySelector(".play-bar-language");
+      const languageBtn = panel?.querySelector<HTMLButtonElement>(".vod-language-btn");
+      if (key === "Escape" || key === "Backspace") {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        if (languageBtn) {
+          document.querySelectorAll(".player-control-bar-btn.is-remote-focused").forEach((el) => {
+            el.classList.remove("is-remote-focused");
+          });
+          languageBtn.classList.add("is-remote-focused");
+          languageBtn.focus();
+        }
+        return;
+      }
+      const options = Array.from(panel?.querySelectorAll<HTMLButtonElement>(".vod-language-option") || []);
+      const index = options.findIndex((option) => option === document.activeElement || option.classList.contains("is-remote-focused"));
+      if (index < 0) return;
+      if (key === "ArrowDown" || key === "ArrowRight") {
+        event.preventDefault();
+        const next = options[Math.min(options.length - 1, index + 1)];
+        options.forEach((option) => option.classList.remove("is-remote-focused"));
+        next?.classList.add("is-remote-focused");
+        next?.focus();
+      } else if (key === "ArrowUp" || key === "ArrowLeft") {
+        event.preventDefault();
+        const next = options[Math.max(0, index - 1)];
+        options.forEach((option) => option.classList.remove("is-remote-focused"));
+        next?.classList.add("is-remote-focused");
+        next?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
     const onClose = () => setOpen(false);
     window.addEventListener("closeAudioLanguagePicker", onClose);
-    return () => window.removeEventListener("closeAudioLanguagePicker", onClose);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("closeAudioLanguagePicker", onClose);
+    };
   }, [open]);
 
   const selected = tracks.find((track) => track.selected) || tracks[0];

@@ -19,6 +19,7 @@ import {
   playNativeUrl,
   resumeNativePlayback,
   revealNativePlayerControls,
+  focusNativePlayerControls,
   setNativeMuted,
   stopNativePlayback,
   syncNativePlayerBounds,
@@ -2498,26 +2499,40 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
       if (isVodPlaybackFullscreen && !isAudioLanguagePickerOpen()) {
         window.dispatchEvent(new Event("playerRevealControls"));
+        if (document.body.classList.contains("native-exo-active")) {
+          if (navKey === "ArrowDown" || navKey === "ArrowUp") {
+            e.preventDefault();
+            e.stopPropagation();
+            focusNativePlayerControls();
+            return;
+          }
+          if (navKey === "ArrowLeft" || navKey === "ArrowRight" || navKey === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+            revealNativePlayerControls();
+            return;
+          }
+        } else {
         const barButtons = Array.from(
           document.querySelectorAll<HTMLButtonElement>(
-            ".vod-playback-shell .player-control-bar-btn, .vod-language-btn"
+            ".vod-playback-shell .player-control-bar-btn"
           )
-        ).filter((btn) => btn.tabIndex !== -1);
+        );
         const activeBtn = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
         const barIndex = activeBtn ? barButtons.indexOf(activeBtn) : -1;
         if (navKey === "ArrowDown" || navKey === "ArrowUp") {
           e.preventDefault();
-          (barButtons[0] || null)?.focus();
+          focusPlayBarRemoteButton(barButtons[0] || null);
           return;
         }
         if (barIndex >= 0 && navKey === "ArrowLeft") {
           e.preventDefault();
-          barButtons[Math.max(0, barIndex - 1)]?.focus();
+          focusPlayBarRemoteButton(barButtons[Math.max(0, barIndex - 1)] || null);
           return;
         }
         if (barIndex >= 0 && navKey === "ArrowRight") {
           e.preventDefault();
-          barButtons[Math.min(barButtons.length - 1, barIndex + 1)]?.focus();
+          focusPlayBarRemoteButton(barButtons[Math.min(barButtons.length - 1, barIndex + 1)] || null);
           return;
         }
         if (navKey === "ArrowLeft") {
@@ -2538,6 +2553,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             togglePlayPause();
           }
           return;
+        }
         }
       }
 
@@ -5832,6 +5848,15 @@ function stepPlaylistCardFocus(
     return da - db;
   });
   return candidates[0];
+}
+
+function focusPlayBarRemoteButton(btn: HTMLButtonElement | null): void {
+  document.querySelectorAll(".player-control-bar-btn.is-remote-focused").forEach((el) => {
+    el.classList.remove("is-remote-focused");
+  });
+  if (!btn) return;
+  btn.classList.add("is-remote-focused");
+  btn.focus();
 }
 
 function isFavoriteFocusTarget(el: Element | null): el is HTMLButtonElement {

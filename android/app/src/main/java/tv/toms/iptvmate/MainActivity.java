@@ -452,6 +452,26 @@ public class MainActivity extends BridgeActivity {
             dispatchBackKeyToWebApp();
             return true;
         }
+        if (exoPlayerManager != null && exoPlayerManager.offerRemoteKey(event)) {
+            return true;
+        }
+        if (exoPlayerManager != null && exoPlayerManager.isPlayingNative() && isMediaKey(event.getKeyCode())) {
+            WebView webView = getActivityWebView();
+            if (webView != null) {
+                return webView.dispatchKeyEvent(event);
+            }
+        }
         return super.dispatchKeyEvent(event);
+    }
+
+    private static boolean isMediaKey(int code) {
+        return code == KeyEvent.KEYCODE_MEDIA_PLAY
+            || code == KeyEvent.KEYCODE_MEDIA_PAUSE
+            || code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+            || code == KeyEvent.KEYCODE_MEDIA_STOP
+            || code == KeyEvent.KEYCODE_MEDIA_REWIND
+            || code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+            || code == KeyEvent.KEYCODE_MEDIA_NEXT
+            || code == KeyEvent.KEYCODE_MEDIA_PREVIOUS;
     }
 }
