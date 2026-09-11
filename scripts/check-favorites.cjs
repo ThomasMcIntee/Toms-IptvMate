@@ -19,9 +19,12 @@ assert.ok(store.includes("indexedDB.open(CHANNELS_CACHE_DB, 3)"));
 assert.ok(store.includes("favoriteWriteGeneration"));
 assert.ok(store.includes("Never replace in-memory stars"));
 assert.ok(store.includes("lastFavoriteWriteById"));
+assert.ok(store.includes("isVodFavoriteChannel"));
+assert.ok(store.includes('contentType === "movie"'));
 assert.ok(!/favoriteEntries\s*=\s*restored/.test(store));
 assert.ok(app.includes("activateFocusedFavoriteControl"));
 assert.ok(app.includes("stopImmediatePropagation"));
+assert.ok(app.includes('".channel-list-favorite, .channel-icon-favorite, .player-control-bar-favorite"'));
 
 assert.ok(!platform.includes("return isCap || isAndroidRuntime()"));
 assert.ok(platform.includes("localhost:5173"));
@@ -51,5 +54,52 @@ assert.strictEqual(
   "http://provider.example/movie.mkv"
 );
 assert.strictEqual(unwrapFavoriteUrl("http://provider.example/movie.mkv"), "http://provider.example/movie.mkv");
+
+function buildFavoriteKey(channel) {
+  const id = String(channel.id || "").trim();
+  const url = unwrapFavoriteUrl(String(channel.url || ""));
+  return url ? `id:${id}|url:${url}` : `id:${id}`;
+}
+
+function isVodFavorite(channel) {
+  return String(channel.contentType || "") === "movie" || /^movie_\d+/i.test(String(channel.id || ""));
+}
+
+function isFavoriteById(entries, channel) {
+  const key = buildFavoriteKey(channel);
+  if (entries.has(key)) return true;
+  const id = String(channel.id || "").trim();
+  if (isVodFavorite(channel)) {
+    for (const entry of entries.values()) {
+      if (entry.id === id) return true;
+    }
+  }
+  return false;
+}
+
+const movieA = {
+  id: "movie_10",
+  contentType: "movie",
+  url: "http://provider.example/movie/10.mkv",
+  name: "Demo"
+};
+const movieAInOtherGroup = {
+  ...movieA,
+  group: "Movies: Action"
+};
+const movieAProxied = {
+  ...movieA,
+  url: "http://localhost:5173/__stream?url=http://provider.example/movie/10.mkv"
+};
+
+const entries = new Map();
+const addKey = buildFavoriteKey(movieA);
+entries.set(addKey, { key: addKey, id: movieA.id, url: unwrapFavoriteUrl(movieA.url) });
+entries.set(`id:${movieA.id}`, { key: `id:${movieA.id}`, id: movieA.id, url: "" });
+
+assert.ok(isFavoriteById(entries, movieA));
+assert.ok(isFavoriteById(entries, movieAInOtherGroup));
+assert.ok(isFavoriteById(entries, movieAProxied));
+assert.ok(!isFavoriteById(entries, { id: "movie_11", contentType: "movie", url: movieA.url }));
 
 console.log("favorites persist helpers ok");

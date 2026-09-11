@@ -400,6 +400,18 @@ function isSeriesLikeFavoriteChannel(channel: Partial<Channel> | null | undefine
   return /^series_\d+(?:_episode_\d+)?$/i.test(id);
 }
 
+function isVodFavoriteChannel(channel: Partial<Channel> | null | undefined): boolean {
+  if (!channel) return false;
+
+  const contentType = String(channel.contentType || "").trim().toLowerCase();
+  if (contentType === "movie" || contentType === "series") {
+    return true;
+  }
+
+  const id = String(channel.id || "").trim();
+  return /^(movie|series)_\d+/i.test(id);
+}
+
 function hasUniqueCurrentChannelId(id: string): boolean {
   let count = 0;
   for (const channel of channels) {
@@ -2636,6 +2648,13 @@ export function isFavoriteChannelRecord(channel: Partial<Channel> | null | undef
   const id = String(channel.id || "").trim();
   if (!id) return false;
 
+  // Movies/series appear in multiple Xtream categories with the same id, and
+  // localhost wraps the stream in /__stream?url=. Match the title by id so
+  // starring a movie cannot snap back to "Add Favorite".
+  if (isVodFavoriteChannel(channel) && hasFavoriteEntryWithId(id)) {
+    return true;
+  }
+
   // Series stream URLs can legitimately change per provider/refresh while
   // remaining the same logical series item. Fall back to id matching.
   if (isSeriesLikeFavoriteChannel(channel) && hasFavoriteEntryWithId(id)) {
@@ -2686,7 +2705,14 @@ export function setChannelFavoriteRecord(channel: Partial<Channel> | null | unde
 
   if (isFavorite) {
     const legacyKey = `id:${id}`;
-    if (favoriteEntries.delete(legacyKey)) {
+    const favoriteName = typeof channel.name === "string" ? channel.name : undefined;
+
+    if (isVodFavoriteChannel(channel)) {
+      if (!favoriteEntries.has(legacyKey)) {
+        favoriteEntries.set(legacyKey, { key: legacyKey, id, url: "", name: favoriteName });
+        changed = true;
+      }
+    } else if (favoriteEntries.delete(legacyKey)) {
       changed = true;
     }
 
@@ -2695,7 +2721,7 @@ export function setChannelFavoriteRecord(channel: Partial<Channel> | null | unde
         key,
         id,
         url: normalizeFavoriteUrl(String(channel.url || "")),
-        name: typeof channel.name === "string" ? channel.name : undefined
+        name: favoriteName
       });
       changed = true;
     }

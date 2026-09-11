@@ -259,9 +259,14 @@ export function PlayerControlBar({
           <button
             type="button"
             className={`player-control-bar-btn player-control-bar-favorite${isFavorite ? " is-favorite" : ""}`}
+            data-channel-id={String(channel?.id || "")}
             tabIndex={revealed ? 0 : -1}
-            onClick={onToggleFavorite}
-            aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onToggleFavorite();
+            }}
+            aria-label={isFavorite ? "Remove Favorite" : "Add Favorite"}
           >
             {isFavorite ? (
               <svg viewBox="0 0 24 24" aria-hidden="true">

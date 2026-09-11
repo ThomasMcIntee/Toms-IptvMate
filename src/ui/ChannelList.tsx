@@ -48,6 +48,8 @@ function ChannelItem({
   }
 
   const visible = isChannelVisible(ch.id);
+  const isMovieFavoriteTile =
+    String(ch.contentType || "").toLowerCase() === "movie" || /^movie_\d+/i.test(String(ch.id || ""));
 
   const itemClass =
     "channel-item" +
@@ -81,16 +83,28 @@ function ChannelItem({
           {showFavoriteControls && onToggleFavorite && (
             <button
               type="button"
-              className={`channel-icon-favorite${isFavoriteChannel(ch) ? " active" : ""}`}
+              className={`channel-icon-favorite${isMovieFavoriteTile ? " channel-icon-favorite-label" : ""}${
+                isFavoriteChannel(ch) ? " active" : ""
+              }`}
               data-channel-id={String(ch.id || "")}
               aria-label={`${isFavoriteChannel(ch) ? "Remove" : "Add"} ${ch.name} to favorites`}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+              }}
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                e.nativeEvent.stopImmediatePropagation();
                 onToggleFavorite(ch);
               }}
             >
-              {isFavoriteChannel(ch) ? "★" : "☆"}
+              {isMovieFavoriteTile
+                ? isFavoriteChannel(ch)
+                  ? "Remove Favorite"
+                  : "Add Favorite"
+                : isFavoriteChannel(ch)
+                  ? "★"
+                  : "☆"}
             </button>
           )}
           <button
@@ -147,9 +161,13 @@ function ChannelItem({
               className={`channel-list-favorite${isFavoriteChannel(ch) ? " active" : ""}`}
               data-channel-id={String(ch.id || "")}
               aria-label={`${isFavoriteChannel(ch) ? "Remove" : "Add"} ${ch.name} to favorites`}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+              }}
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                e.nativeEvent.stopImmediatePropagation();
                 onToggleFavorite(ch);
               }}
             >

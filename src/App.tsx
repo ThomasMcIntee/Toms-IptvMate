@@ -2831,15 +2831,13 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     lastFavoriteToggleAtByIdRef.current.set(channelId, now);
     setChannelFavoriteRecord(channel, !isFavoriteChannelRecord(channel));
     window.setTimeout(() => {
-      const match = channelId
-        ? Array.from(
-            document.querySelectorAll<HTMLButtonElement>(".channel-list-favorite, .channel-icon-favorite")
-          ).find((btn) => btn.dataset.channelId === channelId)
-        : null;
-      const fallback = document.querySelector<HTMLButtonElement>(
-        ".channel-list-favorite, .channel-icon-favorite, .channel-select-btn, .channel-icon-btn:not([disabled])"
-      );
-      (match || fallback)?.focus();
+      if (!channelId) return;
+      const match = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(
+          ".channel-list-favorite, .channel-icon-favorite, .player-control-bar-favorite"
+        )
+      ).find((btn) => btn.dataset.channelId === channelId);
+      match?.focus();
     }, 40);
   }
 
