@@ -81,6 +81,18 @@ export function audioLanguageLabel(language: string | null | undefined, fallback
   return LANGUAGE_NAMES[code] || code.toUpperCase();
 }
 
+export function audioTrackDisplayLabel(
+  name: string | null | undefined,
+  language: string | null | undefined,
+  fallbackIndex = 0
+): string {
+  const cleaned = String(name || "").trim();
+  const fromLanguage = audioLanguageLabel(language, "");
+  if (fromLanguage && (!cleaned || /^stream[_-]?\d+$/i.test(cleaned))) return fromLanguage;
+  if (cleaned) return cleaned;
+  return fromLanguage || `Audio ${fallbackIndex + 1}`;
+}
+
 export function readPreferredAudioLanguage(): string {
   try {
     return normalizeAudioLanguage(localStorage.getItem(AUDIO_LANGUAGE_KEY));

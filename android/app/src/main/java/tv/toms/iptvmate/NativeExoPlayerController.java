@@ -606,11 +606,13 @@ public class NativeExoPlayerController {
     }
 
     private static String displayLabel(Format format, String language, int ordinal) {
-        if (format.label != null && !format.label.trim().isEmpty()) {
-            return format.label.trim();
+        String named = format.label != null ? format.label.trim() : "";
+        String fromLanguage = languageDisplayName(language);
+        if (!fromLanguage.isEmpty() && (named.isEmpty() || named.matches("(?i)stream[_-]?\\d+"))) {
+            return fromLanguage;
         }
-        String named = languageDisplayName(language);
         if (!named.isEmpty()) return named;
+        if (!fromLanguage.isEmpty()) return fromLanguage;
         return "Audio " + (ordinal + 1);
     }
 

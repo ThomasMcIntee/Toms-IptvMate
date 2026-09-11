@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import {
-  audioLanguageLabel,
+  audioTrackDisplayLabel,
   readPreferredAudioLanguage,
   savePreferredAudioLanguage,
   type PlaybackAudioTrack
@@ -49,7 +49,7 @@ function collectHtmlAudioTracks(): PlaybackAudioTrack[] {
     tracks.push({
       id: `html:${track.id || index}`,
       language: track.language || "",
-      label: track.label || audioLanguageLabel(track.language, `Audio ${index + 1}`),
+      label: audioTrackDisplayLabel(track.label, track.language, index),
       selected: !!track.enabled
     });
   }
@@ -64,9 +64,7 @@ function collectHlsAudioTracks(): PlaybackAudioTrack[] {
   return list.map((track, index) => ({
     id: `hls:${index}`,
     language: (track as { lang?: string }).lang || "",
-    label:
-      track.name ||
-      audioLanguageLabel((track as { lang?: string }).lang, `Audio ${index + 1}`),
+    label: audioTrackDisplayLabel(track.name, (track as { lang?: string }).lang, index),
     selected: index === selected
   }));
 }
@@ -86,7 +84,7 @@ function collectShakaAudioTracks(): PlaybackAudioTrack[] {
       return {
         id: `shaka:${language}:${option.role || index}`,
         language,
-        label: audioLanguageLabel(language, `Audio ${index + 1}`),
+        label: audioTrackDisplayLabel("", language, index),
         selected: !!current && current === language
       };
     });
@@ -134,7 +132,7 @@ export async function refreshAudioTracks(): Promise<PlaybackAudioTrack[]> {
       .map((track, index) => ({
         id: String(track.id),
         language: track.language || "",
-        label: track.label || audioLanguageLabel(track.language, `Audio ${index + 1}`),
+        label: audioTrackDisplayLabel(track.label, track.language, index),
         selected: !!track.selected
       }));
   } else {
