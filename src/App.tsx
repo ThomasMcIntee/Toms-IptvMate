@@ -62,7 +62,7 @@ import {
   type ChannelVisibilitySnapshot
 } from "./core/channelStore";
 import NowNextOverlay from "./ui/NowNextOverlay";
-import { PlayerControlBar, VodExitButton, VodLanguageSelect } from "./ui/PlayerControlBar";
+import { PlayerControlBar, VodExitButton } from "./ui/PlayerControlBar";
 import { isAudioLanguagePickerOpen, setAudioLanguagePickerOpen } from "./core/audioTracks";
 import { isPlaylistsHydrationPending, loadPlaylists, type PlaylistEntry } from "./core/playlistStore";
 import { loadEPGForPlaylist } from "./core/loaders/epgLoader";
@@ -2050,6 +2050,14 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         !!vodFocus.closest(".vod-language-select, .vod-exit-btn, .player-control-bar");
       if (isVodPlaybackFullscreen && !isAudioLanguagePickerOpen() && !vodFocusOnControl) {
         window.dispatchEvent(new Event("playerRevealControls"));
+        if (navKey === "ArrowDown" || navKey === "ArrowUp") {
+          e.preventDefault();
+          const languageBtn = document.querySelector<HTMLButtonElement>(
+            ".player-control-bar-language, .vod-language-btn"
+          );
+          languageBtn?.focus();
+          return;
+        }
         if (navKey === "ArrowLeft") {
           e.preventDefault();
           seekPlayback(-15);
@@ -4092,16 +4100,26 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
           id="player-main"
           className={`player-main ${shouldShowOpeningMenu && !currentChannel ? "player-main-idle" : showContentPreviewWindow ? "player-main-preview" : contentPage === "live" ? (isEffectiveLiveFullscreen ? "player-main-live" : "player-main-compact") : currentChannel ? "player-main-live" : "player-main-compact"}${forceLivePreviewLayout ? " player-main-force-preview" : ""}`}
           playsInline
-          controls={!!currentChannel && !forceLivePreviewLayout}
+          controls={!!currentChannel && !forceLivePreviewLayout && !isVodPlaybackFullscreen}
           disablePictureInPicture={contentPage === "live"}
           disableRemotePlayback={contentPage === "live"}
           tabIndex={isCapacitorRuntime() || isWebOsRuntime() ? -1 : 0}
           style={{ background: 'transparent', zIndex: 0 }}
         />
-
-
-
-
+      )}
+      {isVodPlaybackFullscreen && currentChannel && (
+        <div className="vod-player-controls">
+          <PlayerControlBar
+            channel={currentChannel}
+            paused={isPlaybackPaused()}
+            muted={isPlaybackMuted()}
+            fullscreen={true}
+            onPlayPause={togglePlayPause}
+            onMute={toggleMute}
+            onFullscreen={toggleFullscreen}
+            showLiveBadge={false}
+          />
+        </div>
       )}
       {forceLivePreviewLayout && !isPlaylistInputPanelOpen && (
         <div className="live-preview-placeholder" aria-hidden="true">
@@ -4123,7 +4141,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       {currentChannel && !playerStatus && playerWarning && <div className="player-status player-status-info">{playerWarning}</div>}
       {currentChannel && playerError && <div className="player-status player-status-error">{playerError}</div>}
       {isVodPlaybackFullscreen && <VodExitButton visible={isVodPlaybackFullscreen} onExit={exitVodPlayback} />}
-      {isVodPlaybackFullscreen && <VodLanguageSelect visible={isVodPlaybackFullscreen} />}
 
       {isLoginOverlayVisible && (
         <div className="app-login-overlay" role="dialog" aria-modal="true" aria-label="Login required">

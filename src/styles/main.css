@@ -688,11 +688,31 @@ body.is-capacitor.native-exo-active .player-control-bar {
   outline-offset: 2px;
 }
 
+.vod-player-controls {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 130;
+  pointer-events: none;
+}
+
+.vod-player-controls .player-control-bar {
+  pointer-events: auto;
+}
+
 .vod-language-select {
   position: absolute;
   top: 20px;
   right: 112px;
   z-index: 140;
+}
+
+.vod-language-select-bar {
+  position: relative;
+  top: auto;
+  right: auto;
+  z-index: 6;
 }
 
 .vod-language-select.vod-language-select-hidden {
@@ -709,6 +729,17 @@ body.is-capacitor.native-exo-active .player-control-bar {
   color: #fff;
   font: inherit;
   cursor: pointer;
+}
+
+.vod-language-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vod-language-btn svg {
+  width: 22px;
+  height: 22px;
 }
 
 .vod-language-btn:focus,
@@ -735,6 +766,11 @@ body.is-capacitor.native-exo-active .player-control-bar {
   gap: 6px;
 }
 
+.vod-language-select-bar .vod-language-panel {
+  top: auto;
+  bottom: 44px;
+}
+
 .vod-language-option {
   border-radius: 8px;
   text-align: left;
@@ -744,9 +780,13 @@ body.is-capacitor.native-exo-active .player-control-bar {
   background: rgba(30, 144, 255, 0.28);
 }
 
-body.is-capacitor.native-exo-active .vod-language-select {
-  visibility: hidden;
-  pointer-events: none;
+body.is-capacitor .player-control-bar-language:focus,
+body.is-capacitor .player-control-bar-language:focus-visible,
+body.is-capacitor .vod-language-btn:focus,
+body.is-capacitor .vod-language-btn:focus-visible {
+  outline: none;
+  background: #b5e61d;
+  color: #111;
 }
 
 body.is-webos .vod-language-btn:focus,
@@ -1306,6 +1346,7 @@ body.is-webos .opening-btn:focus,
 body.is-webos .channel-select-btn:focus,
 body.is-webos .group-select-btn:focus,
 body.is-webos .channel-icon-btn:focus,
+body.is-webos .player-control-bar-language:focus,
 body.is-webos .player-control-bar-btn:focus {
   outline: 3px solid #4da3ff !important;
   outline-offset: 2px;

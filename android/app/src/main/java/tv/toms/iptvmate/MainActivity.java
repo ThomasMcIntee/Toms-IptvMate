@@ -427,6 +427,9 @@ public class MainActivity extends BridgeActivity {
             dispatchBackKeyToWebApp();
             return true;
         }
+        if (exoPlayerManager != null && exoPlayerManager.dispatchPlayerKey(event)) {
+            return true;
+        }
         return super.dispatchKeyEvent(event);
     }
 }

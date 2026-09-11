@@ -12,6 +12,17 @@ import { normalizeRemoteNavKey } from "../core/remoteKeys";
 
 const CONTROLS_HIDE_MS = 3500;
 
+function LanguageGlobeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M12.87 15.07 10.33 12.56l.03-.03A17.52 17.52 0 0 0 14.07 6H17V4.35h-6.5V2.5H8.85v1.85H2v1.65h11.17c-.71 2.13-1.76 3.83-3.3 5.19-.94-.83-1.72-1.77-2.32-2.84H5.9c.67 1.4 1.6 2.68 2.76 3.74l-5.05 5.02L5 18.5l5.11-5.07 3.11 3.11.65-.47zM18.5 10.5h-1.84L13.5 18.5h1.84l.75-2h3.82l.75 2H22.5L18.5 10.5zM16.74 15l1.34-3.56L19.42 15h-2.68z"
+      />
+    </svg>
+  );
+}
+
 type PlayerChannel = {
   id?: string;
   name?: string;
@@ -28,7 +39,8 @@ export function PlayerControlBar({
   onPlayPause,
   onMute,
   onFullscreen,
-  onToggleFavorite
+  onToggleFavorite,
+  showLiveBadge = true
 }: {
   channel: PlayerChannel;
   paused: boolean;
@@ -39,6 +51,7 @@ export function PlayerControlBar({
   onMute: () => void;
   onFullscreen: () => void;
   onToggleFavorite?: () => void;
+  showLiveBadge?: boolean;
 }) {
   useSyncExternalStore(subscribeEPG, getEPGVersion, getEPGVersion);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -217,7 +230,8 @@ export function PlayerControlBar({
         </button>
         <span className="player-control-bar-time">{timeLabel}</span>
         <span className="player-control-bar-title">{title}</span>
-        <span className="player-control-bar-live">LIVE</span>
+        {showLiveBadge && <span className="player-control-bar-live">LIVE</span>}
+        <VodLanguageSelect visible={revealed} variant="bar" />
         <button
           type="button"
           className="player-control-bar-btn"
@@ -378,12 +392,19 @@ export function VodExitButton({
   );
 }
 
-export function VodLanguageSelect({ visible }: { visible: boolean }) {
+export function VodLanguageSelect({
+  visible,
+  variant = "overlay"
+}: {
+  visible: boolean;
+  variant?: "bar" | "overlay";
+}) {
   const tracks = useAudioTracks();
   const [open, setOpen] = useState(false);
   const [revealed, setRevealed] = useState(true);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const hideTimerRef = useRef<number | null>(null);
+  const inBar = variant === "bar";
 
   useEffect(() => {
     if (!visible) {
@@ -488,11 +509,12 @@ export function VodLanguageSelect({ visible }: { visible: boolean }) {
   return (
     <div
       ref={rootRef}
-      className={`vod-language-select${revealed || open ? "" : " vod-language-select-hidden"}`}
+      className={`vod-language-select vod-language-select-${variant}${revealed || open || inBar ? "" : " vod-language-select-hidden"}`}
     >
       <button
         type="button"
-        className="vod-language-btn"
+        className={inBar ? "player-control-bar-btn player-control-bar-language" : "vod-language-btn"}
+        tabIndex={visible ? 0 : -1}
         aria-label={`Audio language: ${selectedLabel}`}
         aria-expanded={open}
         onClick={() => {
@@ -501,7 +523,8 @@ export function VodLanguageSelect({ visible }: { visible: boolean }) {
         }}
         onFocus={() => setRevealed(true)}
       >
-        {selectedLabel}
+        <LanguageGlobeIcon />
+        {!inBar && <span className="vod-language-btn-label">{selectedLabel}</span>}
       </button>
       {open && tracks.length >= 2 && (
         <div className="vod-language-panel" role="listbox" aria-label="Audio language">
