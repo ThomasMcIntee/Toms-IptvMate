@@ -329,6 +329,7 @@ export function PlayerControlBar({
             </svg>
           )}
         </button>
+        {isVod && <PlayBarLanguageButton revealed={revealed} />}
         {onToggleFavorite && (
           <button
             type="button"
@@ -465,6 +466,84 @@ export function VodExitButton({
     >
       Back
     </button>
+  );
+}
+
+function PlayBarLanguageButton({ revealed }: { revealed: boolean }) {
+  const tracks = useAudioTracks();
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    void refreshAudioTracks();
+    const refresh = () => {
+      void refreshAudioTracks();
+    };
+    window.addEventListener("playerAudioTracks", refresh);
+    window.addEventListener("playerPlaying", refresh);
+    return () => {
+      window.removeEventListener("playerAudioTracks", refresh);
+      window.removeEventListener("playerPlaying", refresh);
+      setAudioLanguagePickerOpen(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    setAudioLanguagePickerOpen(open);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClose = () => setOpen(false);
+    window.addEventListener("closeAudioLanguagePicker", onClose);
+    return () => window.removeEventListener("closeAudioLanguagePicker", onClose);
+  }, [open]);
+
+  const selected = tracks.find((track) => track.selected) || tracks[0];
+  const selectedLabel = selected?.label || "Audio language";
+
+  return (
+    <span className="play-bar-language">
+      <button
+        type="button"
+        className="player-control-bar-btn vod-language-btn"
+        tabIndex={revealed ? 0 : -1}
+        aria-label={selectedLabel}
+        aria-expanded={open}
+        onClick={() => {
+          if (tracks.length < 2) {
+            void refreshAudioTracks();
+            return;
+          }
+          setOpen((current) => !current);
+        }}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4.35h-6.5V2.5H8.85V4.35H2v1.65h11.17C12.46 8.13 11.41 9.83 9.87 11.19c-.94-.83-1.72-1.77-2.32-2.84H5.9c.67 1.4 1.6 2.68 2.76 3.74l-5.05 5.02L5 18.5l5.11-5.07 3.11 3.11.03-.04zM18.5 10.5h-1.84L13.5 18.5h1.84l.75-2h3.82l.75 2H22.5l-4-8zM16.74 15l1.34-3.56L19.42 15h-2.68z"
+          />
+        </svg>
+      </button>
+      {open && tracks.length >= 2 && (
+        <div className="vod-language-panel play-bar-language-panel" role="listbox" aria-label="Audio language">
+          {tracks.map((track) => (
+            <button
+              key={track.id}
+              type="button"
+              role="option"
+              aria-selected={track.selected}
+              className={`player-control-bar-btn vod-language-option${track.selected ? " is-selected" : ""}`}
+              onClick={() => {
+                void selectAudioTrack(track.id).then(() => setOpen(false));
+              }}
+            >
+              {track.label}
+              {track.selected ? "  ✓" : ""}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
   );
 }
 

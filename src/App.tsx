@@ -5153,9 +5153,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       {currentChannel && !playerStatus && playerWarning && <div className="player-status player-status-info">{playerWarning}</div>}
       {currentChannel && playerError && <div className="player-status player-status-error">{playerError}</div>}
       {isVodPlaybackFullscreen && !useVodPlaybackShell && (
-        <VodExitButton visible={isVodPlaybackFullscreen} onExit={exitVodPlayback} />
+        <>
+          <VodExitButton visible={isVodPlaybackFullscreen} onExit={exitVodPlayback} />
+          <VodLanguageSelect visible={isVodPlaybackFullscreen} />
+        </>
       )}
-      {isVodPlaybackFullscreen && <VodLanguageSelect visible={isVodPlaybackFullscreen} />}
 
       {isLoginOverlayVisible && (
         <div className="app-login-overlay" role="dialog" aria-modal="true" aria-label="Login required">

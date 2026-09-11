@@ -831,6 +831,17 @@ body.is-capacitor.native-exo-active .player-control-bar {
   box-shadow: 0 0 0 2px rgba(181, 230, 29, 0.55);
 }
 
+.play-bar-language {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.play-bar-language-panel {
+  right: 0;
+  bottom: 44px;
+  top: auto;
+}
+
 .vod-language-select {
   position: absolute;
   top: 20px;
