@@ -318,6 +318,7 @@ export function PlayerControlBar({
             </svg>
           </button>
         )}
+        {isVod && <PlayBarLanguageButton revealed={revealed} />}
         <span className="player-control-bar-time">{timeLabel}</span>
         <span className="player-control-bar-title">{title}</span>
         {!isVod && <span className="player-control-bar-live">LIVE</span>}
@@ -345,7 +346,6 @@ export function PlayerControlBar({
             </svg>
           )}
         </button>
-        {isVod && <PlayBarLanguageButton revealed={revealed} />}
         {onToggleFavorite && (
           <button
             type="button"
@@ -737,7 +737,7 @@ export function VodLanguageSelect({ visible }: { visible: boolean }) {
     >
       <button
         type="button"
-        className="player-control-bar-btn vod-language-btn"
+        className="vod-language-btn"
         data-playbar-btn="language-select"
         aria-label={`Audio language: ${selectedLabel}`}
         aria-expanded={open}

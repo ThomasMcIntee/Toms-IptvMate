@@ -68,6 +68,24 @@
                 android:src="@drawable/ic_player_pause"
                 android:tint="@color/native_exo_control_icon" />
 
+            <ImageButton
+                android:id="@+id/native_exo_language"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginLeft="4dp"
+                android:background="@drawable/native_exo_control_btn"
+                android:contentDescription="@string/native_exo_language"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:nextFocusDown="@id/native_exo_language"
+                android:nextFocusLeft="@id/native_exo_play"
+                android:nextFocusRight="@id/native_exo_mute"
+                android:nextFocusUp="@id/native_exo_language"
+                android:padding="6dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_player_language"
+                android:tint="@color/native_exo_control_icon" />
+
             <TextView
                 android:id="@+id/native_exo_time"
                 android:layout_width="wrap_content"
@@ -104,23 +122,6 @@
                 android:textColor="#FFFFFFFF"
                 android:textSize="10sp"
                 android:textStyle="bold" />
-
-            <ImageButton
-                android:id="@+id/native_exo_language"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:background="@drawable/native_exo_control_btn"
-                android:contentDescription="@string/native_exo_language"
-                android:focusable="true"
-                android:focusableInTouchMode="true"
-                android:nextFocusDown="@id/native_exo_language"
-                android:nextFocusLeft="@id/native_exo_play"
-                android:nextFocusRight="@id/native_exo_mute"
-                android:nextFocusUp="@id/native_exo_language"
-                android:padding="6dp"
-                android:scaleType="fitCenter"
-                android:src="@drawable/ic_player_language"
-                android:tint="@color/native_exo_control_icon" />
 
             <ImageButton
                 android:id="@+id/native_exo_mute"

@@ -877,6 +877,9 @@ body.is-capacitor.native-exo-active .player-control-bar {
 
 .vod-language-select .vod-language-btn,
 .vod-language-option {
+  width: auto;
+  min-width: 96px;
+  height: auto;
   padding: 10px 14px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 999px;

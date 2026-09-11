@@ -20,6 +20,8 @@ import {
   resumeNativePlayback,
   revealNativePlayerControls,
   focusNativePlayerControls,
+  moveNativePlayerControl,
+  activateNativePlayerControl,
   setNativeMuted,
   stopNativePlayback,
   syncNativePlayerBounds,
@@ -2530,10 +2532,22 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             focusNativePlayerControls();
             return;
           }
-          if (navKey === "ArrowLeft" || navKey === "ArrowRight" || navKey === "Enter") {
+          if (navKey === "ArrowLeft") {
             e.preventDefault();
             e.stopPropagation();
-            revealNativePlayerControls();
+            moveNativePlayerControl(-1);
+            return;
+          }
+          if (navKey === "ArrowRight") {
+            e.preventDefault();
+            e.stopPropagation();
+            moveNativePlayerControl(1);
+            return;
+          }
+          if (navKey === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+            activateNativePlayerControl();
             return;
           }
         } else {

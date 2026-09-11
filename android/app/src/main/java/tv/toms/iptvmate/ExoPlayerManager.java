@@ -59,6 +59,7 @@ public class ExoPlayerManager {
     private LinearLayout languageList;
     private TextView timeView;
     private TextView titleView;
+    private View liveBadge;
     private Runnable controlsTicker;
     private Runnable hideControlsRunnable;
     private boolean controlsRevealed = true;
@@ -325,6 +326,31 @@ public class ExoPlayerManager {
             if (!isPlayingNative) return;
             revealControlsOnMain();
             focusDefaultControlOnMain();
+        });
+    }
+
+    public void moveControlFocus(int delta) {
+        runOnMain(() -> {
+            if (!isPlayingNative) return;
+            revealControlsOnMain();
+            if (delta == 0) {
+                focusDefaultControlOnMain();
+                return;
+            }
+            moveControlSelection(delta);
+        });
+    }
+
+    public void activateSelectedControl() {
+        runOnMain(() -> {
+            if (!isPlayingNative) return;
+            revealControlsOnMain();
+            ImageButton current = selectedControl();
+            if (current == null) {
+                focusDefaultControlOnMain();
+                return;
+            }
+            current.performClick();
         });
     }
 
@@ -682,6 +708,7 @@ public class ExoPlayerManager {
         languageList = overlay.findViewById(R.id.native_exo_language_list);
         timeView = overlay.findViewById(R.id.native_exo_time);
         titleView = overlay.findViewById(R.id.native_exo_title);
+        liveBadge = overlay.findViewById(R.id.native_exo_live);
 
         makeControlFocusable(playButton);
         makeControlFocusable(languageButton);
@@ -771,6 +798,9 @@ public class ExoPlayerManager {
         }
         if (titleView != null) {
             titleView.setText(guideTitle);
+        }
+        if (liveBadge != null) {
+            liveBadge.setVisibility(playIsLive ? View.VISIBLE : View.GONE);
         }
         refreshLanguageControlsOnMain();
     }

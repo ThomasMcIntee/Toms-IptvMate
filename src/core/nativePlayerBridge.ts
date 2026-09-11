@@ -14,6 +14,8 @@ type NativePlayerCapPlugin = {
   setGuide(options: { title?: string; startMs?: number; endMs?: number }): Promise<void>;
   revealControls(): Promise<void>;
   focusControls(): Promise<void>;
+  moveControlFocus(options: { delta: number }): Promise<void>;
+  activateSelectedControl(): Promise<void>;
   exitApp(): Promise<void>;
   getAudioTracks(): Promise<{ tracks?: NativeAudioTrackPayload[] }>;
   setAudioTrack(options: { id: string }): Promise<{ ok?: boolean }>;
@@ -339,6 +341,20 @@ export function revealNativePlayerControls(): void {
 export function focusNativePlayerControls(): void {
   if (!isCapacitorRuntime() || !isNativePlayerAvailable()) return;
   void NativePlayerCap.focusControls().catch(() => {
+    revealNativePlayerControls();
+  });
+}
+
+export function moveNativePlayerControl(delta: number): void {
+  if (!isCapacitorRuntime() || !isNativePlayerAvailable()) return;
+  void NativePlayerCap.moveControlFocus({ delta }).catch(() => {
+    revealNativePlayerControls();
+  });
+}
+
+export function activateNativePlayerControl(): void {
+  if (!isCapacitorRuntime() || !isNativePlayerAvailable()) return;
+  void NativePlayerCap.activateSelectedControl().catch(() => {
     revealNativePlayerControls();
   });
 }
