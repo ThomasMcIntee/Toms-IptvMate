@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  refreshAudioTracks,
+  selectAudioTrack,
+  setAudioLanguagePickerOpen,
+  useAudioTracks
+} from "../core/audioTracks";
 import { getEPGForChannel, getEPGVersion, subscribeEPG } from "../core/epgStore";
 import { formatEpgTime } from "../core/epgTime";
 import { setNativePlayerGuide } from "../core/nativePlayerBridge";
+import { normalizeRemoteNavKey } from "../core/remoteKeys";
 
 const CONTROLS_HIDE_MS = 3500;
 
@@ -458,5 +465,149 @@ export function VodExitButton({
     >
       Back
     </button>
+  );
+}
+
+export function VodLanguageSelect({ visible }: { visible: boolean }) {
+  const tracks = useAudioTracks();
+  const [open, setOpen] = useState(false);
+  const [revealed, setRevealed] = useState(true);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const hideTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!visible) {
+      setOpen(false);
+      setAudioLanguagePickerOpen(false);
+      return;
+    }
+    void refreshAudioTracks();
+    const refresh = () => {
+      void refreshAudioTracks();
+    };
+    window.addEventListener("playerAudioTracks", refresh);
+    window.addEventListener("playerPlaying", refresh);
+    return () => {
+      window.removeEventListener("playerAudioTracks", refresh);
+      window.removeEventListener("playerPlaying", refresh);
+      setAudioLanguagePickerOpen(false);
+    };
+  }, [visible]);
+
+  useEffect(() => {
+    setAudioLanguagePickerOpen(visible && open);
+  }, [visible, open]);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    const clearHideTimer = () => {
+      if (hideTimerRef.current !== null) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+    };
+
+    const scheduleHide = () => {
+      if (open) {
+        clearHideTimer();
+        return;
+      }
+      clearHideTimer();
+      hideTimerRef.current = window.setTimeout(() => {
+        hideTimerRef.current = null;
+        if (rootRef.current?.contains(document.activeElement)) return;
+        setRevealed(false);
+      }, CONTROLS_HIDE_MS);
+    };
+
+    const reveal = () => {
+      setRevealed(true);
+      scheduleHide();
+    };
+
+    reveal();
+    window.addEventListener("playerRevealControls", reveal);
+    return () => {
+      clearHideTimer();
+      window.removeEventListener("playerRevealControls", reveal);
+    };
+  }, [visible, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const selected =
+      rootRef.current?.querySelector<HTMLButtonElement>(".vod-language-option.is-selected") ||
+      rootRef.current?.querySelector<HTMLButtonElement>(".vod-language-option");
+    selected?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const key = normalizeRemoteNavKey(event);
+      if (key === "Escape" || key === "Backspace") {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        rootRef.current?.querySelector<HTMLButtonElement>(".vod-language-btn")?.focus();
+        return;
+      }
+      const options = Array.from(rootRef.current?.querySelectorAll<HTMLButtonElement>(".vod-language-option") || []);
+      const index = options.findIndex((option) => option === document.activeElement);
+      if (index < 0) return;
+      if (key === "ArrowDown" || key === "ArrowRight") {
+        event.preventDefault();
+        options[Math.min(options.length - 1, index + 1)]?.focus();
+      } else if (key === "ArrowUp" || key === "ArrowLeft") {
+        event.preventDefault();
+        options[Math.max(0, index - 1)]?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    const onClose = () => setOpen(false);
+    window.addEventListener("closeAudioLanguagePicker", onClose);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("closeAudioLanguagePicker", onClose);
+    };
+  }, [open, tracks.length]);
+
+  if (!visible || tracks.length < 2) return null;
+
+  const selected = tracks.find((track) => track.selected) || tracks[0];
+
+  return (
+    <div
+      ref={rootRef}
+      className={`vod-language-select${revealed || open ? "" : " vod-language-select-hidden"}`}
+    >
+      <button
+        type="button"
+        className="vod-language-btn"
+        aria-label={`Audio language: ${selected.label}`}
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        onFocus={() => setRevealed(true)}
+      >
+        {selected.label}
+      </button>
+      {open && (
+        <div className="vod-language-panel" role="listbox" aria-label="Audio language">
+          {tracks.map((track) => (
+            <button
+              key={track.id}
+              type="button"
+              role="option"
+              aria-selected={track.selected}
+              className={`vod-language-option${track.selected ? " is-selected" : ""}`}
+              onClick={() => {
+                void selectAudioTrack(track.id).then(() => setOpen(false));
+              }}
+            >
+              {track.label}
+              {track.selected ? "  ✓" : ""}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

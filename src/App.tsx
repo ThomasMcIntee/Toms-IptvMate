@@ -69,7 +69,8 @@ import {
   type ChannelVisibilitySnapshot
 } from "./core/channelStore";
 import NowNextOverlay from "./ui/NowNextOverlay";
-import { PlayerControlBar, VodExitButton } from "./ui/PlayerControlBar";
+import { PlayerControlBar, VodExitButton, VodLanguageSelect } from "./ui/PlayerControlBar";
+import { isAudioLanguagePickerOpen, setAudioLanguagePickerOpen } from "./core/audioTracks";
 import { LAST_WATCHED_GROUP, recordLastWatched, resolveLastWatchedChannels } from "./core/lastWatched";
 import { VodResumePrompt } from "./ui/VodResumePrompt";
 import {
@@ -2311,6 +2312,12 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return true;
       }
 
+      if (isAudioLanguagePickerOpen()) {
+        setAudioLanguagePickerOpen(false);
+        window.dispatchEvent(new Event("closeAudioLanguagePicker"));
+        return true;
+      }
+
       if (isSeriesDetailsVisible) {
         setIsSeriesDetailsVisible(false);
         return true;
@@ -2489,7 +2496,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return;
       }
 
-      if (isVodPlaybackFullscreen) {
+      if (isVodPlaybackFullscreen && !isAudioLanguagePickerOpen()) {
         window.dispatchEvent(new Event("playerRevealControls"));
         const barButtons = Array.from(
           document.querySelectorAll<HTMLButtonElement>(".vod-playback-shell .player-control-bar-btn")
@@ -5146,6 +5153,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       {isVodPlaybackFullscreen && !useVodPlaybackShell && (
         <VodExitButton visible={isVodPlaybackFullscreen} onExit={exitVodPlayback} />
       )}
+      {isVodPlaybackFullscreen && <VodLanguageSelect visible={isVodPlaybackFullscreen} />}
 
       {isLoginOverlayVisible && (
         <div className="app-login-overlay" role="dialog" aria-modal="true" aria-label="Login required">

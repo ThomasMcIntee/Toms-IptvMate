@@ -27,6 +27,7 @@ import {
   orderFormatsByLastGood,
   rememberWorkingStreamFormat
 } from "./streamFormatPreference";
+import { preferredAudioTrackIndex } from "./audioLanguage";
 
 let hls: Hls | null = null;
 type HlsConstructor = typeof import("hls.js").default;
@@ -385,6 +386,22 @@ function bindVodNearEndWatcher(el: HTMLVideoElement | null, contentType: Content
   vodNearEndWatcher = { el, onTimeUpdate };
 }
 
+function emitPlayerAudioTracks() {
+  window.dispatchEvent(new CustomEvent("playerAudioTracks"));
+}
+
+export function getActiveHlsPlayer(): Hls | null {
+  return hls;
+}
+
+export function getActiveShakaPlayer(): any | null {
+  return shakaPlayer;
+}
+
+export function getActiveVideoElement(): HTMLVideoElement | null {
+  return videoEl || (document.getElementById("player-main") as HTMLVideoElement | null);
+}
+
 async function teardownShakaPlayer() {
   if (!shakaPlayer) return;
   try {
@@ -398,16 +415,21 @@ async function teardownShakaPlayer() {
 function selectPreferredHlsAudioTrack(hlsInstance: Hls) {
   const tracks = hlsInstance.audioTracks || [];
   if (!tracks.length) {
+    emitPlayerAudioTracks();
     return;
   }
 
-  const preferredIndex = tracks.findIndex((track) => (track as { default?: boolean }).default) >= 0
-    ? tracks.findIndex((track) => (track as { default?: boolean }).default)
-    : 0;
+  const preferredIndex = preferredAudioTrackIndex(
+    tracks.map((track) => ({
+      language: (track as { lang?: string }).lang,
+      default: !!(track as { default?: boolean }).default
+    }))
+  );
 
-  if (hlsInstance.audioTrack !== preferredIndex) {
+  if (preferredIndex >= 0 && hlsInstance.audioTrack !== preferredIndex) {
     hlsInstance.audioTrack = preferredIndex;
   }
+  emitPlayerAudioTracks();
 }
 
 function isUnsupportedAudioDecoderError(mediaErr: MediaError | null | undefined): boolean {
@@ -1567,6 +1589,7 @@ export function stopPlayback() {
   } catch {
     // Ignore media element reset errors while stopping playback.
   }
+  emitPlayerAudioTracks();
 }
 
 export function playUrl(
@@ -2239,6 +2262,7 @@ export function playUrl(
           });
 
           await shakaPlayer.load(playbackUrl);
+          emitPlayerAudioTracks();
 
           if (isStaleRequest()) {
             if (videoEl) {
