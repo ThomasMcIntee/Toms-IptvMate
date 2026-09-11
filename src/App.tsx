@@ -62,7 +62,8 @@ import {
   type ChannelVisibilitySnapshot
 } from "./core/channelStore";
 import NowNextOverlay from "./ui/NowNextOverlay";
-import { PlayerControlBar, VodExitButton } from "./ui/PlayerControlBar";
+import { PlayerControlBar, VodExitButton, VodLanguageSelect } from "./ui/PlayerControlBar";
+import { isAudioLanguagePickerOpen, setAudioLanguagePickerOpen } from "./core/audioTracks";
 import { isPlaylistsHydrationPending, loadPlaylists, type PlaylistEntry } from "./core/playlistStore";
 import { loadEPGForPlaylist } from "./core/loaders/epgLoader";
 import { getEPG, getEPGForChannel, getIndexedEPGForChannel, setEPG } from "./core/epgStore";
@@ -1893,6 +1894,12 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return true;
       }
 
+      if (isAudioLanguagePickerOpen()) {
+        setAudioLanguagePickerOpen(false);
+        window.dispatchEvent(new Event("closeAudioLanguagePicker"));
+        return true;
+      }
+
       if (isVodPlaybackFullscreen) {
         exitVodPlayback();
         return true;
@@ -2037,7 +2044,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return;
       }
 
-      if (isVodPlaybackFullscreen) {
+      if (isVodPlaybackFullscreen && !isAudioLanguagePickerOpen()) {
         window.dispatchEvent(new Event("playerRevealControls"));
         if (navKey === "ArrowLeft") {
           e.preventDefault();
@@ -4112,6 +4119,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       {currentChannel && !playerStatus && playerWarning && <div className="player-status player-status-info">{playerWarning}</div>}
       {currentChannel && playerError && <div className="player-status player-status-error">{playerError}</div>}
       {isVodPlaybackFullscreen && <VodExitButton visible={isVodPlaybackFullscreen} onExit={exitVodPlayback} />}
+      {isVodPlaybackFullscreen && <VodLanguageSelect visible={isVodPlaybackFullscreen} />}
 
       {isLoginOverlayVisible && (
         <div className="app-login-overlay" role="dialog" aria-modal="true" aria-label="Login required">

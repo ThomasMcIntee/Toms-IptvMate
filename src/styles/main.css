@@ -688,6 +688,71 @@ body.is-capacitor.native-exo-active .player-control-bar {
   outline-offset: 2px;
 }
 
+.vod-language-select {
+  position: absolute;
+  top: 20px;
+  right: 112px;
+  z-index: 140;
+}
+
+.vod-language-select.vod-language-select-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.vod-language-btn,
+.vod-language-option {
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.vod-language-btn:focus-visible,
+.vod-language-option:focus,
+.vod-language-option:focus-visible {
+  outline: 2px solid #7ec5ff;
+  outline-offset: 2px;
+}
+
+.vod-language-panel {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  min-width: 220px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vod-language-option {
+  border-radius: 8px;
+  text-align: left;
+}
+
+.vod-language-option.is-selected {
+  background: rgba(30, 144, 255, 0.28);
+}
+
+body.is-capacitor.native-exo-active .vod-language-select {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+body.is-webos .vod-language-btn:focus,
+body.is-webos .vod-language-option:focus {
+  outline: 3px solid #4da3ff !important;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px rgba(77, 163, 255, 0.35);
+}
+
 .channel-list {
   position: absolute;
   left: 0;

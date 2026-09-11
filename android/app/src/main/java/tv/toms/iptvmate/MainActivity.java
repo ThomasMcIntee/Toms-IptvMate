@@ -412,12 +412,18 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onBackPressed() {
+        if (exoPlayerManager != null && exoPlayerManager.consumeBackPress()) {
+            return;
+        }
         dispatchBackKeyToWebApp();
     }
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+            if (exoPlayerManager != null && exoPlayerManager.consumeBackPress()) {
+                return true;
+            }
             dispatchBackKeyToWebApp();
             return true;
         }

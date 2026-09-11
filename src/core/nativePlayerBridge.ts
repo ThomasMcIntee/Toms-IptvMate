@@ -11,6 +11,8 @@ type NativePlayerCapPlugin = {
   setMuted(options: { muted: boolean }): Promise<void>;
   setGuide(options: { title?: string; startMs?: number; endMs?: number }): Promise<void>;
   revealControls(): Promise<void>;
+  getAudioTracks(): Promise<{ tracks?: NativeAudioTrackPayload[] }>;
+  setAudioTrack(options: { id: string }): Promise<{ ok?: boolean }>;
   setBounds(options: {
     left: number;
     top: number;
@@ -31,6 +33,13 @@ declare global {
     };
   }
 }
+
+export type NativeAudioTrackPayload = {
+  id?: string;
+  language?: string;
+  label?: string;
+  selected?: boolean;
+};
 
 const NativePlayerCap = registerPlugin<NativePlayerCapPlugin>("NativePlayer");
 
@@ -314,6 +323,26 @@ export function revealNativePlayerControls(): void {
   void NativePlayerCap.revealControls().catch(() => {
     // Showing chrome is best-effort.
   });
+}
+
+export async function getNativeAudioTracks(): Promise<NativeAudioTrackPayload[]> {
+  if (!isCapacitorRuntime() || !isNativePlayerAvailable()) return [];
+  try {
+    const result = await NativePlayerCap.getAudioTracks();
+    return Array.isArray(result?.tracks) ? result.tracks : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function setNativeAudioTrack(id: string): Promise<boolean> {
+  if (!id || !isCapacitorRuntime() || !isNativePlayerAvailable()) return false;
+  try {
+    const result = await NativePlayerCap.setAudioTrack({ id });
+    return !!result?.ok;
+  } catch {
+    return false;
+  }
 }
 
 export function stopNativePlayback(): void {
