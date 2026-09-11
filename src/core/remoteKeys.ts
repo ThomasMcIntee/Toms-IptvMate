@@ -111,3 +111,24 @@ export function activateFocusedRemoteControl(target: EventTarget | null): boolea
   el.click();
   return true;
 }
+
+const COMPOSER_EDIT_DEBOUNCE_MS = 700;
+let lastComposerEditAt = 0;
+let lastComposerEditToken = "";
+
+// webOS OK delivers click + Enter (and sometimes the letter key too). Those
+// land as two appends of the same character, which looks like "L" → "LL".
+export function beginComposerTextEdit(token: string): boolean {
+  const now = Date.now();
+  if (token === lastComposerEditToken && now - lastComposerEditAt < COMPOSER_EDIT_DEBOUNCE_MS) {
+    return false;
+  }
+  lastComposerEditAt = now;
+  lastComposerEditToken = token;
+  return true;
+}
+
+export function resetComposerTextEditGuard(): void {
+  lastComposerEditAt = 0;
+  lastComposerEditToken = "";
+}

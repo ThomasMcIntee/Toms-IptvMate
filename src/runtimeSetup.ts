@@ -76,6 +76,7 @@ function enableMagicRemotePointerClicks() {
     if (control instanceof HTMLButtonElement && control.disabled) return;
     if (control instanceof HTMLInputElement && control.disabled) return;
     if (isCheckboxOrRadio(control)) return;
+    if (control.closest(".series-search-composer, .remote-text-composer")) return;
     window.setTimeout(() => {
       if (!consumeRemoteActivate(control)) return;
       control.click();
@@ -170,6 +171,10 @@ function normalizeRemoteKeyEvents() {
     }
 
     if (active.tagName === "BUTTON" || active.getAttribute("role") === "button") {
+      if (active.closest(".series-search-composer, .remote-text-composer")) {
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
       if (consumeRemoteActivate(active)) active.click();
     }

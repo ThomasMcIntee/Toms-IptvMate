@@ -7,7 +7,7 @@ import { PanelsHost } from "./ui/PanelsHost";
 import { firstGroupForMasterKey, MasterMinList } from "./ui/MasterMinList";
 import { useProfile } from "./profiles/ProfileContext";
 import { initNavigation } from "./core/navigation";
-import { activateFocusedRemoteControl, normalizeRemoteMediaKey, normalizeRemoteNavKey } from "./core/remoteKeys";
+import { activateFocusedRemoteControl, beginComposerTextEdit, normalizeRemoteMediaKey, normalizeRemoteNavKey, resetComposerTextEditGuard } from "./core/remoteKeys";
 import { initPlayerEngine, playUrl, stopPlayback } from "./core/playerEngine";
 import {
   isNativePlayerAvailable,
@@ -256,6 +256,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   const seriesDetailsTokenRef = useRef(0);
   const [isSeriesSearchComposerOpen, setIsSeriesSearchComposerOpen] = useState(false);
   const [isMoviesSearchComposerOpen, setIsMoviesSearchComposerOpen] = useState(false);
+  const composerOpenedAtRef = useRef(0);
+  const seriesDraftRef = useRef("");
+  const moviesDraftRef = useRef("");
   const [seriesMainSearchDraft, setSeriesMainSearchDraft] = useState("");
   const [seriesMainSearchDebouncedTerm, setSeriesMainSearchDebouncedTerm] = useState("");
   const [seriesMainSearchResults, setSeriesMainSearchResults] = useState<any[] | null>(null);
@@ -850,12 +853,30 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     setSeriesMainSearchDebouncedTerm(nextTerm);
   }
 
+  function openSeriesSearchComposer() {
+    seriesDraftRef.current = seriesMainSearchDebouncedTerm;
+    setSeriesMainSearchDraft(seriesMainSearchDebouncedTerm);
+    resetComposerTextEditGuard();
+    composerOpenedAtRef.current = Date.now();
+    setIsSeriesSearchComposerOpen(true);
+  }
+
+  function openMoviesSearchComposer() {
+    moviesDraftRef.current = moviesMainSearchTerm;
+    setMoviesMainSearchDraft(moviesMainSearchTerm);
+    resetComposerTextEditGuard();
+    composerOpenedAtRef.current = Date.now();
+    setIsMoviesSearchComposerOpen(true);
+  }
+
   function clearCatalogSearch() {
     setMoviesMainSearchTerm("");
     setMoviesMainSearchDraft("");
+    moviesDraftRef.current = "";
     setMoviesMainSearchResults(null);
     setMoviesSearchBusy(false);
     setSeriesMainSearchDraft("");
+    seriesDraftRef.current = "";
     setSeriesMainSearchDebouncedTerm("");
     setSeriesMainSearchResults(null);
     setIsSeriesSearchComposerOpen(false);
@@ -868,19 +889,19 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }
 
   function appendSeriesSearchDraft(fragment: string) {
-    setSeriesMainSearchDraft((current) => {
-      const next = `${current}${fragment}`.slice(0, 32);
-      commitSeriesMainSearch(next);
-      return next;
-    });
+    if (!beginComposerTextEdit(`series:+${fragment}`)) return;
+    const next = `${seriesDraftRef.current}${fragment}`.slice(0, 32);
+    seriesDraftRef.current = next;
+    setSeriesMainSearchDraft(next);
+    commitSeriesMainSearch(next);
   }
 
   function backspaceSeriesSearchDraft() {
-    setSeriesMainSearchDraft((current) => {
-      const next = current.slice(0, -1);
-      commitSeriesMainSearch(next);
-      return next;
-    });
+    if (!beginComposerTextEdit("series:-")) return;
+    const next = seriesDraftRef.current.slice(0, -1);
+    seriesDraftRef.current = next;
+    setSeriesMainSearchDraft(next);
+    commitSeriesMainSearch(next);
   }
 
   function applySeriesSearchDraft() {
@@ -889,11 +910,17 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }
 
   function appendMoviesSearchDraft(fragment: string) {
-    setMoviesMainSearchDraft((current) => `${current}${fragment}`.slice(0, 64));
+    if (!beginComposerTextEdit(`movies:+${fragment}`)) return;
+    const next = `${moviesDraftRef.current}${fragment}`.slice(0, 64);
+    moviesDraftRef.current = next;
+    setMoviesMainSearchDraft(next);
   }
 
   function backspaceMoviesSearchDraft() {
-    setMoviesMainSearchDraft((current) => current.slice(0, -1));
+    if (!beginComposerTextEdit("movies:-")) return;
+    const next = moviesDraftRef.current.slice(0, -1);
+    moviesDraftRef.current = next;
+    setMoviesMainSearchDraft(next);
   }
 
   function applyMoviesSearchDraft() {
@@ -2642,14 +2669,28 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
           activeEl.classList.contains("list-visibility-toggle"));
       const isFavoriteStar = isFavoriteFocusTarget(activeEl);
 
-      if (composerOpen && e.key.length === 1 && /[a-z0-9 ]/i.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (
+        composerOpen &&
+        !e.repeat &&
+        !e.isComposing &&
+        e.key.length === 1 &&
+        /[a-z0-9 ]/i.test(e.key) &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.metaKey
+      ) {
         e.preventDefault();
         e.stopPropagation();
+        // webOS OK often echoes the focused key as a letter AND a click.
+        // Let click/Enter append once; a USB keyboard still works below.
+        if (isWebOsRuntime()) return;
         const wanted = e.key === " " ? "Space" : e.key.toUpperCase();
+        const focusedLabel = String(activeEl.textContent || "").trim().toUpperCase();
+        if (focusedLabel === wanted || (wanted === "SPACE" && focusedLabel === "SPACE")) return;
         const match = Array.from(document.querySelectorAll<HTMLButtonElement>(".series-search-composer button")).find(
           (button) => button.textContent?.trim() === wanted
         );
-        match?.click();
+        if (match) activateFocusedRemoteControl(match);
         return;
       }
 
@@ -2666,6 +2707,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         if (inComposer) {
           e.preventDefault();
           e.stopPropagation();
+          if (Date.now() - composerOpenedAtRef.current < 400) return;
           activateFocusedRemoteControl(activeEl);
           return;
         }
@@ -2687,7 +2729,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         if (composerOpen) {
           e.preventDefault();
           e.stopPropagation();
-          document.querySelector<HTMLButtonElement>(".series-search-composer .series-search-key")?.focus();
+          document
+            .querySelector<HTMLButtonElement>(
+              ".series-search-composer-actions .series-main-search-btn:not(:disabled), .series-search-composer .series-search-key"
+            )
+            ?.focus();
           return;
         }
         if (isOverlayCheckbox) {
@@ -2783,7 +2829,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
       if (composerOpen && !inComposer) {
         e.preventDefault();
-        document.querySelector<HTMLButtonElement>(".series-search-composer .series-search-key")?.focus();
+        document
+          .querySelector<HTMLButtonElement>(
+            ".series-search-composer-actions .series-main-search-btn:not(:disabled), .series-search-composer .series-search-key"
+          )
+          ?.focus();
         return;
       }
 
@@ -3111,13 +3161,13 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
   useEffect(() => {
     if (!isSeriesSearchComposerOpen && !isMoviesSearchComposerOpen) return;
-    const focusPad = () => {
+    const timer = window.setTimeout(() => {
       document
-        .querySelector<HTMLButtonElement>(".series-search-composer .series-search-key, .series-search-composer-actions .series-main-search-btn")
+        .querySelector<HTMLButtonElement>(
+          ".series-search-composer-actions .series-main-search-btn:not(:disabled), .series-search-composer .series-search-key"
+        )
         ?.focus();
-    };
-    focusPad();
-    const timer = window.setTimeout(focusPad, 50);
+    }, 320);
     return () => window.clearTimeout(timer);
   }, [isSeriesSearchComposerOpen, isMoviesSearchComposerOpen]);
 
@@ -5158,10 +5208,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                   <button
                     type="button"
                     className="series-main-search-btn"
-                    onClick={() => {
-                      setSeriesMainSearchDraft(seriesMainSearchDebouncedTerm);
-                      setIsSeriesSearchComposerOpen(true);
-                    }}
+                    onClick={openSeriesSearchComposer}
                   >
                     {seriesMainSearchDebouncedTerm.trim() ? seriesMainSearchDebouncedTerm.trim() : "Search"}
                   </button>
@@ -5169,7 +5216,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                     <button
                       type="button"
                       className="series-main-search-btn"
-                      onClick={() => commitSeriesMainSearch("")}
+                      onClick={() => {
+                        commitSeriesMainSearch("");
+                        seriesDraftRef.current = "";
+                      }}
                     >
                       Clear
                     </button>
@@ -5194,6 +5244,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                       type="button"
                       className="series-main-search-btn"
                       onClick={() => {
+                        seriesDraftRef.current = "";
+                        resetComposerTextEditGuard();
                         setSeriesMainSearchDraft("");
                         commitSeriesMainSearch("");
                       }}
@@ -5252,10 +5304,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                   <button
                     type="button"
                     className="series-main-search-btn"
-                    onClick={() => {
-                      setMoviesMainSearchDraft(moviesMainSearchTerm);
-                      setIsMoviesSearchComposerOpen(true);
-                    }}
+                    onClick={openMoviesSearchComposer}
                   >
                     {moviesMainSearchTerm.trim() ? moviesMainSearchTerm.trim() : "Search"}
                   </button>
@@ -5264,6 +5313,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                       type="button"
                       className="series-main-search-btn"
                       onClick={() => {
+                        moviesDraftRef.current = "";
                         setMoviesMainSearchTerm("");
                         setMoviesMainSearchDraft("");
                         setMoviesMainSearchResults(null);
@@ -5292,7 +5342,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                     <button
                       type="button"
                       className="series-main-search-btn"
-                      onClick={() => setMoviesMainSearchDraft("")}
+                      onClick={() => {
+                        moviesDraftRef.current = "";
+                        resetComposerTextEditGuard();
+                        setMoviesMainSearchDraft("");
+                      }}
                       disabled={moviesMainSearchDraft.length === 0}
                     >
                       Clear Draft

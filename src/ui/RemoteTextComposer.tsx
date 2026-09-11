@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { activateFocusedRemoteControl, normalizeRemoteNavKey } from "../core/remoteKeys";
+import { activateFocusedRemoteControl, beginComposerTextEdit, normalizeRemoteNavKey } from "../core/remoteKeys";
 
 const LETTER_KEYS = [
   "A", "B", "C", "D", "E", "F",
@@ -36,11 +36,13 @@ export default function RemoteTextComposer({
 
   const append = (chunk: string) => {
     if (value.length >= maxLength) return;
+    if (!beginComposerTextEdit(`remote:+${chunk}`)) return;
     onChange((value + chunk).slice(0, maxLength));
   };
 
   const backspace = () => {
     if (!value) return;
+    if (!beginComposerTextEdit("remote:-")) return;
     onChange(value.slice(0, -1));
   };
 
