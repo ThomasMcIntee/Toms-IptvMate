@@ -4117,6 +4117,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             onPlayPause={togglePlayPause}
             onMute={toggleMute}
             onFullscreen={toggleFullscreen}
+            isFavorite={isFavoriteChannelRecord(currentChannel)}
+            onToggleFavorite={() => toggleFavoriteChannel(currentChannel)}
             showLiveBadge={false}
           />
         </div>

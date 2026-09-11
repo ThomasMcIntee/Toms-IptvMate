@@ -33,6 +33,8 @@ const CHANNELS_CACHE_META_KEY = "iptvmate_channels_cache_meta";
 const CHANNELS_CACHE_DB = "iptvmate_cache";
 const CHANNELS_CACHE_STORE = "channels";
 const VISIBILITY_STORE = "visibility";
+const FAVORITES_STORE = "favorites";
+const FAVORITES_RECORD_KEY = "latest";
 const CHANNELS_CACHE_RECORD_KEY = "latest";
 const CHANNELS_CACHE_LIVE_RECORD_KEY = "latest-live";
 // Fire TV / Capacitor cannot keep or serialize 100k+ channel records without ANR/OOM.
@@ -181,7 +183,24 @@ function dispatchStoreEvent(name: string, detail?: unknown): void {
 }
 
 function normalizeFavoriteUrl(value: string): string {
-  return String(value || "").trim();
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  try {
+    const parsed = new URL(raw);
+    const inner = String(parsed.searchParams.get("url") || "").trim();
+    if (!inner) return raw;
+
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname || "";
+    const isLocalDevHost = host === "localhost" || host === "127.0.0.1" || host === "app";
+    const isProxyPath = /\/__(?:stream|api|proxy|cors|transcode)/i.test(path);
+    if (isLocalDevHost || isProxyPath) return inner;
+  } catch {
+    // Keep the raw catalog URL when it is not a valid absolute URL.
+  }
+
+  return raw;
 }
 
 function buildFavoriteKey(input: Partial<Channel> | null | undefined): string {
@@ -200,51 +219,130 @@ function buildFavoriteIdSet(entries: Map<string, FavoriteEntry>): Set<string> {
   return result;
 }
 
-function loadFavoriteEntries(): Map<string, FavoriteEntry> {
-  const result = new Map<string, FavoriteEntry>();
+function serializeFavoriteEntries(): string {
+  return JSON.stringify(Array.from(favoriteEntries.values()));
+}
 
+function saveFavoriteEntriesToLocalStorage(): boolean {
+  const payload = serializeFavoriteEntries();
   try {
-    const raw = localStorage.getItem(FAVORITES_KEY);
-    if (!raw) return result;
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return result;
-
-    for (const item of parsed) {
-      if (typeof item === "string") {
-        const id = String(item || "").trim();
-        if (!id) continue;
-        const key = `id:${id}`;
-        result.set(key, { key, id, url: "" });
-        continue;
-      }
-
-      if (!item || typeof item !== "object") continue;
-      const record = item as Partial<FavoriteEntry>;
-      const id = String(record.id || "").trim();
-      if (!id) continue;
-      const url = normalizeFavoriteUrl(String(record.url || ""));
-      const key = String(record.key || "").trim() || (url ? `id:${id}|url:${url}` : `id:${id}`);
-
-      result.set(key, {
-        key,
-        id,
-        url,
-        name: typeof record.name === "string" ? record.name : undefined
-      });
-    }
+    localStorage.setItem(FAVORITES_KEY, payload);
+    return true;
   } catch {
-    return result;
+    // Large localhost/dev catalogs often fill the 5MB quota. Drop the bulky
+    // channel cache and retry so starring a movie still persists.
+    try {
+      localStorage.removeItem(CHANNELS_CACHE_KEY);
+      localStorage.removeItem(CHANNELS_CACHE_META_KEY);
+      localStorage.setItem(FAVORITES_KEY, payload);
+      return true;
+    } catch (error) {
+      console.warn("[favorites] localStorage persist failed", error);
+      return false;
+    }
+  }
+}
+
+function saveFavoriteEntries() {
+  saveFavoriteEntriesToLocalStorage();
+  void persistFavoritesToIndexedDb();
+}
+
+function parseFavoriteEntries(raw: unknown): Map<string, FavoriteEntry> {
+  const result = new Map<string, FavoriteEntry>();
+  if (!Array.isArray(raw)) return result;
+
+  for (const item of raw) {
+    if (typeof item === "string") {
+      const id = String(item || "").trim();
+      if (!id) continue;
+      const key = `id:${id}`;
+      result.set(key, { key, id, url: "" });
+      continue;
+    }
+
+    if (!item || typeof item !== "object") continue;
+    const record = item as Partial<FavoriteEntry>;
+    const id = String(record.id || "").trim();
+    if (!id) continue;
+    const url = normalizeFavoriteUrl(String(record.url || ""));
+    const key = String(record.key || "").trim() || (url ? `id:${id}|url:${url}` : `id:${id}`);
+
+    result.set(key, {
+      key,
+      id,
+      url,
+      name: typeof record.name === "string" ? record.name : undefined
+    });
   }
 
   return result;
 }
 
-function saveFavoriteEntries() {
+function loadFavoriteEntries(): Map<string, FavoriteEntry> {
   try {
-    localStorage.setItem(FAVORITES_KEY, JSON.stringify(Array.from(favoriteEntries.values())));
+    const raw = localStorage.getItem(FAVORITES_KEY);
+    if (!raw) return new Map();
+    return parseFavoriteEntries(JSON.parse(raw) as unknown);
   } catch {
-    // Ignore persistence errors.
+    return new Map();
   }
+}
+
+async function persistFavoritesToIndexedDb(): Promise<void> {
+  const db = await openChannelsCacheDb();
+  if (!db || !db.objectStoreNames.contains(FAVORITES_STORE)) return;
+
+  try {
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(FAVORITES_STORE, "readwrite");
+        tx.objectStore(FAVORITES_STORE).put(Array.from(favoriteEntries.values()), FAVORITES_RECORD_KEY);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+        tx.onabort = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function hydrateFavoritesFromIndexedDb(): Promise<void> {
+  if (favoriteEntries.size > 0) return;
+
+  const db = await openChannelsCacheDb();
+  if (!db || !db.objectStoreNames.contains(FAVORITES_STORE)) {
+    db?.close();
+    return;
+  }
+
+  try {
+    const stored = await new Promise<unknown>((resolve) => {
+      try {
+        const tx = db.transaction(FAVORITES_STORE, "readonly");
+        const request = tx.objectStore(FAVORITES_STORE).get(FAVORITES_RECORD_KEY);
+        request.onsuccess = () => resolve(request.result ?? null);
+        request.onerror = () => resolve(null);
+      } catch {
+        resolve(null);
+      }
+    });
+    const restored = parseFavoriteEntries(stored);
+    if (restored.size === 0) return;
+    favoriteEntries = restored;
+    favoriteChannelIds = buildFavoriteIdSet(favoriteEntries);
+    saveFavoriteEntriesToLocalStorage();
+    dispatchFavoritesChanged();
+  } finally {
+    db.close();
+  }
+}
+
+if (typeof window !== "undefined") {
+  void hydrateFavoritesFromIndexedDb();
 }
 
 function dispatchFavoritesChanged() {
@@ -544,7 +642,7 @@ async function openChannelsCacheDb(): Promise<IDBDatabase | null> {
     const timeout = window.setTimeout(() => finish(null), CHANNELS_CACHE_DB_TIMEOUT_MS);
 
     try {
-      const request = indexedDB.open(CHANNELS_CACHE_DB, 2);
+      const request = indexedDB.open(CHANNELS_CACHE_DB, 3);
 
       request.onupgradeneeded = () => {
         const db = request.result;
@@ -553,6 +651,9 @@ async function openChannelsCacheDb(): Promise<IDBDatabase | null> {
         }
         if (!db.objectStoreNames.contains(VISIBILITY_STORE)) {
           db.createObjectStore(VISIBILITY_STORE);
+        }
+        if (!db.objectStoreNames.contains(FAVORITES_STORE)) {
+          db.createObjectStore(FAVORITES_STORE);
         }
       };
 
