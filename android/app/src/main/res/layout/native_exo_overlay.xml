@@ -26,7 +26,7 @@
         android:layout_gravity="bottom"
         android:background="@drawable/native_exo_controls_bg"
         android:clickable="true"
-        android:focusable="true"
+        android:focusable="false"
         android:orientation="vertical"
         android:paddingLeft="8dp"
         android:paddingRight="8dp"
@@ -56,12 +56,14 @@
                 android:id="@+id/native_exo_play"
                 android:layout_width="40dp"
                 android:layout_height="40dp"
-                android:background="@android:color/transparent"
+                android:background="@drawable/native_exo_control_btn"
                 android:contentDescription="@string/native_exo_play"
+                android:focusable="true"
+                android:nextFocusRight="@id/native_exo_mute"
                 android:padding="6dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_player_pause"
-                android:tint="#FFFFFFFF" />
+                android:tint="@color/native_exo_control_icon" />
 
             <TextView
                 android:id="@+id/native_exo_time"
@@ -104,23 +106,28 @@
                 android:id="@+id/native_exo_mute"
                 android:layout_width="40dp"
                 android:layout_height="40dp"
-                android:background="@android:color/transparent"
+                android:background="@drawable/native_exo_control_btn"
                 android:contentDescription="@string/native_exo_mute"
+                android:focusable="true"
+                android:nextFocusLeft="@id/native_exo_play"
+                android:nextFocusRight="@id/native_exo_fullscreen"
                 android:padding="6dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_player_volume_on"
-                android:tint="#FFFFFFFF" />
+                android:tint="@color/native_exo_control_icon" />
 
             <ImageButton
                 android:id="@+id/native_exo_fullscreen"
                 android:layout_width="40dp"
                 android:layout_height="40dp"
-                android:background="@android:color/transparent"
+                android:background="@drawable/native_exo_control_btn"
                 android:contentDescription="@string/native_exo_fullscreen"
+                android:focusable="true"
+                android:nextFocusLeft="@id/native_exo_mute"
                 android:padding="6dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_player_fullscreen"
-                android:tint="#FFFFFFFF" />
+                android:tint="@color/native_exo_control_icon" />
         </LinearLayout>
     </LinearLayout>
 </FrameLayout>
