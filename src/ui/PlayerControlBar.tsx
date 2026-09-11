@@ -304,6 +304,7 @@ export function PlayerControlBar({
             </svg>
           )}
         </button>
+        <PlayBarLanguageButton revealed={revealed} />
         {onStop && (
           <button
             type="button"
@@ -318,7 +319,6 @@ export function PlayerControlBar({
             </svg>
           </button>
         )}
-        {isVod && <PlayBarLanguageButton revealed={revealed} />}
         <span className="player-control-bar-time">{timeLabel}</span>
         <span className="player-control-bar-title">{title}</span>
         {!isVod && <span className="player-control-bar-live">LIVE</span>}
@@ -592,6 +592,7 @@ function PlayBarLanguageButton({ revealed }: { revealed: boolean }) {
             d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4.35h-6.5V2.5H8.85V4.35H2v1.65h11.17C12.46 8.13 11.41 9.83 9.87 11.19c-.94-.83-1.72-1.77-2.32-2.84H5.9c.67 1.4 1.6 2.68 2.76 3.74l-5.05 5.02L5 18.5l5.11-5.07 3.11 3.11.03-.04zM18.5 10.5h-1.84L13.5 18.5h1.84l.75-2h3.82l.75 2H22.5l-4-8zM16.74 15l1.34-3.56L19.42 15h-2.68z"
           />
         </svg>
+        <span className="play-bar-language-label">Audio</span>
       </button>
       {open && (
         <div className="vod-language-panel play-bar-language-panel" role="listbox" aria-label="Audio language">

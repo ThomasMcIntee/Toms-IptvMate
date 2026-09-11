@@ -2024,8 +2024,12 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, [currentChannel]);
 
   useEffect(() => {
-    if (!!(window as any).Capacitor) {
-      document.body.classList.add('is-capacitor');
+    // Importing @capacitor/core defines window.Capacitor in the browser bundle.
+    // Only mark the real native shell so localhost/web keep the HTML play bar.
+    if (isCapacitorRuntime()) {
+      document.body.classList.add("is-capacitor");
+    } else {
+      document.body.classList.remove("is-capacitor");
     }
   }, []);
 
@@ -5168,20 +5172,47 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         </div>
       )}
       {shouldRenderMainVideo && !useLivePreviewShell && !useVodPlaybackShell && (
+        isMovieOrSeriesSelected ? (
+          <div className="vod-playback-shell" aria-hidden="false">
+            <video
+              id="player-main"
+              className="player-main player-main-shell-video player-main-live"
+              playsInline
+              controls={false}
+              disablePictureInPicture={true}
+              disableRemotePlayback={true}
+              tabIndex={isCapacitorRuntime() || isWebOsRuntime() ? -1 : 0}
+              style={{ background: "transparent", zIndex: 0 }}
+            />
+            {currentChannel && (
+              <PlayerControlBar
+                mode="vod"
+                channel={currentChannel}
+                paused={isPlaybackPaused()}
+                muted={isPlaybackMuted()}
+                fullscreen
+                isFavorite={isFavoriteChannelRecord(currentChannel)}
+                onPlayPause={togglePlayPause}
+                onMute={toggleMute}
+                onFullscreen={toggleFullscreen}
+                onToggleFavorite={() => toggleFavoriteChannel(currentChannel)}
+                onStop={exitVodPlayback}
+              />
+            )}
+            <VodLanguageSelect visible />
+          </div>
+        ) : (
         <video
           id="player-main"
           className={`player-main ${shouldShowOpeningMenu && !currentChannel ? "player-main-idle" : showContentPreviewWindow ? "player-main-preview" : contentPage === "live" ? (isEffectiveLiveFullscreen ? "player-main-live" : "player-main-compact") : currentChannel ? "player-main-live" : "player-main-compact"}${forceLivePreviewLayout ? " player-main-force-preview" : ""}`}
           playsInline
-          controls={!!currentChannel && !forceLivePreviewLayout && !isWebOsRuntime()}
+          controls={false}
           disablePictureInPicture={contentPage === "live"}
           disableRemotePlayback={contentPage === "live"}
           tabIndex={isCapacitorRuntime() || isWebOsRuntime() ? -1 : 0}
           style={{ background: 'transparent', zIndex: 0 }}
         />
-
-
-
-
+        )
       )}
       {forceLivePreviewLayout && !isPlaylistInputPanelOpen && (
         <div className="live-preview-placeholder" aria-hidden="true">

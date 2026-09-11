@@ -694,6 +694,7 @@ body.is-capacitor.native-exo-active .player-control-bar {
   align-items: center;
   gap: 8px;
   min-height: 36px;
+  overflow: visible;
 }
 
 .player-control-bar-btn {
@@ -844,6 +845,48 @@ body.is-capacitor.native-exo-active .player-control-bar {
   position: relative;
   flex: 0 0 auto;
   display: inline-flex;
+  align-items: center;
+}
+
+.player-control-bar .play-bar-language .vod-language-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  min-width: 36px;
+  height: 36px;
+  padding: 6px 10px;
+  color: #fff;
+}
+
+.player-control-bar .play-bar-language .vod-language-btn svg {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+}
+
+.play-bar-language-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: inherit;
+}
+
+body.theme-light .player-control-bar,
+body.theme-light .player-control-bar .player-control-bar-btn,
+body.theme-light .player-control-bar .play-bar-language-label,
+body.theme-light .vod-language-select .vod-language-btn {
+  color: #fff;
+}
+
+body.theme-light .player-control-bar-btn:focus,
+body.theme-light .player-control-bar-btn:focus-visible,
+body.theme-light .player-control-bar-btn.is-remote-focused,
+body.theme-light .vod-language-select .vod-language-btn:focus,
+body.theme-light .vod-language-select .vod-language-btn.is-remote-focused {
+  color: #111;
 }
 
 .play-bar-language-panel {
@@ -862,7 +905,7 @@ body.is-capacitor.native-exo-active .player-control-bar {
 .vod-playback-shell .vod-language-select {
   top: 20px;
   right: 20px;
-  z-index: 8;
+  z-index: 20;
 }
 
 .vod-language-empty {

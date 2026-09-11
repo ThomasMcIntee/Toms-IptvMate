@@ -8,7 +8,10 @@ import {
 import {
   getActiveHlsPlayer,
   getActiveShakaPlayer,
-  getActiveVideoElement
+  getActiveVideoElement,
+  getCurrentAudioStreamOrder,
+  getLastRootSourceUrl,
+  playAudioStreamOrder
 } from "./playerEngine";
 import { getNativeAudioTracks, isNativePlayerAvailable, setNativeAudioTrack } from "./nativePlayerBridge";
 import { isCapacitorRuntime } from "./player/platformDetection";
@@ -152,6 +155,58 @@ function collectWebAudioTracks(): PlaybackAudioTrack[] {
   return collectShakaAudioTracks();
 }
 
+function canProbeLocalSourceAudioTracks(): boolean {
+  if (typeof window === "undefined") return false;
+  if (isNativePlaybackActive()) return false;
+  const host = window.location.hostname;
+  const port = window.location.port;
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    port === "5173" ||
+    port === "4173" ||
+    port === "3000"
+  );
+}
+
+type SourceAudioTrackPayload = { order?: number; language?: string; title?: string; default?: boolean };
+const sourceTrackPromises = new Map<string, Promise<SourceAudioTrackPayload[]>>();
+
+async function collectLocalSourceAudioTracks(): Promise<PlaybackAudioTrack[]> {
+  if (!canProbeLocalSourceAudioTracks()) return [];
+  const root = getLastRootSourceUrl();
+  if (!root || !/^https?:\/\//i.test(root)) return [];
+  let pending = sourceTrackPromises.get(root);
+  if (!pending) {
+    pending = (async () => {
+      try {
+        const response = await fetch(`/__audio-tracks?url=${encodeURIComponent(root)}`);
+        if (!response.ok) return [];
+        const payload = (await response.json()) as { tracks?: SourceAudioTrackPayload[] };
+        return Array.isArray(payload.tracks) ? payload.tracks : [];
+      } catch {
+        return [];
+      }
+    })();
+    sourceTrackPromises.set(root, pending);
+  }
+  const tracks = await pending;
+  if (tracks.length < 2) return [];
+  const fallbackIndex = tracks.findIndex((track) => track.default);
+  const selectedOrder =
+    getCurrentAudioStreamOrder() ??
+    (fallbackIndex >= 0 ? Number(tracks[fallbackIndex].order ?? fallbackIndex) : 0);
+  return tracks.map((track, index) => {
+    const order = Number.isInteger(track.order) ? Number(track.order) : index;
+    return {
+      id: `source:${order}`,
+      language: track.language || "",
+      label: audioTrackDisplayLabel(track.title, track.language, index),
+      selected: order === selectedOrder
+    };
+  });
+}
+
 export function getAudioTracks(): PlaybackAudioTrack[] {
   return cachedTracks;
 }
@@ -210,7 +265,8 @@ export async function refreshAudioTracks(): Promise<PlaybackAudioTrack[]> {
         selected: !!track.selected
       }));
   } else {
-    cachedTracks = collectWebAudioTracks();
+    const sourceTracks = await collectLocalSourceAudioTracks();
+    cachedTracks = sourceTracks.length >= 2 ? sourceTracks : collectWebAudioTracks();
   }
   emit();
   return cachedTracks;
@@ -225,6 +281,16 @@ export async function selectAudioTrack(id: string): Promise<boolean> {
       const selected = cachedTracks.find((track) => track.id === id);
       savePreferredAudioLanguage(selected?.language || id);
     }
+    await refreshAudioTracks();
+    return ok;
+  }
+
+  if (id.startsWith("source:")) {
+    const order = Number(id.slice(7));
+    if (!Number.isInteger(order) || order < 0) return false;
+    const selected = cachedTracks.find((track) => track.id === id);
+    savePreferredAudioLanguage(selected?.language || readPreferredAudioLanguage());
+    const ok = playAudioStreamOrder(order);
     await refreshAudioTracks();
     return ok;
   }

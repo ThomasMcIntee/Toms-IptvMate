@@ -44,6 +44,8 @@ let skipShakaOnce = false;
 let videoEl: HTMLVideoElement | null = null;
 let playRequestToken = 0;
 let lastRootSourceUrl: string | null = null;
+let lastContentType: ContentType = "live";
+let lastAudioStreamOrder: number | null = null;
 let rapidRetryChain: { rootUrl: string | null; count: number; lastAt: number } = {
   rootUrl: null,
   count: 0,
@@ -397,6 +399,23 @@ export function getActiveHlsPlayer(): Hls | null {
 
 export function getActiveShakaPlayer(): any | null {
   return shakaPlayer;
+}
+
+export function getLastRootSourceUrl(): string | null {
+  return lastRootSourceUrl;
+}
+
+export function getCurrentAudioStreamOrder(): number | null {
+  return lastAudioStreamOrder;
+}
+
+export function playAudioStreamOrder(order: number): boolean {
+  if (!lastRootSourceUrl || !Number.isInteger(order) || order < 0) return false;
+  const nextUrl = toTranscodeFallbackUrl(lastRootSourceUrl, false, "compat", order);
+  if (!nextUrl) return false;
+  lastAudioStreamOrder = order;
+  playUrl(nextUrl, false, false, 0, false, true, false, lastContentType);
+  return true;
 }
 
 export function getActiveVideoElement(): HTMLVideoElement | null {
@@ -1611,6 +1630,9 @@ export function playUrl(
   if (isWebOsRuntime()) ensureWebOsResourceObserver();
   let normalizedUrl = normalizeProblematicXtreamSourceUrl(normalizeStreamUrl(url));
   contentType = inferContentTypeFromUrl(normalizedUrl, contentType);
+  lastContentType = contentType;
+  const audioOrderHint = getAudioStreamOrderHint(normalizedUrl);
+  if (audioOrderHint !== null) lastAudioStreamOrder = audioOrderHint;
   bindVodNearEndWatcher(videoEl, contentType);
   if (isWebOsRuntime() && contentType === "live") {
     if (normalizedUrl.includes("/__transcode")) {
