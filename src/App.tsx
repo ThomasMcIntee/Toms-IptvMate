@@ -2044,7 +2044,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return;
       }
 
-      if (isVodPlaybackFullscreen && !isAudioLanguagePickerOpen()) {
+      const vodFocus = document.activeElement;
+      const vodFocusOnControl =
+        vodFocus instanceof HTMLElement &&
+        !!vodFocus.closest(".vod-language-select, .vod-exit-btn, .player-control-bar");
+      if (isVodPlaybackFullscreen && !isAudioLanguagePickerOpen() && !vodFocusOnControl) {
         window.dispatchEvent(new Event("playerRevealControls"));
         if (navKey === "ArrowLeft") {
           e.preventDefault();

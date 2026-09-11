@@ -711,11 +711,14 @@ body.is-capacitor.native-exo-active .player-control-bar {
   cursor: pointer;
 }
 
+.vod-language-btn:focus,
 .vod-language-btn:focus-visible,
 .vod-language-option:focus,
 .vod-language-option:focus-visible {
-  outline: 2px solid #7ec5ff;
-  outline-offset: 2px;
+  outline: none;
+  background: #b5e61d;
+  color: #111;
+  box-shadow: 0 0 0 2px rgba(181, 230, 29, 0.55);
 }
 
 .vod-language-panel {
@@ -748,9 +751,10 @@ body.is-capacitor.native-exo-active .vod-language-select {
 
 body.is-webos .vod-language-btn:focus,
 body.is-webos .vod-language-option:focus {
-  outline: 3px solid #4da3ff !important;
-  outline-offset: 2px;
-  box-shadow: 0 0 0 2px rgba(77, 163, 255, 0.35);
+  outline: none !important;
+  background: #b5e61d !important;
+  color: #111 !important;
+  box-shadow: 0 0 0 2px rgba(181, 230, 29, 0.55);
 }
 
 .channel-list {
