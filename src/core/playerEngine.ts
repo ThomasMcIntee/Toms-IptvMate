@@ -1960,10 +1960,15 @@ export function playUrl(
     !isLiveContent && isTranscodeSessionUrl(normalizedUrl)
       ? toTranscodeFallbackUrl(rootSourceUrl, false, "compat")
       : null;
+  const vodNeedsTranscode =
+    !isLikelyHlsManifestUrl(rootSourceUrl) &&
+    !/\.mpd(?:\?|$)/i.test(rootSourceUrl) &&
+    !/\.mp4(?:\?|$)/i.test(rootSourceUrl);
   const initialVodTranscodeUrl =
     !forceNativePlayback &&
     !isRequestedTranscode &&
     !isLiveContent &&
+    vodNeedsTranscode &&
     (!isWebOsRuntime() ||
       (isWebOsSimulator() && (contentType === "series" || /\.mkv(?:\?|$)/i.test(normalizedUrl))))
       ? toTranscodeFallbackUrl(rootSourceUrl, false, "compat")
