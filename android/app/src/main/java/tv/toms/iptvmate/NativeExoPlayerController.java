@@ -606,7 +606,6 @@ public class NativeExoPlayerController {
             Tracks.Group group = groups.get(groupIndex);
             if (group.getType() != C.TRACK_TYPE_AUDIO) continue;
             for (int trackIndex = 0; trackIndex < group.length; trackIndex++) {
-                if (!group.isTrackSupported(trackIndex)) continue;
                 Format format = group.getTrackFormat(trackIndex);
                 String language = format.language != null ? format.language : "";
                 String label = displayLabel(format, language, audioOrdinal);
