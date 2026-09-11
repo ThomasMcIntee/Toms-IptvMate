@@ -16,6 +16,12 @@ assert.ok(store.includes("saveFavoriteEntriesToLocalStorage"));
 assert.ok(store.includes("localStorage.removeItem(CHANNELS_CACHE_KEY)"));
 assert.ok(store.includes("/__(?:stream|api|proxy|cors|transcode)/"));
 assert.ok(store.includes("indexedDB.open(CHANNELS_CACHE_DB, 3)"));
+assert.ok(store.includes("favoriteWriteGeneration"));
+assert.ok(store.includes("Never replace in-memory stars"));
+assert.ok(store.includes("lastFavoriteWriteById"));
+assert.ok(!/favoriteEntries\s*=\s*restored/.test(store));
+assert.ok(app.includes("activateFocusedFavoriteControl"));
+assert.ok(app.includes("stopImmediatePropagation"));
 
 assert.ok(!platform.includes("return isCap || isAndroidRuntime()"));
 assert.ok(platform.includes("localhost:5173"));

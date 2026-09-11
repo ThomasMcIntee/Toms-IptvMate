@@ -160,6 +160,8 @@ let visibilityState: VisibilityState = loadVisibilityState();
 let saveVisibilityStateTimer: number | null = null;
 let favoriteEntries = loadFavoriteEntries();
 let favoriteChannelIds = buildFavoriteIdSet(favoriteEntries);
+const lastFavoriteWriteById = new Map<string, { at: number; value: boolean }>();
+let favoriteWriteGeneration = 0;
 
 function dispatchStoreEvent(name: string, detail?: unknown): void {
   if (typeof window === "undefined") return;
@@ -311,8 +313,7 @@ async function persistFavoritesToIndexedDb(): Promise<void> {
 }
 
 async function hydrateFavoritesFromIndexedDb(): Promise<void> {
-  if (favoriteEntries.size > 0) return;
-
+  const generationAtStart = favoriteWriteGeneration;
   const db = await openChannelsCacheDb();
   if (!db || !db.objectStoreNames.contains(FAVORITES_STORE)) {
     db?.close();
@@ -330,9 +331,22 @@ async function hydrateFavoritesFromIndexedDb(): Promise<void> {
         resolve(null);
       }
     });
+    // A star click during this read already owns memory/localStorage. Applying a
+    // stale snapshot would immediately unselect the favorite the user just chose.
+    if (favoriteWriteGeneration !== generationAtStart) return;
+
     const restored = parseFavoriteEntries(stored);
     if (restored.size === 0) return;
-    favoriteEntries = restored;
+
+    // Never replace in-memory stars. Merge older IndexedDB entries only.
+    let added = 0;
+    for (const [key, entry] of restored.entries()) {
+      if (favoriteEntries.has(key)) continue;
+      favoriteEntries.set(key, entry);
+      added += 1;
+    }
+    if (added === 0) return;
+
     favoriteChannelIds = buildFavoriteIdSet(favoriteEntries);
     saveFavoriteEntriesToLocalStorage();
     dispatchFavoritesChanged();
@@ -2596,6 +2610,7 @@ export function setChannelFavorite(channelId: string, isFavorite: boolean) {
   const wasFavorite = favoriteEntries.has(key);
 
   if (isFavorite && !wasFavorite) {
+    favoriteWriteGeneration += 1;
     favoriteEntries.set(key, { key, id, url: "" });
     favoriteChannelIds.add(id);
     saveFavoriteEntries();
@@ -2604,6 +2619,7 @@ export function setChannelFavorite(channelId: string, isFavorite: boolean) {
   }
 
   if (!isFavorite && wasFavorite) {
+    favoriteWriteGeneration += 1;
     favoriteEntries.delete(key);
     favoriteChannelIds = buildFavoriteIdSet(favoriteEntries);
     saveFavoriteEntries();
@@ -2659,6 +2675,13 @@ export function setChannelFavoriteRecord(channel: Partial<Channel> | null | unde
   const key = buildFavoriteKey(channel);
   if (!key) return;
 
+  const previousWrite = lastFavoriteWriteById.get(id);
+  if (previousWrite && Date.now() - previousWrite.at < 400 && previousWrite.value !== isFavorite) {
+    return;
+  }
+  lastFavoriteWriteById.set(id, { at: Date.now(), value: isFavorite });
+  favoriteWriteGeneration += 1;
+
   let changed = false;
 
   if (isFavorite) {
@@ -2677,22 +2700,12 @@ export function setChannelFavoriteRecord(channel: Partial<Channel> | null | unde
       changed = true;
     }
   } else {
-    const removedExact = favoriteEntries.delete(key);
-    if (removedExact) {
-      changed = true;
-    }
-
-    if (isSeriesLikeFavoriteChannel(channel)) {
-      for (const [entryKey, entry] of favoriteEntries.entries()) {
-        if (entry.id !== id) continue;
-        favoriteEntries.delete(entryKey);
-        changed = true;
-      }
-    }
-
-    // Remove legacy id-only favorite so toggling off behaves consistently.
-    const legacyKey = `id:${id}`;
-    if (legacyKey !== key && favoriteEntries.delete(legacyKey)) {
+    // Drop every stored key for this id (legacy id-only, wrapped localhost
+    // proxy URLs, and series variants) so one star-off does not leave a
+    // leftover entry that the next click treats as already favorited.
+    for (const [entryKey, entry] of favoriteEntries.entries()) {
+      if (entry.id !== id && entryKey !== key) continue;
+      favoriteEntries.delete(entryKey);
       changed = true;
     }
   }

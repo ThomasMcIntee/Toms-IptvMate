@@ -280,7 +280,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   const liveReconnectTimerRef = useRef<number | null>(null);
   const liveReconnectAttemptRef = useRef(0);
   const hadLivePlayingRef = useRef(false);
-  const lastFavoriteToggleAtRef = useRef(0);
+  const lastFavoriteToggleAtByIdRef = useRef<Map<string, number>>(new Map());
   const lastBackHandledAtRef = useRef(0);
   const seriesAutoAdvanceTokenRef = useRef(0);
   const lastSeriesEndedRef = useRef<{ url: string | null; at: number }>({
@@ -2018,10 +2018,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       if (isTextEntryTarget(e.target)) return;
 
       const navKey = normalizeRemoteNavKey(e);
-      if (navKey === "Enter" && isFavoriteFocusTarget(document.activeElement)) {
-        e.preventDefault();
-        e.stopPropagation();
-        document.activeElement.click();
+      if (navKey === "Enter" && activateFocusedFavoriteControl(e)) {
         return;
       }
 
@@ -2188,8 +2185,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
           return;
         }
         if (isFavoriteStar) {
-          e.preventDefault();
-          activeEl.click();
+          activateFocusedFavoriteControl(e);
           return;
         }
         const wrap = activeEl.closest(".channel-icon-wrap");
@@ -2537,12 +2533,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         if (active instanceof HTMLInputElement && active.type === "checkbox") {
           e.preventDefault();
           active.click();
-        } else if (
-          active instanceof HTMLButtonElement &&
-          (active.classList.contains("channel-list-favorite") || active.classList.contains("epg-favorite-btn"))
-        ) {
-          e.preventDefault();
-          active.click();
+        } else if (isFavoriteFocusTarget(active)) {
+          activateFocusedFavoriteControl(e);
         }
         return;
       }
@@ -2824,10 +2816,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
   function toggleFavoriteChannel(channel: any) {
     if (!channel) return;
-    const now = Date.now();
-    if (now - lastFavoriteToggleAtRef.current < 400) return;
-    lastFavoriteToggleAtRef.current = now;
     const channelId = String(channel.id || "");
+    const now = Date.now();
+    const lastAt = lastFavoriteToggleAtByIdRef.current.get(channelId) || 0;
+    if (now - lastAt < 400) return;
+    lastFavoriteToggleAtByIdRef.current.set(channelId, now);
     setChannelFavoriteRecord(channel, !isFavoriteChannelRecord(channel));
     window.setTimeout(() => {
       const match = channelId
@@ -4644,6 +4637,17 @@ function isFavoriteFocusTarget(el: Element | null): el is HTMLButtonElement {
       el.classList.contains("player-control-bar-favorite") ||
       el.classList.contains("series-picker-favorite"))
   );
+}
+
+function activateFocusedFavoriteControl(e: KeyboardEvent): boolean {
+  if (e.defaultPrevented) return false;
+  const el = document.activeElement;
+  if (!isFavoriteFocusTarget(el)) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+  el.click();
+  return true;
 }
 
 function isSeriesEpisodeSelection(channel: any): boolean {
