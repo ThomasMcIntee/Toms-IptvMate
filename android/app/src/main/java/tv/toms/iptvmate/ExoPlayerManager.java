@@ -725,7 +725,24 @@ public class ExoPlayerManager {
             closeLanguagePickerOnMain();
             return;
         }
+        if (playerController.getAudioTracks().size() < 2) {
+            revealControlsOnMain();
+            return;
+        }
         openLanguagePickerOnMain();
+    }
+
+    private void wireLanguageFocusStops(boolean languageVisible) {
+        if (playButton == null || muteButton == null || languageButton == null) return;
+        if (languageVisible) {
+            playButton.setNextFocusRightId(R.id.native_exo_language);
+            languageButton.setNextFocusLeftId(R.id.native_exo_play);
+            languageButton.setNextFocusRightId(R.id.native_exo_mute);
+            muteButton.setNextFocusLeftId(R.id.native_exo_language);
+        } else {
+            playButton.setNextFocusRightId(R.id.native_exo_mute);
+            muteButton.setNextFocusLeftId(R.id.native_exo_play);
+        }
     }
 
     private void openLanguagePickerOnMain() {
@@ -761,11 +778,15 @@ public class ExoPlayerManager {
 
         List<NativeExoPlayerController.AudioTrackOption> tracks =
             isPlayingNative ? playerController.getAudioTracks() : java.util.Collections.emptyList();
-        boolean show = isPlayingNative && !playIsLive && tracks.size() >= 2;
+        boolean show = isPlayingNative && !playIsLive;
+        boolean canSelect = show && tracks.size() >= 2;
         languageButton.setVisibility(show ? View.VISIBLE : View.GONE);
-        languageButton.setContentDescription(show
+        languageButton.setEnabled(canSelect);
+        languageButton.setFocusable(show);
+        languageButton.setContentDescription(canSelect
             ? selectedLanguageLabel(tracks)
             : activity.getString(R.string.native_exo_language));
+        wireLanguageFocusStops(show);
 
         if (!show && languagePickerOpen) {
             closeLanguagePickerOnMain();

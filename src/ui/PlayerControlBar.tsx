@@ -570,9 +570,10 @@ export function VodLanguageSelect({ visible }: { visible: boolean }) {
     };
   }, [open, tracks.length]);
 
-  if (!visible || tracks.length < 2) return null;
+  if (!visible) return null;
 
   const selected = tracks.find((track) => track.selected) || tracks[0];
+  const selectedLabel = selected?.label || "Audio";
 
   return (
     <div
@@ -581,15 +582,18 @@ export function VodLanguageSelect({ visible }: { visible: boolean }) {
     >
       <button
         type="button"
-        className="vod-language-btn"
-        aria-label={`Audio language: ${selected.label}`}
+        className="player-control-bar-btn vod-language-btn"
+        aria-label={`Audio language: ${selectedLabel}`}
         aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          if (tracks.length < 2) return;
+          setOpen((current) => !current);
+        }}
         onFocus={() => setRevealed(true)}
       >
-        {selected.label}
+        {selectedLabel}
       </button>
-      {open && (
+      {open && tracks.length >= 2 && (
         <div className="vod-language-panel" role="listbox" aria-label="Audio language">
           {tracks.map((track) => (
             <button

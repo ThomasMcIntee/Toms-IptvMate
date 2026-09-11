@@ -2499,7 +2499,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       if (isVodPlaybackFullscreen && !isAudioLanguagePickerOpen()) {
         window.dispatchEvent(new Event("playerRevealControls"));
         const barButtons = Array.from(
-          document.querySelectorAll<HTMLButtonElement>(".vod-playback-shell .player-control-bar-btn")
+          document.querySelectorAll<HTMLButtonElement>(
+            ".vod-playback-shell .player-control-bar-btn, .vod-language-btn"
+          )
         ).filter((btn) => btn.tabIndex !== -1);
         const activeBtn = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
         const barIndex = activeBtn ? barButtons.indexOf(activeBtn) : -1;

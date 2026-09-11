@@ -42,6 +42,7 @@ assert.ok(audioLanguagesMatch("fra", "fr"));
 assert.ok(!audioLanguagesMatch("eng", "es"));
 assert.ok(source.includes("export function preferredAudioTrackIndex"));
 assert.ok(source.includes("audioLanguagesMatch(track.language, preferredLanguage)"));
+assert.ok(source.includes("export function audioTrackDisplayLabel"));
 assert.ok(source.includes("English"));
 
 console.log("audio language helpers ok");
