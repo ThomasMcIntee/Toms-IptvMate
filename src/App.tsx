@@ -144,11 +144,8 @@ function resolveStoredPlaylistId(playlists: PlaylistEntry[] = loadPlaylists()): 
   return playlists[0]?.id || stored || "";
 }
 
-function isTextEntryActive(target: EventTarget | null = document.activeElement): boolean {
-  if (typeof document !== "undefined" && document.body?.dataset?.webosKeyboard === "open") {
-    return true;
-  }
-  return isTextEntryTarget(target) || isTextEntryTarget(document.activeElement);
+function isWebOsKeyboardOpen(): boolean {
+  return isWebOsRuntime() && document.body?.dataset?.webosKeyboard === "open";
 }
 
 function isBackKeyEvent(event: KeyboardEvent): boolean {
@@ -159,9 +156,13 @@ function isBackKeyEvent(event: KeyboardEvent): boolean {
     key === "BrowserBack" ||
     key === "GoBack" ||
     key === "Back" ||
-    key === "XF86Back" ||
-    key === "Return"
+    key === "XF86Back"
   ) {
+    return true;
+  }
+
+  // webOS remotes report Back as Return. Elsewhere Return is Enter.
+  if (key === "Return" && isWebOsRuntime()) {
     return true;
   }
 
@@ -282,6 +283,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   const hadLivePlayingRef = useRef(false);
   const lastFavoriteToggleAtByIdRef = useRef<Map<string, number>>(new Map());
   const lastBackHandledAtRef = useRef(0);
+  const handleBackNavigationRef = useRef<() => boolean>(() => false);
+  const onAppKeyDownRef = useRef<(event: KeyboardEvent) => void>(() => {});
   const seriesAutoAdvanceTokenRef = useRef(0);
   const lastSeriesEndedRef = useRef<{ url: string | null; at: number }>({
     url: null,
@@ -1881,110 +1884,212 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     };
   }, [seriesPickerEpisodes]);
 
-  useEffect(() => {
-    // Helper to handle Back navigation (shared by webosBackKey and keydown)
-    const handleBackNavigation = () => {
-      const now = Date.now();
-      if (now - lastBackHandledAtRef.current < 350) return true;
-      lastBackHandledAtRef.current = now;
-      
-      // Handle Back navigation
-      if (isSeriesPickerVisible) {
-        setIsSeriesPickerVisible(false);
-        return true;
-      }
+  handleBackNavigationRef.current = () => {
+    const now = Date.now();
+    if (now - lastBackHandledAtRef.current < 200) return true;
+    lastBackHandledAtRef.current = now;
 
-      if (isAudioLanguagePickerOpen()) {
-        setAudioLanguagePickerOpen(false);
-        window.dispatchEvent(new Event("closeAudioLanguagePicker"));
-        return true;
-      }
+    if (isWebOsKeyboardOpen()) {
+      return true;
+    }
 
-      if (isVodPlaybackFullscreen) {
-        exitVodPlayback();
-        return true;
-      }
+    const activeField = document.activeElement;
+    if (isTextEntryTarget(activeField)) {
+      activeField.blur();
+      document.body?.focus();
+      return true;
+    }
 
-      if (contentPage === "live" && isEffectiveLiveFullscreen) {
-        setIsLiveFullscreenRequested(false);
-        setShowLiveMenu(true);
-        return true;
-      }
+    if (isSeriesSearchComposerOpen) {
+      setIsSeriesSearchComposerOpen(false);
+      return true;
+    }
 
-      if (showOpeningScreen && !activePanel) {
-        // On main menu - Back should exit the app
-        const isWebOS = /Web0S|NetCast/i.test(navigator.userAgent || "") && !/Android/i.test(navigator.userAgent || "");
-        const isCap = !!(window as any).Capacitor || window.location.hostname === "app";
+    if (isSeriesPickerVisible) {
+      setIsSeriesPickerVisible(false);
+      return true;
+    }
 
-        if (isWebOS) {
+    if (isAudioLanguagePickerOpen()) {
+      setAudioLanguagePickerOpen(false);
+      window.dispatchEvent(new Event("closeAudioLanguagePicker"));
+      return true;
+    }
 
-          try {
-            if ((window as any).webOS?.platformBack) {
-              (window as any).webOS.platformBack();
-            } else {
-              window.close();
-            }
-          } catch (e) {
-          }
-        } else if (isCap) {
-          try {
-            // Use the Capacitor global to access plugins
-            const AppPlugin = (window as any).Capacitor?.Plugins?.App;
-            if (AppPlugin && typeof AppPlugin.exitApp === "function") {
-              void AppPlugin.exitApp();
-            } else {
-              window.close();
-            }
-          } catch (e) {
+    if (isVodPlaybackFullscreen) {
+      exitVodPlayback();
+      return true;
+    }
+
+    if (contentPage === "live" && isEffectiveLiveFullscreen) {
+      setIsLiveFullscreenRequested(false);
+      setShowLiveMenu(true);
+      return true;
+    }
+
+    if (showOpeningScreen && !activePanel) {
+      if (isWebOsRuntime()) {
+        try {
+          if ((window as any).webOS?.platformBack) {
+            (window as any).webOS.platformBack();
+          } else {
             window.close();
           }
+        } catch {
+          // Keep the event consumed so the shell does not leave the app.
         }
-
-
-        // Consume the event even if exit fails to prevent browser history navigation
-        return true;
+      } else if (isCapacitorRuntime()) {
+        try {
+          const AppPlugin = (window as any).Capacitor?.Plugins?.App;
+          if (AppPlugin && typeof AppPlugin.exitApp === "function") {
+            void AppPlugin.exitApp();
+          } else {
+            window.close();
+          }
+        } catch {
+          window.close();
+        }
       }
 
+      return true;
+    }
 
-      // Return nested screens to their parent
-      if (activePanel) {
-        if (activePanel === "recordingPlayback" || activePanel === "recordingStorage") {
-          setActivePanel("recordings");
-        } else if (activePanel === "playlist" && contentPage === "playlistManager") {
-          setActivePanel(null);
-        } else {
-          setActivePanel(null);
-          // Reset the page state so a stale "playlistManager"/"movies"/"series"
-          // page cannot leak onto the next screen opened from the main menu.
-          setContentPage("live");
-          setShowOpeningScreen(true);
-        }
-        return true;
+    if (activePanel) {
+      if (activePanel === "recordingPlayback" || activePanel === "recordingStorage") {
+        setActivePanel("recordings");
+      } else if (activePanel === "playlist" && contentPage === "playlistManager") {
+        setActivePanel(null);
       } else {
-        if (currentChannel && contentPage === "live") {
-          exitLivePlaybackToBrowser();
-        } else if (currentChannel && (contentPage === "movies" || contentPage === "series" || contentPage === "playlistManager")) {
-          stopCurrentVodPlaybackIfNeeded();
-          setCurrentChannel(null);
-          setContentPage("live");
-          setShowOpeningScreen(true);
-        } else {
-          setContentPage("live");
-          setShowOpeningScreen(true);
-        }
-        return true;
+        setActivePanel(null);
+        setContentPage("live");
+        setShowOpeningScreen(true);
       }
-    };
+      return true;
+    }
 
-    // Listen for custom webosBackKey event (dispatched by webOS SDK)
-    const handleWebosBack = () => {
-      if (isTextEntryActive()) {
+    if (currentChannel && contentPage === "live") {
+      exitLivePlaybackToBrowser();
+    } else if (currentChannel && (contentPage === "movies" || contentPage === "series" || contentPage === "playlistManager")) {
+      stopCurrentVodPlaybackIfNeeded();
+      setCurrentChannel(null);
+      setContentPage("live");
+      setShowOpeningScreen(true);
+    } else {
+      setContentPage("live");
+      setShowOpeningScreen(true);
+    }
+    return true;
+  };
+
+  onAppKeyDownRef.current = (e: KeyboardEvent) => {
+    const isBack = isBackKeyEvent(e);
+
+    if (isBack && isWebOsKeyboardOpen()) {
+      return;
+    }
+
+    if (isBack) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === "function") {
+        e.stopImmediatePropagation();
+      }
+      handleBackNavigationRef.current();
+      return;
+    }
+
+    if (isTextEntryTarget(e.target)) return;
+
+    const navKey = normalizeRemoteNavKey(e);
+    if (navKey === "Enter" && activateFocusedFavoriteControl(e)) {
+      return;
+    }
+
+    const mediaKey = normalizeRemoteMediaKey(e);
+    if (mediaKey && currentChannel) {
+      e.preventDefault();
+      e.stopPropagation();
+      window.dispatchEvent(new Event("playerRevealControls"));
+      if (mediaKey === "MediaPlayPause") {
+        togglePlayPause();
+      } else if (mediaKey === "MediaPlay") {
+        playPlayback();
+      } else if (mediaKey === "MediaPause" || mediaKey === "MediaStop") {
+        pausePlayback();
+      } else if (mediaKey === "MediaRewind") {
+        seekPlayback(-15);
+      } else if (mediaKey === "MediaFastForward") {
+        seekPlayback(15);
+      }
+      return;
+    }
+
+    const vodFocus = document.activeElement;
+    const vodFocusOnControl =
+      vodFocus instanceof HTMLElement &&
+      !!vodFocus.closest(".vod-language-select, .vod-exit-btn, .player-control-bar");
+    if (isVodPlaybackFullscreen && !isAudioLanguagePickerOpen() && !vodFocusOnControl) {
+      window.dispatchEvent(new Event("playerRevealControls"));
+      if (navKey === "ArrowDown" || navKey === "ArrowUp") {
+        e.preventDefault();
+        const languageBtn = document.querySelector<HTMLButtonElement>(
+          ".player-control-bar-language, .vod-language-btn"
+        );
+        languageBtn?.focus();
         return;
       }
-      handleBackNavigation();
+      if (navKey === "ArrowLeft") {
+        e.preventDefault();
+        seekPlayback(-15);
+        return;
+      }
+      if (navKey === "ArrowRight") {
+        e.preventDefault();
+        seekPlayback(15);
+        return;
+      }
+    }
+
+    if (
+      currentChannel &&
+      (e.key === " " ||
+        e.key === "Enter" ||
+        e.key === "Select" ||
+        e.keyCode === 23 ||
+        e.key === "f" ||
+        e.key === "F" ||
+        e.key === "m" ||
+        e.key === "M" ||
+        (isLivePreviewFullscreen && (navKey === "ArrowDown" || navKey === "ArrowUp")))
+    ) {
+      revealNativePlayerControls();
+      window.dispatchEvent(new Event("playerRevealControls"));
+    }
+
+    if (e.key === "f" || e.key === "F") {
+      e.preventDefault();
+      toggleFullscreen();
+    }
+
+    if (e.key === " " && currentChannel) {
+      e.preventDefault();
+      togglePlayPause();
+    }
+
+    if ((e.key === "m" || e.key === "M") && currentChannel) {
+      e.preventDefault();
+      toggleMute();
+    }
+  };
+
+  useEffect(() => {
+    const handleBack = () => {
+      handleBackNavigationRef.current();
     };
-    
-    window.addEventListener('webosBackKey', handleWebosBack);
+    const handleWebosBack = () => {
+      if (isWebOsKeyboardOpen()) return;
+      handleBack();
+    };
 
     const onKeyboardStateChange = (event: Event) => {
       const detail = (event as CustomEvent<{ visibility?: boolean | string; state?: string }>).detail;
@@ -1997,116 +2102,19 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         document.body.dataset.webosKeyboard = visible ? "open" : "closed";
       }
     };
+    const onKeyDown = (event: KeyboardEvent) => onAppKeyDownRef.current(event);
+
+    window.addEventListener("webosBackKey", handleWebosBack);
+    window.addEventListener("nativeBackKey", handleBack);
     document.addEventListener("keyboardStateChange", onKeyboardStateChange);
-    
-    // Regular keydown handler
-    const onKeyDown = (e: KeyboardEvent) => {
-      const isBack = isBackKeyEvent(e);
-      
-      if (isBack && isTextEntryActive(e.target)) {
-        return;
-      }
-      
-      if (isBack) {
-        // Handle Back here even on webOS. The SDK may also dispatch webosBackKey;
-        // handleBackNavigation debounces the duplicate.
-        e.preventDefault();
-        handleBackNavigation();
-        return;
-      }
-      
-      if (isTextEntryTarget(e.target)) return;
-
-      const navKey = normalizeRemoteNavKey(e);
-      if (navKey === "Enter" && activateFocusedFavoriteControl(e)) {
-        return;
-      }
-
-      const mediaKey = normalizeRemoteMediaKey(e);
-      if (mediaKey && currentChannel) {
-        e.preventDefault();
-        e.stopPropagation();
-        window.dispatchEvent(new Event("playerRevealControls"));
-        if (mediaKey === "MediaPlayPause") {
-          togglePlayPause();
-        } else if (mediaKey === "MediaPlay") {
-          playPlayback();
-        } else if (mediaKey === "MediaPause" || mediaKey === "MediaStop") {
-          pausePlayback();
-        } else if (mediaKey === "MediaRewind") {
-          seekPlayback(-15);
-        } else if (mediaKey === "MediaFastForward") {
-          seekPlayback(15);
-        }
-        return;
-      }
-
-      const vodFocus = document.activeElement;
-      const vodFocusOnControl =
-        vodFocus instanceof HTMLElement &&
-        !!vodFocus.closest(".vod-language-select, .vod-exit-btn, .player-control-bar");
-      if (isVodPlaybackFullscreen && !isAudioLanguagePickerOpen() && !vodFocusOnControl) {
-        window.dispatchEvent(new Event("playerRevealControls"));
-        if (navKey === "ArrowDown" || navKey === "ArrowUp") {
-          e.preventDefault();
-          const languageBtn = document.querySelector<HTMLButtonElement>(
-            ".player-control-bar-language, .vod-language-btn"
-          );
-          languageBtn?.focus();
-          return;
-        }
-        if (navKey === "ArrowLeft") {
-          e.preventDefault();
-          seekPlayback(-15);
-          return;
-        }
-        if (navKey === "ArrowRight") {
-          e.preventDefault();
-          seekPlayback(15);
-          return;
-        }
-      }
-
-      if (
-        currentChannel &&
-        (e.key === " " ||
-          e.key === "Enter" ||
-          e.key === "Select" ||
-          e.keyCode === 23 ||
-          e.key === "f" ||
-          e.key === "F" ||
-          e.key === "m" ||
-          e.key === "M" ||
-          (isLivePreviewFullscreen && (navKey === "ArrowDown" || navKey === "ArrowUp")))
-      ) {
-        revealNativePlayerControls();
-        window.dispatchEvent(new Event("playerRevealControls"));
-      }
-
-      if (e.key === "f" || e.key === "F") {
-        e.preventDefault();
-        toggleFullscreen();
-      }
-
-      if (e.key === " " && currentChannel) {
-        e.preventDefault();
-        togglePlayPause();
-      }
-
-      if ((e.key === "m" || e.key === "M") && currentChannel) {
-        e.preventDefault();
-        toggleMute();
-      }
-    };
-
-    // Use capture phase so we get the event before webOS shell
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
-      window.removeEventListener('webosBackKey', handleWebosBack);
+      window.removeEventListener("webosBackKey", handleWebosBack);
+      window.removeEventListener("nativeBackKey", handleBack);
       document.removeEventListener("keyboardStateChange", onKeyboardStateChange);
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [activePanel, isVodPlaybackFullscreen, currentChannel, isSeriesPickerVisible, contentPage, isEffectiveLiveFullscreen, showOpeningScreen, hasPlaylists]);
+  }, []);
 
   useEffect(() => {
     const onNativeCommand = (event: Event) => {

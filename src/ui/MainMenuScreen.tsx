@@ -153,7 +153,7 @@ export default function MainMenuScreen({
       if (key === "Backspace" || key === "Escape") {
         const now = Date.now();
         // webOS can emit duplicate back-like events for one button press.
-        if (now - lastBackHandledAtRef.current < 350) {
+        if (now - lastBackHandledAtRef.current < 200) {
           event.preventDefault();
           return;
         }

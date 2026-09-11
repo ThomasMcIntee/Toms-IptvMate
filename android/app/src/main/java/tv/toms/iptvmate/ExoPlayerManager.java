@@ -814,12 +814,32 @@ public class ExoPlayerManager {
     }
 
     public boolean consumeBackPress() {
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            return closeLanguagePickerOnMain();
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post(this::consumeBackPress);
+            return isPlayingNative && !playIsLive && (languagePickerOpen || controlsRevealed);
         }
-        final boolean[] closed = {false};
-        mainHandler.post(() -> closed[0] = closeLanguagePickerOnMain());
-        return languagePickerOpen || closed[0];
+        if (closeLanguagePickerOnMain()) {
+            return true;
+        }
+        if (isPlayingNative && !playIsLive && controlsRevealed) {
+            hideControlsNowOnMain();
+            return true;
+        }
+        return false;
+    }
+
+    private void hideControlsNowOnMain() {
+        cancelHideControls();
+        languagePickerOpen = false;
+        if (languagePanel != null) {
+            languagePanel.setVisibility(View.GONE);
+        }
+        controlsRevealed = false;
+        applyControlsVisibilityOnMain();
+        View focused = activity.getCurrentFocus();
+        if (focused != null && (isUnderControls(focused) || isUnderLanguagePanel(focused))) {
+            focused.clearFocus();
+        }
     }
 
     public List<NativeExoPlayerController.AudioTrackOption> getAudioTracks() {

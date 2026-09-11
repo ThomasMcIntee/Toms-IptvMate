@@ -62,6 +62,7 @@ const exo = fs.readFileSync(
 assert.ok(exo.includes("dispatchPlayerKey"));
 assert.ok(exo.includes("focusLanguageButtonOnMain"));
 assert.ok(exo.includes("setFocusableInTouchMode(show)"));
+assert.ok(exo.includes("hideControlsNowOnMain"));
 assert.ok(!/languageButton\.setEnabled\(canSelect\)/.test(exo));
 
 const overlay = fs.readFileSync(

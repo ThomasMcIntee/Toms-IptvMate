@@ -16,6 +16,7 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
 
@@ -55,6 +56,12 @@ public class MainActivity extends BridgeActivity {
         // Chrome remote debugging keeps a socket and metrics process alive.
         WebView.setWebContentsDebuggingEnabled(false);
         disableSSLVerification();
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                handleNativeBack();
+            }
+        });
     }
 
     @Override
@@ -391,41 +398,58 @@ public class MainActivity extends BridgeActivity {
 
     private long lastBackDispatchMs = 0;
 
-    private void dispatchBackKeyToWebApp() {
+    private boolean handleNativeBack() {
         long now = System.currentTimeMillis();
-        if (now - lastBackDispatchMs < 250) return;
+        if (now - lastBackDispatchMs < 180) {
+            return true;
+        }
         lastBackDispatchMs = now;
 
-        WebView webView = getBridge().getWebView();
+        if (exoPlayerManager != null && exoPlayerManager.consumeBackPress()) {
+            return true;
+        }
+        dispatchBackKeyToWebApp();
+        return true;
+    }
+
+    private void dispatchBackKeyToWebApp() {
+        WebView webView = getActivityWebView();
+        if (webView == null) {
+            try {
+                webView = getBridge() != null ? getBridge().getWebView() : null;
+            } catch (Exception ignored) {
+                webView = null;
+            }
+        }
         if (webView == null) return;
 
-        webView.post(() -> webView.evaluateJavascript(
-            "(function(){" +
-            "var e=new KeyboardEvent('keydown',{" +
-            "key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true" +
-            "});" +
-            "window.dispatchEvent(e);" +
-            "})();",
-            null
-        ));
+        webView.post(() -> {
+            WebView target = getActivityWebView();
+            if (target == null) return;
+            target.evaluateJavascript(
+                "(function(){" +
+                "try{window.dispatchEvent(new CustomEvent('nativeBackKey'));}catch(e){}" +
+                "try{" +
+                "var ev=new KeyboardEvent('keydown',{" +
+                "key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true" +
+                "});" +
+                "window.dispatchEvent(ev);" +
+                "}catch(e2){}" +
+                "})();",
+                null
+            );
+        });
     }
 
     @Override
     public void onBackPressed() {
-        if (exoPlayerManager != null && exoPlayerManager.consumeBackPress()) {
-            return;
-        }
-        dispatchBackKeyToWebApp();
+        handleNativeBack();
     }
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-            if (exoPlayerManager != null && exoPlayerManager.consumeBackPress()) {
-                return true;
-            }
-            dispatchBackKeyToWebApp();
-            return true;
+            return handleNativeBack();
         }
         if (exoPlayerManager != null && exoPlayerManager.dispatchPlayerKey(event)) {
             return true;

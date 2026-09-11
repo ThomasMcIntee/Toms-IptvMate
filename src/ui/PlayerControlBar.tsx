@@ -474,13 +474,6 @@ export function VodLanguageSelect({
 
     const onKeyDown = (event: KeyboardEvent) => {
       const key = normalizeRemoteNavKey(event);
-      if (key === "Escape" || key === "Backspace") {
-        event.preventDefault();
-        event.stopPropagation();
-        setOpen(false);
-        rootRef.current?.querySelector<HTMLButtonElement>(".vod-language-btn")?.focus();
-        return;
-      }
       const options = Array.from(rootRef.current?.querySelectorAll<HTMLButtonElement>(".vod-language-option") || []);
       const index = options.findIndex((option) => option === document.activeElement);
       if (index < 0) return;
