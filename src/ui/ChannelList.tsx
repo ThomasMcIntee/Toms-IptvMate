@@ -226,7 +226,8 @@ export function ChannelList({
   listClassName = "",
   restoreChannelId = null
 }: Props) {
-  const effectiveBatchSize = Math.max(1, batchSize ?? (showAsIcons ? 180 : 250));
+  const useIconGrid = showAsIcons && !listClassName.includes("channel-list-live-rows");
+  const effectiveBatchSize = Math.max(1, batchSize ?? (useIconGrid ? 180 : 250));
   const [visibleCount, setVisibleCount] = useState(effectiveBatchSize);
   const listRef = useRef<HTMLDivElement | null>(null);
   const restoredForIdRef = useRef<string | null>(null);
@@ -251,7 +252,7 @@ export function ChannelList({
     if (listEl) {
       listEl.scrollTop = 0;
     }
-  }, [channelIdentity, showAsIcons, effectiveBatchSize, restoreChannelId]);
+  }, [channelIdentity, useIconGrid, effectiveBatchSize, restoreChannelId]);
 
   useEffect(() => {
     if (!restoreChannelId) return;
@@ -321,7 +322,7 @@ export function ChannelList({
   return (
     <div
       ref={listRef}
-      className={"channel-list" + (showAsIcons ? " channel-list-icons" : "") + (listClassName ? ` ${listClassName}` : "")}
+      className={"channel-list" + (useIconGrid ? " channel-list-icons" : "") + (listClassName ? ` ${listClassName}` : "")}
       onScroll={handleScroll}
     >
       {visibleChannels.map((ch) => (
@@ -336,9 +337,9 @@ export function ChannelList({
           onSelect={onSelect}
           showVisibilityControls={showVisibilityControls}
           showFavoriteControls={showFavoriteControls}
-          showAsIcons={showAsIcons}
+          showAsIcons={useIconGrid}
           suppressLogos={suppressLogos}
-          showRowLogos={showRowLogos && !showAsIcons}
+          showRowLogos={showRowLogos || (!useIconGrid && listClassName.includes("channel-list-live-rows"))}
         />
       ))}
 

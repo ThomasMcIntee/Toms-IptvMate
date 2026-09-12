@@ -326,7 +326,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   const isMainSeriesScreen =
     !showOpeningScreen && isSeriesPage && !isSeriesPickerVisible && !isSeriesDetailsVisible;
   const isEpgSearchPanelOpen = activePanel === "epgSearch";
-  const isContentIconsView = isMoviesPage || isSeriesPage || isLiveTvView;
+  const isContentIconsView = (isMoviesPage || isSeriesPage) && !isLiveTvView;
   const isPlaylistInputPanelOpen = activePanel === "playlist";
   const isMovieOrSeriesSelected =
     !!currentChannel &&
@@ -3146,7 +3146,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, [isContentIconsView, isSeriesPickerVisible, isSeriesDetailsVisible, isMovieDetailsVisible, vodResumePrompt, filteredChannels.length, isSeriesSearchComposerOpen, isMoviesSearchComposerOpen]);
 
   useEffect(() => {
-    if (!isMainMoviesScreen && !isMainSeriesScreen && !isLiveTvView) return;
+    if (!isMainMoviesScreen && !isMainSeriesScreen) return;
     if (isSeriesPickerVisible) return;
     if (isSeriesDetailsVisible) return;
     if (isMovieDetailsVisible) return;
@@ -3169,7 +3169,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     }, 80);
 
     return () => window.clearTimeout(timer);
-  }, [isMainMoviesScreen, isMainSeriesScreen, isLiveTvView, isSeriesPickerVisible, isSeriesDetailsVisible, isMovieDetailsVisible, vodResumePrompt, contentPage, channelUpdateTick, posterRestoreId, isSeriesSearchComposerOpen, isMoviesSearchComposerOpen]);
+  }, [isMainMoviesScreen, isMainSeriesScreen, isSeriesPickerVisible, isSeriesDetailsVisible, isMovieDetailsVisible, vodResumePrompt, contentPage, channelUpdateTick, posterRestoreId, isSeriesSearchComposerOpen, isMoviesSearchComposerOpen]);
 
   useEffect(() => {
     if (!isSeriesSearchComposerOpen && !isMoviesSearchComposerOpen) return;
@@ -5511,7 +5511,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             onToggleFavorite={toggleFavoriteChannel}
             showVisibilityControls={isPlaylistManagerPage}
             showFavoriteControls={isLiveContentPage || isContentIconsView}
-            showAsIcons={isContentIconsView}
+            showAsIcons={isContentIconsView && !isLiveTvView}
             showRowLogos={isLiveTvView}
             batchSize={
               isLiveTvView

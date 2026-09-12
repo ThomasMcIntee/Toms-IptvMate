@@ -2046,9 +2046,13 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   bottom: 8px;
 }
 
-.channel-list.channel-list-live-rows {
+.channel-list.channel-list-live-rows,
+.channel-list.channel-list-icons.channel-list-live-rows {
   display: flex;
   flex-direction: column;
+  flex-wrap: nowrap;
+  grid-template-columns: none;
+  grid-auto-rows: auto;
   align-content: stretch;
   left: 360px;
   right: calc(var(--live-preview-width) + var(--live-preview-right) + 16px);
@@ -2060,8 +2064,31 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   z-index: 6;
 }
 
+.channel-list-live-rows .channel-item,
+.channel-list-live-rows .list-toggle-row,
+.channel-list-live-rows .channel-select-btn,
+.channel-list-live-rows .channel-row-btn {
+  width: 100%;
+}
+
 .channel-list-live-rows .channel-item {
   padding: 6px 8px;
+}
+
+.channel-list-live-rows .channel-icon-btn {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  height: auto;
+}
+
+.channel-list-live-rows .channel-icon-image,
+.channel-list-live-rows .channel-icon-fallback {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  aspect-ratio: 1;
 }
 
 .channel-list-live-rows .channel-row-logo,
