@@ -2226,6 +2226,17 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   line-clamp: unset;
 }
 
+body.is-webos .channel-list.channel-list-live-rows,
+body.is-webos .channel-list.channel-list-icons.channel-list-live-grid,
+body.is-capacitor .channel-list.channel-list-live-rows,
+body.is-capacitor .channel-list.channel-list-icons.channel-list-live-grid {
+  display: flex !important;
+  flex-direction: column !important;
+  flex-wrap: nowrap !important;
+  grid-template-columns: none !important;
+  grid-auto-rows: auto !important;
+}
+
 body.is-capacitor .channel-list.channel-list-live-rows,
 body.is-capacitor .channel-list.channel-list-icons.channel-list-live-grid {
   left: 280px;
