@@ -1,15 +1,17 @@
 /**
  * Cooperative main-thread priorities for TV/WebView:
- *   1. input  — remote, mouse, keyboard must stay instant
+ *   1. input    — remote, mouse, keyboard must stay instant
  *   2. playback — start/stop/seek may wait for a quiet input burst
- *   3. background — catalog reload, EPG, cache persist run last
+ *   3. upload   — catalog reload, EPG, cache persist, and other uploads last
+ *
+ * `background` is kept as an alias of `upload`.
  *
  * The browser/WebView has one JS thread. This module does not create OS
  * threads; it yields heavy work whenever the user is interacting or a
  * stream is starting so input handlers can run.
  */
 
-export type TaskPriority = "input" | "playback" | "background";
+export type TaskPriority = "input" | "playback" | "upload" | "background";
 
 const INPUT_BURST_MS = 90;
 const INPUT_QUIET_MS = 220;
@@ -102,9 +104,10 @@ async function postOrFallback(
 
 /**
  * Yield so higher-priority work can run.
- * Background callers wait out remote/keyboard bursts, then idle.
+ * Upload/background callers wait out remote/keyboard bursts, then idle
+ * behind playback.
  */
-export async function yieldToPriority(priority: TaskPriority = "background"): Promise<void> {
+export async function yieldToPriority(priority: TaskPriority = "upload"): Promise<void> {
   if (priority === "input") {
     await postOrFallback("user-blocking", async () => undefined);
     return;
@@ -118,8 +121,13 @@ export async function yieldToPriority(priority: TaskPriority = "background"): Pr
     return;
   }
 
-  while (isUserInputActive(INPUT_QUIET_MS)) {
-    await yieldAnimationFrame();
+  while (isUserInputActive(INPUT_QUIET_MS) || playbackBusy) {
+    if (isUserInputActive(INPUT_QUIET_MS)) {
+      await yieldAnimationFrame();
+      continue;
+    }
+    await yieldIdle(PLAYBACK_IDLE_TIMEOUT_MS);
+    break;
   }
   const idleTimeout = playbackBusy ? PLAYBACK_IDLE_TIMEOUT_MS : BACKGROUND_IDLE_TIMEOUT_MS;
   await postOrFallback("background", () => yieldIdle(idleTimeout));
@@ -127,11 +135,15 @@ export async function yieldToPriority(priority: TaskPriority = "background"): Pr
 
 /** Drop-in replacement for `setTimeout(0)` catalog yields. */
 export function yieldToMain(): Promise<void> {
-  return yieldToPriority("background");
+  return yieldToPriority("upload");
+}
+
+export async function waitForUploadSlot(): Promise<void> {
+  await yieldToPriority("upload");
 }
 
 export async function waitForBackgroundSlot(): Promise<void> {
-  await yieldToPriority("background");
+  await yieldToPriority("upload");
 }
 
 export async function waitForPlaybackSlot(): Promise<void> {

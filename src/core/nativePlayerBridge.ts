@@ -327,6 +327,7 @@ export function revealNativePlayerControls(): void {
 }
 
 export function stopNativePlayback(): void {
+  setPlaybackActive(false);
   nativePaused = false;
   nativeMuted = false;
   try {

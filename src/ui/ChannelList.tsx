@@ -11,6 +11,18 @@ function getHeaderLabel(channel: any) {
   return name.replace(/##+/g, " ").replace(/\s+/g, " ").trim() || name.trim() || "Header";
 }
 
+function ChannelRowLogo({ ch, suppressLogos }: { ch: any; suppressLogos: boolean }) {
+  if (suppressLogos) return null;
+  if (ch.logo) {
+    return <img src={ch.logo} className="channel-row-logo" alt="" loading="lazy" />;
+  }
+  return (
+    <div className="channel-row-logo channel-row-logo-fallback" aria-hidden="true">
+      {String(ch.name || "?").slice(0, 1)}
+    </div>
+  );
+}
+
 type ItemProps = {
   ch: any;
   activeChannel: any | null;
@@ -23,6 +35,7 @@ type ItemProps = {
   showFavoriteControls: boolean;
   showAsIcons: boolean;
   suppressLogos: boolean;
+  showRowLogos: boolean;
 };
 
 function ChannelItem({
@@ -37,6 +50,7 @@ function ChannelItem({
   showFavoriteControls,
   showAsIcons,
   suppressLogos,
+  showRowLogos,
 }: ItemProps) {
   const isHeader = isHeaderChannel(ch);
 
@@ -139,7 +153,8 @@ function ChannelItem({
               if (visible) onSelect(ch);
             }}
           >
-            {channelLabel}
+            {showRowLogos && <ChannelRowLogo ch={ch} suppressLogos={suppressLogos} />}
+            <span className="channel-row-name">{channelLabel}</span>
           </button>
           {showListFavorite && (
             <button
@@ -168,7 +183,8 @@ function ChannelItem({
       data-channel-id={String(ch.id || "")}
       onClick={handleClick}
     >
-      <span>{channelLabel}</span>
+      {showRowLogos && <ChannelRowLogo ch={ch} suppressLogos={suppressLogos} />}
+      <span className="channel-row-name">{channelLabel}</span>
     </button>
   );
 }
@@ -186,6 +202,7 @@ type Props = {
   showAsIcons?: boolean;
   batchSize?: number;
   suppressLogos?: boolean;
+  showRowLogos?: boolean;
   autoLoadOnScroll?: boolean;
   listClassName?: string;
   restoreChannelId?: string | null;
@@ -204,6 +221,7 @@ export function ChannelList({
   showAsIcons = false,
   batchSize,
   suppressLogos = false,
+  showRowLogos = false,
   autoLoadOnScroll = false,
   listClassName = "",
   restoreChannelId = null
@@ -320,6 +338,7 @@ export function ChannelList({
           showFavoriteControls={showFavoriteControls}
           showAsIcons={showAsIcons}
           suppressLogos={suppressLogos}
+          showRowLogos={showRowLogos && !showAsIcons}
         />
       ))}
 

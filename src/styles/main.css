@@ -186,6 +186,15 @@ body.theme-light .recording-setup-panel {
   border-color: rgba(17, 24, 39, 0.18);
 }
 
+body.theme-light .channel-row-logo,
+body.theme-light .channel-row-logo-fallback {
+  background: rgba(17, 24, 39, 0.08);
+}
+
+body.theme-light .channel-row-logo-fallback {
+  color: #111827;
+}
+
 body.theme-light input,
 body.theme-light .series-main-search-input {
   background: rgba(255, 255, 255, 0.98);
@@ -855,7 +864,9 @@ body.is-capacitor.native-exo-active .player-control-bar {
 }
 
 .channel-row-btn {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   width: 100%;
   border: 0;
   background: transparent;
@@ -864,12 +875,14 @@ body.is-capacitor.native-exo-active .player-control-bar {
   text-align: left;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.channel-row-btn > span {
+.channel-row-btn > span,
+.channel-row-btn .channel-row-name {
   display: block;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1948,6 +1961,9 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
 }
 
 .channel-select-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -1957,8 +1973,34 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   cursor: pointer;
   min-width: 0;
   overflow: hidden;
+  white-space: nowrap;
+}
+
+.channel-select-btn .channel-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.channel-row-logo,
+.channel-row-logo-fallback {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.channel-row-logo-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .channel-select-btn:disabled {
@@ -2002,6 +2044,35 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   right: 8px;
   top: 56px;
   bottom: 8px;
+}
+
+.channel-list.channel-list-live-rows {
+  display: flex;
+  flex-direction: column;
+  align-content: stretch;
+  left: 360px;
+  right: calc(var(--live-preview-width) + var(--live-preview-right) + 16px);
+  top: 8px;
+  bottom: 8px;
+  width: auto;
+  max-width: none;
+  padding: 8px 10px;
+  z-index: 6;
+}
+
+.channel-list-live-rows .channel-item {
+  padding: 6px 8px;
+}
+
+.channel-list-live-rows .channel-row-logo,
+.channel-list-live-rows .channel-row-logo-fallback {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+}
+
+.channel-list-live-rows .channel-row-name {
+  font-size: 1rem;
 }
 
 .channel-list.channel-list-icons.channel-list-live-grid {
@@ -2095,6 +2166,7 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   -webkit-box-orient: vertical;
 }
 
+body.is-capacitor .channel-list.channel-list-live-rows,
 body.is-capacitor .channel-list.channel-list-icons.channel-list-live-grid {
   left: 280px;
 }

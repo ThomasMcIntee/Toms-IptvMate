@@ -94,7 +94,7 @@ import MainMenuScreen from "./ui/MainMenuScreen";
 import { loadChannelsForPlaylist } from "./core/loaders/playlistLoader";
 import { loadXtream, loadXtreamSeriesBundleFromChannel, loadXtreamSeriesEpisodesFromChannel, loadXtreamVodInfoFromChannel, type XtreamSeriesInfo, type XtreamVodInfo } from "./core/loaders/xtreamLoader";
 import { loadXtreamEPGForStream } from "./core/loaders/xtreamEPG";
-import { getBackgroundConcurrency, waitForBackgroundSlot, yieldToMain } from "./core/taskScheduler";
+import { getBackgroundConcurrency, waitForPlaybackSlot, waitForUploadSlot, yieldToMain } from "./core/taskScheduler";
 import SeriesEpisodePicker from "./ui/SeriesEpisodePicker";
 import SeriesDetailsScreen from "./ui/SeriesDetailsScreen";
 import MovieDetailsScreen from "./ui/MovieDetailsScreen";
@@ -1980,14 +1980,14 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       if (playlists.length === 0) return;
 
       void (async () => {
-        await waitForBackgroundSlot();
+        await waitForUploadSlot();
         for (const playlist of playlists) {
           try {
             await loadEPGForPlaylist(playlist, { forceRefresh: true });
           } catch {
             // Keep refresh resilient if guide endpoints are temporarily unavailable.
           }
-          await waitForBackgroundSlot();
+          await waitForUploadSlot();
         }
       })();
     };
@@ -4035,7 +4035,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     }
 
     const play = () => {
-      playUrl(requestUrl, false, false, 0, false, false, false, requestedContentType as "live" | "movie" | "series");
+      void waitForPlaybackSlot().then(() => {
+        playUrl(requestUrl, false, false, 0, false, false, false, requestedContentType as "live" | "movie" | "series");
+      });
     };
 
     const playWhenVideoReady = (attempt = 0) => {
@@ -4828,7 +4830,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
     if (candidates.length === 0) return;
 
-    await waitForBackgroundSlot();
+    await waitForUploadSlot();
 
     guidePrefetchInFlightRef.current = true;
     let updated = 0;
@@ -5510,20 +5512,26 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             showVisibilityControls={isPlaylistManagerPage}
             showFavoriteControls={isLiveContentPage || isContentIconsView}
             showAsIcons={isContentIconsView}
+            showRowLogos={isLiveTvView}
             batchSize={
-              (isLiveTvView || isSeriesPage || isMainMoviesScreen) && isContentIconsView
-                ? 25
-                : undefined
+              isLiveTvView
+                ? isCapacitorRuntime()
+                  ? 40
+                  : 80
+                : (isSeriesPage || isMainMoviesScreen) && isContentIconsView
+                  ? 25
+                  : undefined
             }
             suppressLogos={false}
             autoLoadOnScroll={
-              ((isLiveTvView || isSeriesPage || isMainMoviesScreen) && isContentIconsView)
+              isLiveTvView ||
+              ((isSeriesPage || isMainMoviesScreen) && isContentIconsView)
             }
             listClassName={
-              isSeriesPage && isContentIconsView
-                ? "channel-list-series-grid"
-                : isLiveTvView && isContentIconsView
-                  ? "channel-list-live-grid"
+              isLiveTvView
+                ? "channel-list-live-rows"
+                : isSeriesPage && isContentIconsView
+                  ? "channel-list-series-grid"
                   : isMainMoviesScreen && isContentIconsView
                     ? "channel-list-movies-grid"
                     : ""
