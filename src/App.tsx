@@ -5458,6 +5458,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
                   showVisibilityControls={isPlaylistManagerPage}
                   showFavoriteControls={false}
                   showAsIcons={false}
+                  showRowLogos={contentMode === "tv"}
                   batchSize={
                     isCapacitorRuntime() ? 40 : undefined
                   }
@@ -5511,8 +5512,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
             onToggleFavorite={toggleFavoriteChannel}
             showVisibilityControls={isPlaylistManagerPage}
             showFavoriteControls={isLiveContentPage || isContentIconsView}
-            showAsIcons={isContentIconsView && !isLiveTvView}
-            showRowLogos={isLiveTvView}
+            showAsIcons={isContentIconsView && !isLiveTvView && !isLiveContentPage}
+            showRowLogos={isLiveTvView || isLiveContentPage}
             batchSize={
               isLiveTvView
                 ? isCapacitorRuntime()
@@ -5528,8 +5529,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
               ((isSeriesPage || isMainMoviesScreen) && isContentIconsView)
             }
             listClassName={
-              isLiveTvView
-                ? "channel-list-live-rows"
+              isLiveTvView || isLiveContentPage
+                ? "channel-list-live-rows channel-list-live-grid"
                 : isSeriesPage && isContentIconsView
                   ? "channel-list-series-grid"
                   : isMainMoviesScreen && isContentIconsView

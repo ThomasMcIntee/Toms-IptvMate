@@ -226,7 +226,9 @@ export function ChannelList({
   listClassName = "",
   restoreChannelId = null
 }: Props) {
-  const useIconGrid = showAsIcons && !listClassName.includes("channel-list-live-rows");
+  const isLiveListLayout =
+    listClassName.includes("channel-list-live-rows") || listClassName.includes("channel-list-live-grid");
+  const useIconGrid = showAsIcons && !isLiveListLayout;
   const effectiveBatchSize = Math.max(1, batchSize ?? (useIconGrid ? 180 : 250));
   const [visibleCount, setVisibleCount] = useState(effectiveBatchSize);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -339,7 +341,7 @@ export function ChannelList({
           showFavoriteControls={showFavoriteControls}
           showAsIcons={useIconGrid}
           suppressLogos={suppressLogos}
-          showRowLogos={showRowLogos || (!useIconGrid && listClassName.includes("channel-list-live-rows"))}
+          showRowLogos={showRowLogos || (!useIconGrid && isLiveListLayout)}
         />
       ))}
 

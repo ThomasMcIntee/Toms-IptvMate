@@ -2103,17 +2103,20 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
 }
 
 .channel-list.channel-list-icons.channel-list-live-grid {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  grid-template-columns: none !important;
+  grid-auto-rows: auto !important;
+  align-content: stretch;
   left: 360px;
   right: calc(var(--live-preview-width) + var(--live-preview-right) + 16px);
   top: 8px;
   bottom: 8px;
   width: auto;
   max-width: none;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  grid-auto-rows: calc((100% - 32px) / 5);
-  gap: 8px;
-  padding: 8px;
-  align-content: unset;
+  gap: 0;
+  padding: 8px 10px;
   z-index: 6;
 }
 
@@ -2147,27 +2150,38 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
 .channel-list-series-grid .channel-icon-wrap,
 .channel-list-series-grid .channel-icon-btn,
 .channel-list-movies-grid .channel-icon-wrap,
-.channel-list-movies-grid .channel-icon-btn,
-.channel-list-live-grid .channel-icon-wrap,
-.channel-list-live-grid .channel-icon-btn {
+.channel-list-movies-grid .channel-icon-btn {
   height: 100%;
 }
 
 .channel-list-series-grid .channel-icon-btn,
-.channel-list-movies-grid .channel-icon-btn,
-.channel-list-live-grid .channel-icon-btn {
+.channel-list-movies-grid .channel-icon-btn {
   display: flex;
   flex-direction: column;
   padding: 4px;
   border-radius: 8px;
 }
 
+.channel-list-live-grid .channel-item,
+.channel-list-live-grid .channel-icon-wrap,
+.channel-list-live-grid .channel-icon-btn {
+  width: 100%;
+  height: auto;
+}
+
+.channel-list-live-grid .channel-icon-btn {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
 .channel-list-series-grid .channel-icon-image,
 .channel-list-series-grid .channel-icon-fallback,
 .channel-list-movies-grid .channel-icon-image,
-.channel-list-movies-grid .channel-icon-fallback,
-.channel-list-live-grid .channel-icon-image,
-.channel-list-live-grid .channel-icon-fallback {
+.channel-list-movies-grid .channel-icon-fallback {
   flex: 1;
   min-height: 0;
   aspect-ratio: auto;
@@ -2176,13 +2190,18 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
 
 .channel-list-live-grid .channel-icon-image,
 .channel-list-live-grid .channel-icon-fallback {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  aspect-ratio: 1;
+  border-radius: 6px;
   object-fit: contain;
   background: rgba(255, 255, 255, 0.08);
 }
 
 .channel-list-series-grid .channel-icon-label,
-.channel-list-movies-grid .channel-icon-label,
-.channel-list-live-grid .channel-icon-label {
+.channel-list-movies-grid .channel-icon-label {
   margin-top: 4px;
   font-size: clamp(0.6rem, 1.1vmin, 0.75rem);
   white-space: normal;
@@ -2193,30 +2212,55 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   -webkit-box-orient: vertical;
 }
 
+.channel-list-live-grid .channel-icon-label {
+  display: block;
+  margin-top: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 1rem;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+}
+
 body.is-capacitor .channel-list.channel-list-live-rows,
 body.is-capacitor .channel-list.channel-list-icons.channel-list-live-grid {
   left: 280px;
 }
 
 body.is-capacitor .channel-list.channel-list-icons.channel-list-movies-grid,
-body.is-capacitor .channel-list.channel-list-icons.channel-list-series-grid,
-body.is-capacitor .channel-list.channel-list-icons.channel-list-live-grid {
+body.is-capacitor .channel-list.channel-list-icons.channel-list-series-grid {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   grid-auto-rows: calc((100% - 32px) / 5);
   gap: 8px;
 }
 
+body.is-capacitor .channel-list.channel-list-icons.channel-list-live-grid {
+  grid-template-columns: none !important;
+  grid-auto-rows: auto !important;
+}
+
 body.is-capacitor .channel-list-series-grid .channel-icon-btn,
-body.is-capacitor .channel-list-movies-grid .channel-icon-btn,
-body.is-capacitor .channel-list-live-grid .channel-icon-btn {
+body.is-capacitor .channel-list-movies-grid .channel-icon-btn {
   padding: 4px;
 }
 
+body.is-capacitor .channel-list-live-grid .channel-icon-btn {
+  padding: 10px 12px;
+}
+
 body.is-capacitor .channel-list-series-grid .channel-icon-label,
-body.is-capacitor .channel-list-movies-grid .channel-icon-label,
-body.is-capacitor .channel-list-live-grid .channel-icon-label {
+body.is-capacitor .channel-list-movies-grid .channel-icon-label {
   margin-top: 4px;
   font-size: clamp(0.6rem, 1.1vmin, 0.75rem);
+}
+
+body.is-capacitor .channel-list-live-grid .channel-icon-label {
+  margin-top: 0;
+  font-size: 1.125rem;
 }
 
 body.is-capacitor .opening-quick-actions {
