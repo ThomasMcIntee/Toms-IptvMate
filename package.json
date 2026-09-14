@@ -1,6 +1,6 @@
 {
   "name": "toms-iptvmate",
-  "version": "1.6.4",
+  "version": "1.7.5",
   "main": "electron/main.cjs",
   "files": [
     "dist",
@@ -27,24 +27,24 @@
     "postinstall": "node scripts/fix-webos-cli-rimraf.cjs"
   },
   "dependencies": {
-    "@capacitor/android": "^8.5.1",
-    "@capacitor/core": "^8.5.1",
-    "@capacitor/ios": "^8.5.1",
-    "hls.js": "^1.7.2",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "shaka-player": "^5.2.9"
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/ios": "^8.5.2",
+    "hls.js": "^1.7.3",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "shaka-player": "^5.2.10"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.4.3",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.7",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "@webos-tools/cli": "^3.2.6",
     "electron": "^44.3.0",
     "electron-builder": "^26.16.1",
     "typescript": "^7.0.2",
-    "vite": "^8.2.2",
+    "vite": "^8.3.0",
     "webpack-cli": "^7.2.3"
   },
   "overrides": {

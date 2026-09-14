@@ -6,6 +6,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebView;
@@ -50,6 +51,7 @@ public class ExoPlayerManager {
     private ImageButton fullscreenButton;
     private TextView timeView;
     private TextView titleView;
+    private TextView liveBadge;
     private Runnable controlsTicker;
     private Runnable hideControlsRunnable;
     private boolean controlsRevealed = true;
@@ -191,6 +193,44 @@ public class ExoPlayerManager {
 
     public void revealControls() {
         runOnMain(this::revealControlsOnMain);
+    }
+
+    public boolean shouldKeepRemoteOnControls() {
+        if (!isPlayingNative || overlay == null || overlay.getVisibility() != View.VISIBLE) {
+            return false;
+        }
+        return !playIsLive || overlayLooksFullscreen;
+    }
+
+    /**
+     * Fullscreen native video (movies/series, or live fullscreen): D-pad belongs
+     * on the native control bar, not the WebView behind the overlay.
+     */
+    public boolean consumeFullscreenRemote(KeyEvent event) {
+        if (!shouldKeepRemoteOnControls()) return false;
+        int code = event.getKeyCode();
+        if (code != KeyEvent.KEYCODE_DPAD_UP
+            && code != KeyEvent.KEYCODE_DPAD_DOWN
+            && code != KeyEvent.KEYCODE_DPAD_LEFT
+            && code != KeyEvent.KEYCODE_DPAD_RIGHT
+            && code != KeyEvent.KEYCODE_DPAD_CENTER
+            && code != KeyEvent.KEYCODE_ENTER) {
+            return false;
+        }
+
+        if (event.getAction() != KeyEvent.ACTION_DOWN) {
+            return !controlsHaveFocus();
+        }
+
+        revealControlsOnMain();
+        if (controlsHaveFocus()) {
+            return false;
+        }
+        View target = playButton != null ? playButton : (muteButton != null ? muteButton : controlsBar);
+        if (target != null) {
+            target.post(target::requestFocus);
+        }
+        return true;
     }
 
     private void playBound(String url, boolean isLive) {
@@ -487,6 +527,7 @@ public class ExoPlayerManager {
         fullscreenButton = overlay.findViewById(R.id.native_exo_fullscreen);
         timeView = overlay.findViewById(R.id.native_exo_time);
         titleView = overlay.findViewById(R.id.native_exo_title);
+        liveBadge = overlay.findViewById(R.id.native_exo_live);
 
         if (playButton != null) {
             playButton.setOnClickListener(v -> {
@@ -553,18 +594,31 @@ public class ExoPlayerManager {
             );
         }
 
+        if (liveBadge != null) {
+            liveBadge.setVisibility(playIsLive ? View.VISIBLE : View.GONE);
+        }
+
         long now = System.currentTimeMillis();
-        boolean hasGuide = guideEndMs > guideStartMs && guideEndMs > now - 60_000;
+        boolean hasGuide = playIsLive && guideEndMs > guideStartMs && guideEndMs > now - 60_000;
         int progress = 0;
-        if (hasGuide) {
+        String timeLabel = playIsLive ? "Live" : "0:00 / --:--";
+        if (!playIsLive) {
+            long duration = playerController.getDurationMs();
+            long position = playerController.getPositionMs();
+            if (duration > 0) {
+                progress = (int) Math.max(0, Math.min(1000, (position * 1000L) / duration));
+            }
+            timeLabel = formatClock(position) + " / " + (duration > 0 ? formatClock(duration) : "--:--");
+        } else if (hasGuide) {
             long span = Math.max(1, guideEndMs - guideStartMs);
             progress = (int) Math.max(0, Math.min(1000, ((now - guideStartMs) * 1000L) / span));
+            timeLabel = formatGuideRange(guideStartMs, guideEndMs);
         }
         if (progressBar != null) {
             progressBar.setProgress(progress);
         }
         if (timeView != null) {
-            timeView.setText(hasGuide ? formatGuideRange(guideStartMs, guideEndMs) : "Live");
+            timeView.setText(timeLabel);
         }
         if (titleView != null) {
             titleView.setText(guideTitle);
@@ -655,6 +709,21 @@ public class ExoPlayerManager {
             }
         });
         focusListenerAttached = true;
+    }
+
+    private String formatClock(long milliseconds) {
+        long total = Math.max(0, milliseconds / 1000);
+        long hours = total / 3600;
+        long minutes = (total % 3600) / 60;
+        long seconds = total % 60;
+        if (hours > 0) {
+            return hours + ":" + pad2(minutes) + ":" + pad2(seconds);
+        }
+        return minutes + ":" + pad2(seconds);
+    }
+
+    private static String pad2(long value) {
+        return value < 10 ? "0" + value : String.valueOf(value);
     }
 
     private String formatGuideRange(long startMs, long endMs) {

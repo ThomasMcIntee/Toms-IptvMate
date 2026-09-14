@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { isChannelVisible, isGroupVisible } from "../core/channelStore";
 import { getEPGForChannel } from "../core/epgStore";
+import { normalizeRemoteNavKey } from "../core/remoteKeys";
 import EPGPreviewPlayer from "./EPGPreviewPlayer";
 import { formatEpgTime } from "../core/epgTime";
 
@@ -29,13 +30,14 @@ export default function EPGTimelinePanel({ visible, channels }: { visible: boole
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (!visible || visibleChannels.length === 0) return;
+      const key = normalizeRemoteNavKey(e);
 
-      if (e.key === "ArrowUp") {
+      if (key === "ArrowUp") {
         const idx = visibleChannels.findIndex((c) => c.id === previewChannel?.id);
         if (idx > 0) setPreviewChannel(visibleChannels[idx - 1]);
       }
 
-      if (e.key === "ArrowDown") {
+      if (key === "ArrowDown") {
         const idx = visibleChannels.findIndex((c) => c.id === previewChannel?.id);
         if (idx < visibleChannels.length - 1) setPreviewChannel(visibleChannels[idx + 1]);
       }

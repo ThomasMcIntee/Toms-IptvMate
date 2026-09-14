@@ -9,6 +9,7 @@ import { useProfile } from "./profiles/ProfileContext";
 import { initNavigation } from "./core/navigation";
 import { activateFocusedRemoteControl, beginComposerTextEdit, normalizeRemoteMediaKey, normalizeRemoteNavKey, resetComposerTextEditGuard } from "./core/remoteKeys";
 import { initPlayerEngine, playUrl, stopPlayback } from "./core/playerEngine";
+import { formatChildLoginWindows, isChildLoginAllowedNow } from "./core/childLoginSchedule";
 import {
   isNativePlayerAvailable,
   isNativePlaybackMuted,
@@ -94,7 +95,15 @@ import MainMenuScreen from "./ui/MainMenuScreen";
 import { loadChannelsForPlaylist } from "./core/loaders/playlistLoader";
 import { loadXtream, loadXtreamSeriesBundleFromChannel, loadXtreamSeriesEpisodesFromChannel, loadXtreamVodInfoFromChannel, type XtreamSeriesInfo, type XtreamVodInfo } from "./core/loaders/xtreamLoader";
 import { loadXtreamEPGForStream } from "./core/loaders/xtreamEPG";
-import { getBackgroundConcurrency, waitForPlaybackSlot, waitForUploadSlot, yieldToMain } from "./core/taskScheduler";
+import { isAudioLanguagePickerOpen, setAudioLanguagePickerOpen } from "./core/audioTracks";
+import { getBackgroundConcurrency, waitForUploadSlot, yieldToMain } from "./core/taskScheduler";
+import {
+  markEpgRefreshed,
+  setEpgRefreshBlocked,
+  setVodRefreshBlockedScope,
+  startCapacitorVodBackgroundRefresh,
+  startEpgBackgroundRefresh
+} from "./core/vodBackgroundRefresh";
 import SeriesEpisodePicker from "./ui/SeriesEpisodePicker";
 import SeriesDetailsScreen from "./ui/SeriesDetailsScreen";
 import MovieDetailsScreen from "./ui/MovieDetailsScreen";
@@ -328,17 +337,18 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   const isEpgSearchPanelOpen = activePanel === "epgSearch";
   const isContentIconsView = (isMoviesPage || isSeriesPage) && !isLiveTvView;
   const isPlaylistInputPanelOpen = activePanel === "playlist";
+  const isHelpPanelOpen = activePanel === "help";
   const isMovieOrSeriesSelected =
     !!currentChannel &&
     (matchesContentMode(currentChannel, "movies") || matchesContentMode(currentChannel, "series"));
-  const isVodPlaybackFullscreen =
-    !showOpeningScreen &&
-    isMovieOrSeriesSelected &&
-    (isMoviesPage || isSeriesPage || isPlaylistManagerMoviesMode || isPlaylistManagerSeriesMode);
   const showContentPreviewWindow =
     !showOpeningScreen &&
     isMovieOrSeriesSelected &&
     (isPlaylistManagerMoviesMode || isPlaylistManagerSeriesMode);
+  const isVodPlaybackFullscreen =
+    !showOpeningScreen &&
+    isMovieOrSeriesSelected &&
+    !showContentPreviewWindow;
   const isEffectiveLiveFullscreen =
     contentPage === "live" && (isFullscreenActive || isLiveFullscreenRequested);
   const isLivePreviewFullscreen =
@@ -457,6 +467,36 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, []);
 
   useEffect(() => {
+    const stopVod = startCapacitorVodBackgroundRefresh();
+    const stopEpg = startEpgBackgroundRefresh();
+    return () => {
+      stopVod();
+      stopEpg();
+    };
+  }, []);
+
+  useEffect(() => {
+    const guideOpen = !showOpeningScreen && (activePanel === "epgSearch" || activePanel === "timeline");
+    setEpgRefreshBlocked(guideOpen);
+  }, [showOpeningScreen, activePanel]);
+
+  useEffect(() => {
+    if (showOpeningScreen) {
+      setVodRefreshBlockedScope(null);
+      return;
+    }
+    if (contentPage === "movies" || contentMode === "movies") {
+      setVodRefreshBlockedScope("movies");
+      return;
+    }
+    if (contentPage === "series" || contentMode === "series") {
+      setVodRefreshBlockedScope("series");
+      return;
+    }
+    setVodRefreshBlockedScope(null);
+  }, [showOpeningScreen, contentPage, contentMode]);
+
+  useEffect(() => {
     const handleFavoritesChanged = () => {
       setFavoritesRefreshTick((tick) => tick + 1);
     };
@@ -496,6 +536,35 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     accessLevelRef.current = accessLevel;
     // Any role/login change invalidates pending generic auto-load requests.
     autoLoadTokenRef.current += 1;
+  }, [accessLevel]);
+
+  useEffect(() => {
+    if (accessLevel !== "child") return;
+
+    const endChildSession = () => {
+      autoLoadTokenRef.current += 1;
+      stopPlayback();
+      setCurrentChannel(null);
+      setAccessLevel(null);
+      setActivePanel(null);
+      setShowOpeningScreen(false);
+      setLoginError(`Child hours have ended. ${formatChildLoginWindows()}.`);
+    };
+
+    const checkChildHours = () => {
+      if (accessLevelRef.current !== "child") return;
+      if (!isChildLoginAllowedNow()) endChildSession();
+    };
+
+    checkChildHours();
+    const intervalId = window.setInterval(checkChildHours, 15000);
+    window.addEventListener("focus", checkChildHours);
+    document.addEventListener("visibilitychange", checkChildHours);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", checkChildHours);
+      document.removeEventListener("visibilitychange", checkChildHours);
+    };
   }, [accessLevel]);
 
   useEffect(() => {
@@ -998,7 +1067,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
   function exitVodPlayback() {
     captureVodProgress();
-    const playing = currentChannelRef.current;
+    const playing = currentChannelRef.current || currentChannel;
     const playingSeriesEpisode =
       !!playing &&
       String(playing.contentType || "").toLowerCase() === "series" &&
@@ -1007,7 +1076,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     const returnToMovieDetails =
       !!playing && matchesContentMode(playing, "movies") && !!movieDetailsChannel;
 
+    exitAnyFullscreen();
     stopPlayback();
+    currentChannelRef.current = null;
     setCurrentChannel(null);
     setPlayerError(null);
     setPlayerStatus(null);
@@ -1271,6 +1342,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       }
 
       setActivePanel(panel);
+      setShowOpeningScreen(false);
     });
   }, []);
 
@@ -1516,6 +1588,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     }
 
     if (childCode && normalized === childCode) {
+      if (!isChildLoginAllowedNow()) {
+        setLoginError(`Child login is not allowed now. ${formatChildLoginWindows()}.`);
+        return;
+      }
       autoLoadTokenRef.current += 1;
       setAccessLevel("child");
       setLoginError(null);
@@ -1546,8 +1622,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   function canOpenPanelWithSecurity(panel: string | null) {
     if (panel === null) return true;
 
-    // TV Guide is always available regardless of login.
-    if (panel === "epgSearch" || panel === "timeline") return true;
+    // TV Guide and Help are always available regardless of login.
+    if (panel === "epgSearch" || panel === "timeline" || panel === "help") return true;
 
     const { loginRequired } = readSetupSecurity();
     if (!loginRequired) return true;
@@ -1790,21 +1866,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, [showOpeningScreen, activePanel]);
 
   useEffect(() => {
-    const dispatchRefresh = () => {
-      const event = new CustomEvent("refreshEPG");
-      window.dispatchEvent(event);
-    };
-
-    // Keep opening-screen startup local; refresh guide data on the interval or
-    // when a content screen explicitly requests it.
-    const interval = setInterval(() => {
-      if (!showOpeningScreen) dispatchRefresh();
-    }, 3 * 60 * 60 * 1000);
-
-    return () => clearInterval(interval);
-  }, [showOpeningScreen]);
-
-  useEffect(() => {
     // Adult/child login restores that profile's saved hide/show. Master and
     // no-login keep the live map so opening is instant like Smarters Pro.
     if (accessLevel === "child") {
@@ -1971,7 +2032,11 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     };
 
     window.addEventListener("visibilityChanged", handler);
-    return () => window.removeEventListener("visibilityChanged", handler);
+    window.addEventListener("favoritesChanged", handler);
+    return () => {
+      window.removeEventListener("visibilityChanged", handler);
+      window.removeEventListener("favoritesChanged", handler);
+    };
   }, []);
 
   useEffect(() => {
@@ -1981,14 +2046,17 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
       void (async () => {
         await waitForUploadSlot();
+        let anyOk = false;
         for (const playlist of playlists) {
           try {
             await loadEPGForPlaylist(playlist, { forceRefresh: true });
+            anyOk = true;
           } catch {
             // Keep refresh resilient if guide endpoints are temporarily unavailable.
           }
           await waitForUploadSlot();
         }
+        if (anyOk) markEpgRefreshed();
       })();
     };
 
@@ -2301,8 +2369,31 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       lastBackHandledAtRef.current = now;
       
       // Handle Back navigation
+      if (isAudioLanguagePickerOpen() || document.querySelector(".vod-language-panel")) {
+        setAudioLanguagePickerOpen(false);
+        window.dispatchEvent(new Event("closeAudioLanguagePicker"));
+        return true;
+      }
+
       if (vodResumePrompt) {
         setVodResumePrompt(null);
+        return true;
+      }
+
+      const childHoursCancel = document.querySelector<HTMLButtonElement>(".child-hours-editor-cancel");
+      if (childHoursCancel || document.querySelector(".child-hours-editor-overlay")) {
+        childHoursCancel?.click();
+        return true;
+      }
+
+      const activePlayingChannel = currentChannelRef.current || currentChannel;
+      const isPlayingVod =
+        isVodPlaybackFullscreen ||
+        (!!activePlayingChannel && (matchesContentMode(activePlayingChannel, "movies") || matchesContentMode(activePlayingChannel, "series"))) ||
+        !!document.querySelector(".vod-playback-shell");
+
+      if (isPlayingVod) {
+        exitVodPlayback();
         return true;
       }
 
@@ -2336,11 +2427,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return true;
       }
 
-      if (isVodPlaybackFullscreen) {
-        exitVodPlayback();
-        return true;
-      }
-
       if (contentPage === "live" && isEffectiveLiveFullscreen) {
         setIsLiveFullscreenRequested(false);
         setShowLiveMenu(true);
@@ -2367,7 +2453,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       if (activePanel) {
         if (activePanel === "recordingPlayback" || activePanel === "recordingStorage") {
           setActivePanel("recordings");
-        } else if (activePanel === "playlist" && contentPage === "playlistManager") {
+        } else if ((activePanel === "playlist" || activePanel === "help") && contentPage === "playlistManager") {
           setActivePanel(null);
         } else {
           setActivePanel(null);
@@ -2463,15 +2549,20 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       if (document.querySelector(".series-search-composer") || isRemoteTextComposerOpen()) return;
 
       const navKey = normalizeRemoteNavKey(e);
-      if (navKey === "Enter" && isFavoriteFocusTarget(document.activeElement)) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!e.repeat) activateFocusedRemoteControl(document.activeElement);
-        return;
+      if (!isMovieDetailsVisible && !isSeriesDetailsVisible && !isSeriesPickerVisible) {
+        if (navKey === "Enter" && isFavoriteFocusTarget(document.activeElement)) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!e.repeat) activateFocusedRemoteControl(document.activeElement);
+          return;
+        }
       }
 
+      const overlayStealsRemote = !!document.querySelector(
+        ".recording-setup-overlay, .epg-search-screen, .child-hours-editor-overlay, .help-screen"
+      );
       const mediaKey = normalizeRemoteMediaKey(e);
-      if (mediaKey && currentChannel) {
+      if (mediaKey && currentChannel && !overlayStealsRemote) {
         e.preventDefault();
         e.stopPropagation();
         window.dispatchEvent(new Event("playerRevealControls"));
@@ -2491,16 +2582,30 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
       if (isVodPlaybackFullscreen) {
         window.dispatchEvent(new Event("playerRevealControls"));
-        const barButtons = Array.from(
-          document.querySelectorAll<HTMLButtonElement>(".vod-playback-shell .player-control-bar-btn")
-        ).filter((btn) => btn.tabIndex !== -1);
-        const activeBtn = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
-        const barIndex = activeBtn ? barButtons.indexOf(activeBtn) : -1;
+        revealNativePlayerControls();
+        const focusVodBar = () => {
+          const bar = document.querySelector(".vod-playback-shell .player-control-bar");
+          if (bar instanceof HTMLElement) {
+            bar.classList.remove("player-control-bar-hidden");
+            bar.removeAttribute("inert");
+            bar.querySelectorAll<HTMLButtonElement>(".player-control-bar-btn").forEach((btn) => {
+              btn.tabIndex = 0;
+            });
+          }
+          const barButtons = Array.from(
+            document.querySelectorAll<HTMLButtonElement>(".vod-playback-shell .player-control-bar-btn")
+          ).filter((btn) => btn.tabIndex !== -1);
+          const activeBtn = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
+          const barIndex = activeBtn ? barButtons.indexOf(activeBtn) : -1;
+          return { barButtons, activeBtn, barIndex };
+        };
         if (navKey === "ArrowDown" || navKey === "ArrowUp") {
           e.preventDefault();
+          const { barButtons } = focusVodBar();
           (barButtons[0] || null)?.focus();
           return;
         }
+        const { barButtons, activeBtn, barIndex } = focusVodBar();
         if (barIndex >= 0 && navKey === "ArrowLeft") {
           e.preventDefault();
           barButtons[Math.max(0, barIndex - 1)]?.focus();
@@ -2534,6 +2639,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
       if (
         currentChannel &&
+        !overlayStealsRemote &&
         (e.key === " " ||
           e.key === "Enter" ||
           e.key === "Select" ||
@@ -2547,6 +2653,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         revealNativePlayerControls();
         window.dispatchEvent(new Event("playerRevealControls"));
       }
+
+      if (overlayStealsRemote) return;
 
       if (e.key === "f" || e.key === "F") {
         e.preventDefault();
@@ -2572,7 +2680,26 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       document.removeEventListener("keyboardStateChange", onKeyboardStateChange);
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [activePanel, isVodPlaybackFullscreen, currentChannel, isSeriesPickerVisible, isSeriesDetailsVisible, isMovieDetailsVisible, vodResumePrompt, contentPage, isEffectiveLiveFullscreen, showOpeningScreen, hasPlaylists, seriesPickerSourceChannel, seriesDetailsChannel, movieDetailsChannel]);
+  }, [
+    activePanel,
+    isVodPlaybackFullscreen,
+    currentChannel,
+    isSeriesPickerVisible,
+    isSeriesDetailsVisible,
+    isMovieDetailsVisible,
+    vodResumePrompt,
+    contentPage,
+    isEffectiveLiveFullscreen,
+    showOpeningScreen,
+    hasPlaylists,
+    seriesPickerSourceChannel,
+    seriesDetailsChannel,
+    movieDetailsChannel,
+    isSeriesSearchComposerOpen,
+    isMoviesSearchComposerOpen,
+    seriesMainSearchDebouncedTerm,
+    moviesMainSearchTerm
+  ]);
 
   useEffect(() => {
     const onNativeCommand = (event: Event) => {
@@ -3382,9 +3509,27 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         const editingCard = editForm.closest(".playlist-card");
         const inForm = !!active && editForm.contains(active);
         const inEditingCard = !!active && !!editingCard?.contains(active);
+        const inLists = !!active?.closest(".channel-list, .group-list, .playlist-manager-actions, .playlist-manager-parental-actions");
         const formStops = Array.from(
           editForm.querySelectorAll<HTMLElement>("button, input.playlist-edit-field")
         ).filter((el) => !(el as HTMLButtonElement).disabled && el.offsetParent !== null);
+        const lostAfterIme =
+          formStops.length > 0 &&
+          !inForm &&
+          !inEditingCard &&
+          !inLists &&
+          (!active ||
+            active === document.body ||
+            active === document.documentElement ||
+            !active.closest(".playlist-manager, .side-panel"));
+        if (lostAfterIme) {
+          const resume =
+            editForm.querySelector<HTMLButtonElement>(".password-toggle-btn") ||
+            editForm.querySelector<HTMLButtonElement>(".playlist-edit-form-buttons .btn-primary") ||
+            formStops[Math.max(0, formStops.length - 2)];
+          moveTo(resume);
+          return;
+        }
         if ((inForm || inEditingCard) && formStops.length > 0) {
           if (isTextEntryTarget(active) && (key === "ArrowLeft" || key === "ArrowRight")) {
             return;
@@ -4035,9 +4180,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     }
 
     const play = () => {
-      void waitForPlaybackSlot().then(() => {
-        playUrl(requestUrl, false, false, 0, false, false, false, requestedContentType as "live" | "movie" | "series");
-      });
+      playUrl(requestUrl, false, false, 0, false, false, false, requestedContentType as "live" | "movie" | "series");
     };
 
     const playWhenVideoReady = (attempt = 0) => {
@@ -4399,8 +4542,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       if (latestChannels.length === 0) {
         const playlists = loadPlaylists();
         if (playlists.length === 0) {
-          setActivePanel("playlist");
-          setShowOpeningScreen(false);
+          sendToPlaylistManager("Add a playlist, then choose Load.");
           return;
         }
 
@@ -5126,7 +5268,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
 
       )}
-      {forceLivePreviewLayout && !isPlaylistInputPanelOpen && (
+      {forceLivePreviewLayout && !isPlaylistInputPanelOpen && !isHelpPanelOpen && (
         <div className="live-preview-placeholder" aria-hidden="true">
           <div className="live-preview-placeholder-title">Live TV Preview</div>
           <div className="live-preview-placeholder-subtitle">Select a channel to start playback</div>
@@ -5192,8 +5334,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       {!shouldShowOpeningMenu && (!isLiveChannelPlaying || showLiveMenu) && (
         <div
           className="vod-browse-layer"
-          hidden={isVodPlaybackFullscreen || isMovieDetailsVisible || isSeriesDetailsVisible}
-          aria-hidden={isVodPlaybackFullscreen || isMovieDetailsVisible || isSeriesDetailsVisible}
+          hidden={isVodPlaybackFullscreen || isMovieDetailsVisible || isSeriesDetailsVisible || isHelpPanelOpen}
+          aria-hidden={isVodPlaybackFullscreen || isMovieDetailsVisible || isSeriesDetailsVisible || isHelpPanelOpen}
         >
           {isLiveTvView && (
             <div className="series-main-search-bar">

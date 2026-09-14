@@ -162,6 +162,32 @@ public class NativeExoPlayerController {
         return muted;
     }
 
+    public long getDurationMs() {
+        if (exoPlayer == null) return 0;
+        long duration = exoPlayer.getDuration();
+        return duration < 0 ? 0 : duration;
+    }
+
+    public long getPositionMs() {
+        if (exoPlayer == null) return 0;
+        long position = exoPlayer.getCurrentPosition();
+        return position < 0 ? 0 : position;
+    }
+
+    public void seekByMs(long deltaMs) {
+        runOnMain(() -> {
+            if (exoPlayer == null || isLiveContent) return;
+            long duration = getDurationMs();
+            long next = getPositionMs() + deltaMs;
+            if (duration > 0) {
+                next = Math.max(0, Math.min(duration - 250, next));
+            } else {
+                next = Math.max(0, next);
+            }
+            exoPlayer.seekTo(next);
+        });
+    }
+
     public void stop() {
         runOnMain(() -> {
             Log.i(TAG, "stopPlayback");

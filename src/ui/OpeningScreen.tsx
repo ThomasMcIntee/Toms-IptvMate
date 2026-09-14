@@ -5,7 +5,7 @@ type Props = {
 };
 
 const menuItems = [
-  { label: "Add Playlist", panel: "playlist" },
+  { label: "Help", panel: "help" },
   { label: "Playlist Manager", panel: "playlistManager" },
   { label: "TV Guide Search", panel: "epgSearch" },
   { label: "Setup", panel: "recordings" },

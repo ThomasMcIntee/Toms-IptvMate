@@ -11,6 +11,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 const RELAY_PATH = "/__stream";
 const PING_PATH = "/__iptv_ping";
 const TRANSCODE_PATH = "/__transcode";
+const AUDIO_TRACKS_PATH = "/__audio-tracks";
 const REDIRECT_LIMIT = 5;
 const CURRENT_TRANSCODE_PROFILE = "mpegts-v18";
 const TRANSCODE_MANIFEST_WAIT_MS = 60000;
@@ -18,6 +19,15 @@ const TRANSCODE_INIT_WAIT_MS = 60000;
 const TRANSCODE_SEGMENT_WAIT_MS = 30000;
 
 type AudioMode = "standard" | "compat" | "safe";
+
+type SourceAudioTrackInfo = {
+  order: number;
+  language: string;
+  title: string;
+  codec: string;
+  channels: number | null;
+  default: boolean;
+};
 
 type SourceProbeInfo = {
   preferredAudioStreamIndex: number | null;
@@ -27,6 +37,7 @@ type SourceProbeInfo = {
   audioCodecName: string | null;
   audioSampleRate: number | null;
   audioChannels: number | null;
+  audioTracks: SourceAudioTrackInfo[];
 };
 
 type TranscodeSession = {
@@ -40,6 +51,7 @@ type TranscodeSession = {
   audioEnabled: boolean;
   audioMode: AudioMode;
   selectedAudioStreamOrder: number | null;
+  startSeconds: number | null;
   audioPipeline: "aac-transcode" | "aac-copy" | "mp3-transcode" | null;
   webosClient: boolean;
   profile: string;
@@ -58,6 +70,7 @@ type TranscodeSession = {
 
 const transcodeSessions = new Map<string, TranscodeSession>();
 const sourceProbeCache = new Map<string, SourceProbeInfo>();
+const sourceAudioTrackCache = new Map<string, SourceAudioTrackInfo[]>();
 const movieVariantCache = new Map<string, string>();
 const TRANSCODE_STALE_SESSION_MS = 60_000;
 const TRANSCODE_RESPAWN_COOLDOWN_MS = 2500;
@@ -89,14 +102,16 @@ function getTranscodeSessionId(
   audioEnabled: boolean,
   audioMode: AudioMode,
   selectedAudioStreamOrder: number | null,
-  webosClient = false
+  webosClient = false,
+  startSeconds: number | null = null
 ): string {
   const avLabel = audioEnabled ? "av" : "video-only";
   const audioStreamLabel = audioEnabled && selectedAudioStreamOrder !== null ? `aidx:${selectedAudioStreamOrder}` : "aidx:auto";
+  const startLabel = startSeconds && startSeconds > 0 ? `ss:${Math.floor(startSeconds)}` : "ss:0";
   const clientLabel = webosClient ? "webos-copy" : "std";
   return crypto
     .createHash("sha1")
-    .update(`${CURRENT_TRANSCODE_PROFILE}|${avLabel}|${audioEnabled ? audioMode : "na"}|${audioStreamLabel}|${clientLabel}|${sourceUrl}`)
+    .update(`${CURRENT_TRANSCODE_PROFILE}|${avLabel}|${audioEnabled ? audioMode : "na"}|${audioStreamLabel}|${startLabel}|${clientLabel}|${sourceUrl}`)
     .digest("hex")
     .slice(0, 16);
 }
@@ -176,7 +191,8 @@ function probeSourceStreamInfo(inputUrl: string): SourceProbeInfo {
       videoPixelFormat: null,
       audioCodecName: null,
       audioSampleRate: null,
-      audioChannels: null
+      audioChannels: null,
+      audioTracks: []
     };
   }
 
@@ -184,6 +200,14 @@ function probeSourceStreamInfo(inputUrl: string): SourceProbeInfo {
     const parsed = JSON.parse(probe.stdout) as { streams?: ProbedStream[] };
     const videoStream = (parsed.streams || []).find((stream) => stream.codec_type === "video");
     const audioStreams = (parsed.streams || []).filter((stream) => stream.codec_type === "audio");
+    const audioTracks = audioStreams.map((stream, order) => ({
+      order,
+      language: String(stream.tags?.language || ""),
+      title: String(stream.tags?.title || ""),
+      codec: String(stream.codec_name || ""),
+      channels: stream.channels || null,
+      default: !!stream.disposition?.default
+    }));
     if (!audioStreams.length) {
       return {
         preferredAudioStreamIndex: null,
@@ -192,7 +216,8 @@ function probeSourceStreamInfo(inputUrl: string): SourceProbeInfo {
         videoPixelFormat: (videoStream as { pix_fmt?: string } | undefined)?.pix_fmt || null,
         audioCodecName: null,
         audioSampleRate: null,
-        audioChannels: null
+        audioChannels: null,
+        audioTracks
       };
     }
 
@@ -229,7 +254,8 @@ function probeSourceStreamInfo(inputUrl: string): SourceProbeInfo {
       videoPixelFormat: (videoStream as { pix_fmt?: string } | undefined)?.pix_fmt || null,
       audioCodecName: preferredAudio?.codec_name || null,
       audioSampleRate: preferredAudio?.sample_rate ? Number(preferredAudio.sample_rate) || null : null,
-      audioChannels: preferredAudio?.channels || null
+      audioChannels: preferredAudio?.channels || null,
+      audioTracks
     };
   } catch {
     return {
@@ -239,9 +265,23 @@ function probeSourceStreamInfo(inputUrl: string): SourceProbeInfo {
       videoPixelFormat: null,
       audioCodecName: null,
       audioSampleRate: null,
-      audioChannels: null
+      audioChannels: null,
+      audioTracks: []
     };
   }
+}
+
+function emptyProbeInfo(): SourceProbeInfo {
+  return {
+    preferredAudioStreamIndex: null,
+    preferredAudioStreamOrder: null,
+    videoCodecName: null,
+    videoPixelFormat: null,
+    audioCodecName: null,
+    audioSampleRate: null,
+    audioChannels: null,
+    audioTracks: []
+  };
 }
 
 function getSourceProbeInfo(sourceUrl: string): SourceProbeInfo {
@@ -253,6 +293,66 @@ function getSourceProbeInfo(sourceUrl: string): SourceProbeInfo {
   const probed = probeSourceStreamInfo(sourceUrl);
   sourceProbeCache.set(sourceUrl, probed);
   return probed;
+}
+
+function listSourceAudioTracks(inputUrl: string): SourceAudioTrackInfo[] {
+  const cached = sourceAudioTrackCache.get(inputUrl);
+  if (cached) return cached;
+  const tracks = getSourceProbeInfo(inputUrl).audioTracks || [];
+  sourceAudioTrackCache.set(inputUrl, tracks);
+  return tracks;
+}
+
+function audioTracksMiddleware(req: http.IncomingMessage, res: http.ServerResponse, next: () => void) {
+  if (!req.url) {
+    next();
+    return;
+  }
+
+  const requestUrl = new URL(req.url, "http://localhost");
+  if (requestUrl.pathname !== AUDIO_TRACKS_PATH) {
+    next();
+    return;
+  }
+
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+  res.setHeader("Cache-Control", "no-store");
+
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+
+  const targetUrl = requestUrl.searchParams.get("url");
+  if (!targetUrl) {
+    res.statusCode = 400;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ tracks: [], error: "Missing url query parameter" }));
+    return;
+  }
+
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      res.statusCode = 400;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ tracks: [], error: "Only http(s) URLs are supported" }));
+      return;
+    }
+  } catch {
+    res.statusCode = 400;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ tracks: [], error: "Invalid target URL" }));
+    return;
+  }
+
+  const tracks = listSourceAudioTracks(targetUrl);
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify({ tracks }));
 }
 
 function ensureCleanSessionDir(dir: string) {
@@ -387,11 +487,17 @@ function startTranscoder(session: TranscodeSession) {
   const useFmp4Segments = session.audioEnabled && session.audioMode !== "safe" && !isLiveLikeSource && !useTsHls;
   const segmentPattern = path.join(session.dir, useFmp4Segments ? "seg_%06d.m4s" : "seg_%06d.ts");
 
+  const selectedSourceTrack =
+    typeof selectedAudioStreamOrder === "number"
+      ? (session.probeInfo.audioTracks || [])[selectedAudioStreamOrder]
+      : undefined;
+  const selectedAudioCodec = (selectedSourceTrack?.codec || session.probeInfo.audioCodecName || "").toLowerCase();
+  const selectedAudioChannels = selectedSourceTrack?.channels || session.probeInfo.audioChannels || 2;
   const shouldCopyAacAudio =
     session.audioEnabled &&
     session.audioMode !== "safe" &&
-    (session.probeInfo.audioCodecName || "").toLowerCase() === "aac" &&
-    (session.probeInfo.audioChannels || 2) <= 2;
+    selectedAudioCodec === "aac" &&
+    selectedAudioChannels <= 2;
   const shouldUseMp3Audio = session.audioEnabled && session.audioMode === "safe";
   session.audioPipeline = session.audioEnabled
     ? shouldUseMp3Audio
@@ -558,6 +664,9 @@ function startTranscoder(session: TranscodeSession) {
     "ignore_err",
     "-fflags",
     "+genpts+discardcorrupt",
+    ...(typeof session.startSeconds === "number" && session.startSeconds > 1
+      ? ["-ss", session.startSeconds.toFixed(3)]
+      : []),
     "-i",
     inputUrl,
     "-map",
@@ -723,11 +832,19 @@ function getOrCreateTranscodeSession(
   audioMode: AudioMode,
   selectedAudioStreamOrder: number | null,
   host: string | undefined,
-  webosClient = false
+  webosClient = false,
+  startSeconds: number | null = null
 ): TranscodeSession {
   sourceUrl = normalizeProblematicLiveSourceUrl(sourceUrl);
   const preferRelayInput = shouldPreferRelayInput(sourceUrl);
-  const id = getTranscodeSessionId(sourceUrl, audioEnabled, audioMode, selectedAudioStreamOrder, webosClient);
+  const id = getTranscodeSessionId(
+    sourceUrl,
+    audioEnabled,
+    audioMode,
+    selectedAudioStreamOrder,
+    webosClient,
+    startSeconds
+  );
   const existing = transcodeSessions.get(id);
   if (existing) {
     if (
@@ -782,6 +899,7 @@ function getOrCreateTranscodeSession(
     audioEnabled,
     audioMode,
     selectedAudioStreamOrder,
+    startSeconds,
     audioPipeline: null,
     webosClient,
     profile: CURRENT_TRANSCODE_PROFILE,
@@ -795,7 +913,7 @@ function getOrCreateTranscodeSession(
     nextSpawnAllowedAt: 0,
     spawnWindowStartAt: Date.now(),
     spawnWindowCount: 0,
-    probeInfo: getSourceProbeInfo(sourceUrl)
+    probeInfo: emptyProbeInfo()
   };
 
   transcodeSessions.set(id, session);
@@ -1221,6 +1339,11 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
       rawAudioStreamOrder !== null && /^\d+$/.test(rawAudioStreamOrder)
         ? Math.max(0, Math.min(7, Number(rawAudioStreamOrder)))
         : null;
+    const rawStartSeconds = requestUrl.searchParams.get("ss");
+    const startSeconds =
+      rawStartSeconds !== null && /^\d+(?:\.\d+)?$/.test(rawStartSeconds)
+        ? Math.max(0, Number(rawStartSeconds))
+        : null;
     const audioMode: AudioMode =
       rawAudioMode === "compat" ? "compat" : rawAudioMode === "safe" ? "safe" : "standard";
     if (!requestedSourceUrl) {
@@ -1253,7 +1376,8 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
       audioMode,
       selectedAudioStreamOrder,
       req.headers.host,
-      webosClient
+      webosClient,
+      startSeconds
     );
     if (shouldPreferRelayInput(sourceUrl)) {
       session.inputMode = "relay";
@@ -1277,6 +1401,13 @@ function transcodeMiddleware(req: http.IncomingMessage, res: http.ServerResponse
       `${TRANSCODE_PATH}/session/${session.id}/${entryPlaylist}${pipelineSuffix}`
     );
     res.end();
+    setImmediate(() => {
+      try {
+        session.probeInfo = getSourceProbeInfo(sourceUrl);
+      } catch {
+        // Keep playback going; the language list can retry after play starts.
+      }
+    });
     return;
   }
 
@@ -1413,11 +1544,13 @@ export default defineConfig({
       name: "iptvmate-stream-relay",
       configureServer(server) {
         server.middlewares.use(pingMiddleware);
+        server.middlewares.use(audioTracksMiddleware);
         server.middlewares.use(streamRelayMiddleware);
         server.middlewares.use(transcodeMiddleware);
       },
       configurePreviewServer(server) {
         server.middlewares.use(pingMiddleware);
+        server.middlewares.use(audioTracksMiddleware);
         server.middlewares.use(streamRelayMiddleware);
         server.middlewares.use(transcodeMiddleware);
       }

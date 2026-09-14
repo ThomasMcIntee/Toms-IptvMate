@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { translate, useAppLanguage, type AppTranslationKey } from "../core/appLanguage";
 
 const MAIN_MENU_KEYCODE_MAP: Record<number, string> = {
+  19: "ArrowUp",
+  20: "ArrowDown",
+  21: "ArrowLeft",
+  22: "ArrowRight",
   37: "ArrowLeft",
   38: "ArrowUp",
   39: "ArrowRight",
@@ -72,7 +76,7 @@ type Props = {
 };
 
 const menuItems: Array<{ labelKey: AppTranslationKey; panel: string }> = [
-  { labelKey: "addPlaylist", panel: "playlist" },
+  { labelKey: "help", panel: "help" },
   { labelKey: "playlistManager", panel: "playlistManager" },
   { labelKey: "tvGuideSearch", panel: "epgSearch" },
   { labelKey: "setup", panel: "recordings" },

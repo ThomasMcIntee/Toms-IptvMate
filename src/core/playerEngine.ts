@@ -21,6 +21,7 @@ import {
   markWebOsPcRelayOriginDown
 } from "./webosStreamRelay";
 import { setPlaybackActive } from "./taskScheduler";
+import { preferredAudioTrackIndex } from "./audioLanguage";
 import {
   applyPreferredStreamFormat,
   forgetWorkingStreamFormat,
@@ -43,6 +44,8 @@ let skipShakaOnce = false;
 let videoEl: HTMLVideoElement | null = null;
 let playRequestToken = 0;
 let lastRootSourceUrl: string | null = null;
+let lastAudioStreamOrder: number | null = null;
+let lastContentType: ContentType = "live";
 let rapidRetryChain: { rootUrl: string | null; count: number; lastAt: number } = {
   rootUrl: null,
   count: 0,
@@ -233,6 +236,25 @@ function getWebOsSimulatorRelayOrigin(): string | null {
   return "http://127.0.0.1:5173";
 }
 
+export function getSourceAudioTracksProbeOrigin(): string | null {
+  if (typeof window === "undefined") return null;
+  if (isWebOsSimulator()) {
+    return getWebOsSimulatorRelayOrigin();
+  }
+  const host = window.location.hostname;
+  const port = window.location.port;
+  if (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    port === "5173" ||
+    port === "4173" ||
+    port === "3000"
+  ) {
+    return window.location.origin;
+  }
+  return null;
+}
+
 function getRelayBaseOrigin(): string | null {
   if (isWebOsRuntime()) {
     if (!isWebOsSimulator()) return null;
@@ -324,6 +346,48 @@ function emitPlayerReconnect(message: string) {
   window.dispatchEvent(new CustomEvent("playerReconnect", { detail: { message } }));
 }
 
+function emitPlayerStopped() {
+  window.dispatchEvent(new CustomEvent("playerStopped"));
+}
+
+function emitPlayerAudioTracks() {
+  window.dispatchEvent(new CustomEvent("playerAudioTracks"));
+}
+
+export function getActiveHlsPlayer(): Hls | null {
+  return hls;
+}
+
+export function getActiveShakaPlayer(): any | null {
+  return shakaPlayer;
+}
+
+export function getLastRootSourceUrl(): string | null {
+  return lastRootSourceUrl;
+}
+
+export function getCurrentAudioStreamOrder(): number | null {
+  return lastAudioStreamOrder;
+}
+
+export function playAudioStreamOrder(order: number): boolean {
+  if (!lastRootSourceUrl || !Number.isInteger(order) || order < 0) return false;
+  const video = getActiveVideoElement();
+  const startSeconds =
+    video && Number.isFinite(video.currentTime) && video.currentTime > 1.5
+      ? video.currentTime
+      : null;
+  const nextUrl = toTranscodeFallbackUrl(lastRootSourceUrl, false, "compat", order, startSeconds);
+  if (!nextUrl) return false;
+  lastAudioStreamOrder = order;
+  playUrl(nextUrl, false, false, 0, false, true, false, lastContentType);
+  return true;
+}
+
+export function getActiveVideoElement(): HTMLVideoElement | null {
+  return videoEl || (document.getElementById("player-main") as HTMLVideoElement | null);
+}
+
 function emitPlayerPlaying() {
   if (shouldSuppressPlayerEvents()) return;
   // Successful playback should reset retry-chain protection.
@@ -332,6 +396,7 @@ function emitPlayerPlaying() {
     rememberWorkingStreamFormat(lastRootSourceUrl);
   }
   window.dispatchEvent(new CustomEvent("playerPlaying"));
+  emitPlayerAudioTracks();
 }
 
 function emitPlayerTranscoding(message: string) {
@@ -398,16 +463,29 @@ async function teardownShakaPlayer() {
 function selectPreferredHlsAudioTrack(hlsInstance: Hls) {
   const tracks = hlsInstance.audioTracks || [];
   if (!tracks.length) {
+    emitPlayerAudioTracks();
     return;
   }
 
-  const preferredIndex = tracks.findIndex((track) => (track as { default?: boolean }).default) >= 0
-    ? tracks.findIndex((track) => (track as { default?: boolean }).default)
-    : 0;
+  const preferredIndex = preferredAudioTrackIndex(
+    tracks.map((track) => ({
+      language: (track as { lang?: string }).lang,
+      default: !!(track as { default?: boolean }).default
+    }))
+  );
 
-  if (hlsInstance.audioTrack !== preferredIndex) {
+  if (preferredIndex >= 0 && hlsInstance.audioTrack !== preferredIndex) {
     hlsInstance.audioTrack = preferredIndex;
   }
+  emitPlayerAudioTracks();
+}
+
+function preferBrowserSafeVodContainers(): boolean {
+  // Simulator movies (Mayday, HEVC, MKV) must keep the provider URL so the
+  // PC __transcode relay can start immediately. Guessing .mp4 first makes
+  // the simulator hang on a dead or undecodable file for a long timeout.
+  if (isWebOsSimulator()) return false;
+  return isWebOsRuntime() || isCapacitorRuntime() || isLikelyLocalRuntime();
 }
 
 function isUnsupportedAudioDecoderError(mediaErr: MediaError | null | undefined): boolean {
@@ -1346,7 +1424,8 @@ function toTranscodeFallbackUrl(
   url: string,
   videoOnly = false,
   audioMode: "standard" | "compat" | "safe" = "standard",
-  audioStreamOrder: number | null = null
+  audioStreamOrder: number | null = null,
+  startSeconds: number | null = null
 ): string | null {
   // Real webOS TVs have no FFmpeg. The SDK simulator can use the PC __transcode relay.
   if (isWebOsRuntime() && !isWebOsSimulator()) {
@@ -1378,6 +1457,12 @@ function toTranscodeFallbackUrl(
           parsed.searchParams.set("aidx", String(audioStreamOrder));
         } else {
           parsed.searchParams.delete("aidx");
+        }
+
+        if (typeof startSeconds === "number" && startSeconds > 1) {
+          parsed.searchParams.set("ss", startSeconds.toFixed(3));
+        } else {
+          parsed.searchParams.delete("ss");
         }
       }
 
@@ -1437,13 +1522,15 @@ function toTranscodeFallbackUrl(
     const audioSuffix = videoOnly ? "&audio=0" : "";
     const audioModeSuffix = !videoOnly && audioMode !== "standard" ? `&amode=${audioMode}` : "";
     const audioIndexSuffix = !videoOnly && typeof audioStreamOrder === "number" && audioStreamOrder >= 0 ? `&aidx=${audioStreamOrder}` : "";
-    return withWebOsTranscodeHint(`${relayBase}/__transcode?url=${encodeURIComponent(rootUrl)}${audioSuffix}${audioModeSuffix}${audioIndexSuffix}`);
+    const startSuffix = !videoOnly && typeof startSeconds === "number" && startSeconds > 1 ? `&ss=${startSeconds.toFixed(3)}` : "";
+    return withWebOsTranscodeHint(`${relayBase}/__transcode?url=${encodeURIComponent(rootUrl)}${audioSuffix}${audioModeSuffix}${audioIndexSuffix}${startSuffix}`);
   }
 
   const audioSuffix = videoOnly ? "&audio=0" : "";
   const audioModeSuffix = !videoOnly && audioMode !== "standard" ? `&amode=${audioMode}` : "";
   const audioIndexSuffix = !videoOnly && typeof audioStreamOrder === "number" && audioStreamOrder >= 0 ? `&aidx=${audioStreamOrder}` : "";
-  return withWebOsTranscodeHint(`${relayBase}/__transcode?url=${encodeURIComponent(url)}${audioSuffix}${audioModeSuffix}${audioIndexSuffix}`);
+  const startSuffix = !videoOnly && typeof startSeconds === "number" && startSeconds > 1 ? `&ss=${startSeconds.toFixed(3)}` : "";
+  return withWebOsTranscodeHint(`${relayBase}/__transcode?url=${encodeURIComponent(url)}${audioSuffix}${audioModeSuffix}${audioIndexSuffix}${startSuffix}`);
 }
 
 function getAudioStreamOrderHint(url: string): number | null {
@@ -1523,6 +1610,7 @@ export function initPlayerEngine() {
 }
 
 export function stopPlayback() {
+  emitPlayerStopped();
   setPlaybackActive(false);
   playRequestToken += 1;
   invalidateGlobalPlayAttempts();
@@ -1599,6 +1687,13 @@ export function playUrl(
       normalizedUrl = toWebOsLiveHlsUrl(rewriteHttpsToHttpUrl(normalizedUrl));
     }
   }
+  lastContentType = contentType;
+  const hintedAudio = getAudioStreamOrderHint(normalizedUrl);
+  if (hintedAudio !== null) {
+    lastAudioStreamOrder = hintedAudio;
+  } else if (!hasTriedTranscodeFallback) {
+    lastAudioStreamOrder = null;
+  }
   const isLiveContent = contentType === "live";
   const isVodContent = contentType === "movie" || contentType === "series";
 
@@ -1612,7 +1707,7 @@ export function playUrl(
     }
     const variants = listXtreamVodContainerUrls(
       normalizedUrl,
-      isWebOsSimulator() || isCapacitorRuntime()
+      preferBrowserSafeVodContainers()
     );
     if (variants.length > 0) {
       normalizedUrl = variants[Math.min(Math.max(proxyFallbackStage, 0), variants.length - 1)];
@@ -1888,7 +1983,7 @@ export function playUrl(
     if (isLiveContent) return false;
     const variants = listXtreamVodContainerUrls(
       fallbackBaseUrl,
-      isWebOsSimulator() || isCapacitorRuntime()
+      preferBrowserSafeVodContainers()
     );
     const nextStage = proxyFallbackStage + 1;
     if (nextStage >= variants.length) return false;
@@ -1914,12 +2009,14 @@ export function playUrl(
     !isLiveContent && isTranscodeSessionUrl(normalizedUrl)
       ? toTranscodeFallbackUrl(rootSourceUrl, false, "compat")
       : null;
+  const looksHardForBrowser = /\.(mkv|avi|wmv|ts)(?:\?|$)/i.test(normalizedUrl);
+  const shouldTranscodeVodImmediately = isWebOsSimulator() || looksHardForBrowser;
   const initialVodTranscodeUrl =
     !forceNativePlayback &&
     !isRequestedTranscode &&
     !isLiveContent &&
-    (!isWebOsRuntime() ||
-      (isWebOsSimulator() && (contentType === "series" || /\.mkv(?:\?|$)/i.test(normalizedUrl))))
+    shouldTranscodeVodImmediately &&
+    (!isWebOsRuntime() || isWebOsSimulator())
       ? toTranscodeFallbackUrl(rootSourceUrl, false, "compat")
       : null;
   const initialLiveTranscodeUrl =
@@ -2319,9 +2416,9 @@ export function playUrl(
       lowLatencyMode: useLiveHlsTuning,
 
       liveDurationInfinity: useLiveHlsTuning,
-      manifestLoadingTimeOut: isWebOsSimulator() ? 25000 : isWebOsRuntime() ? 8000 : isLocalTranscodePlayback ? 120000 : 20000,
-      levelLoadingTimeOut: isWebOsSimulator() ? 25000 : isWebOsRuntime() ? 8000 : isLocalTranscodePlayback ? 120000 : 10000,
-      fragLoadingTimeOut: isWebOsSimulator() ? 30000 : isWebOsRuntime() ? 15000 : isLocalTranscodePlayback ? 120000 : 20000,
+      manifestLoadingTimeOut: isLocalTranscodePlayback ? 120000 : isWebOsSimulator() ? 25000 : isWebOsRuntime() ? 8000 : 20000,
+      levelLoadingTimeOut: isLocalTranscodePlayback ? 120000 : isWebOsSimulator() ? 25000 : isWebOsRuntime() ? 8000 : 10000,
+      fragLoadingTimeOut: isLocalTranscodePlayback ? 120000 : isWebOsSimulator() ? 30000 : isWebOsRuntime() ? 15000 : 20000,
       manifestLoadingMaxRetry: isWebOsRuntime() ? 0 : isLocalTranscodePlayback ? 3 : 1,
       levelLoadingMaxRetry: isWebOsRuntime() ? 1 : isLocalTranscodePlayback ? 3 : 2,
       fragLoadingMaxRetry: isWebOsRuntime() ? 1 : isLocalTranscodePlayback ? 3 : 2,

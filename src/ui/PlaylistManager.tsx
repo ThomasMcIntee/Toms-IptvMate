@@ -30,7 +30,8 @@ import {
 } from "../core/channelStore";
 import { loadEPGForPlaylist } from "../core/loaders/epgLoader";
 import { loadChannelsForPlaylist } from "../core/loaders/playlistLoader";
-import { fetchXtreamAccountInfo, fetchXtreamCatalogTotals } from "../core/loaders/xtreamLoader";
+import { fetchXtreamAccountInfo, fetchXtreamCatalogTotals, cancelBackgroundXtreamCatalogIngest } from "../core/loaders/xtreamLoader";
+import { markEpgRefreshed, markVodScopeRefreshed } from "../core/vodBackgroundRefresh";
 import { loadEPGCache } from "../core/epgStore";
 import { isCapacitorRuntime } from "../core/player/platformDetection";
 import RemoteTextComposer from "./RemoteTextComposer";
@@ -891,6 +892,7 @@ export default function PlaylistManager({
 
     setLoadingId(p.id);
     setStatusMessage(`Loading "${p.name}"… large playlists can take several minutes on Fire TV.`);
+    cancelBackgroundXtreamCatalogIngest();
     try {
       const mergeChannelsById = (existingChannels: Channel[], incomingChannels: Channel[]) => {
         const byId = new Map<string, Channel>();
@@ -967,6 +969,11 @@ export default function PlaylistManager({
         ? getCapacitorVodGroupNames("series").length
         : channels.filter((channel) => String(channel?.contentType || "").toLowerCase() === "series").length;
 
+      if (isCapacitorRuntime() && p.type === "xtream") {
+        if (!finalMovieError && movieCount > 0) markVodScopeRefreshed("movies");
+        if (!finalSeriesError && seriesCount > 0) markVodScopeRefreshed("series");
+      }
+
       if (requestToken !== loadRequestTokenRef.current || !visibleRef.current) return;
 
       if (
@@ -1025,11 +1032,14 @@ export default function PlaylistManager({
 
       try {
         if (isCapacitorRuntime() && (channels.length > 3000 || liveGroupCount > 0)) {
-          void loadEPGForPlaylist(p).catch((epgErr) => {
-            console.warn("EPG load failed:", epgErr);
-          });
+          void loadEPGForPlaylist(p)
+            .then(() => markEpgRefreshed())
+            .catch((epgErr) => {
+              console.warn("EPG load failed:", epgErr);
+            });
         } else {
           await loadEPGForPlaylist(p);
+          markEpgRefreshed();
         }
       } catch (epgErr) {
         console.warn("EPG load failed:", epgErr);
@@ -1154,7 +1164,7 @@ export default function PlaylistManager({
         </button>
       </div>
       <p className="playlist-loaded-summary">
-        Load a playlist here. Hide or show categories, then Live TV / Movies / Series open instantly from this save — they do not download again until you press Load.
+        Load a playlist here. Hide or show categories, then Live TV / Movies / Series open from this save. Movies, Series, and the TV Guide also refresh quietly in the background, at most once a day.
       </p>
 
       <div className="playlist-manager-actions">
@@ -1409,7 +1419,12 @@ function PlaylistEditField({
           onChange={onChange}
           onDone={() => {
             setOpen(false);
-            window.setTimeout(() => buttonRef.current?.focus(), 40);
+            window.setTimeout(() => {
+              const row = buttonRef.current?.closest(".password-input-row");
+              const next =
+                row?.querySelector<HTMLButtonElement>(".password-toggle-btn") || buttonRef.current;
+              next?.focus();
+            }, 40);
           }}
           masked={masked}
           maxLength={512}

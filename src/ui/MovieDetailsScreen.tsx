@@ -24,6 +24,7 @@ export default function MovieDetailsScreen({
   onClose
 }: Props) {
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  const didInitialFocusRef = useRef(false);
   const [previewOn, setPreviewOn] = useState(false);
 
   const title = info?.title || String(movie?.name || "Movie");
@@ -33,13 +34,18 @@ export default function MovieDetailsScreen({
   const plot = info?.plot || "";
 
   useEffect(() => {
-    if (!visible) setPreviewOn(false);
+    if (!visible) {
+      setPreviewOn(false);
+      didInitialFocusRef.current = false;
+    }
   }, [visible, movie?.name]);
 
   useEffect(() => {
     if (!visible) return;
 
     const focusInitial = () => {
+      if (didInitialFocusRef.current) return;
+      didInitialFocusRef.current = true;
       overlayRef.current?.querySelector<HTMLButtonElement>(".movie-details-play")?.focus();
     };
     const timer = window.setTimeout(focusInitial, 50);
@@ -57,16 +63,18 @@ export default function MovieDetailsScreen({
       );
       if (buttons.length === 0) return;
 
+      const active = document.activeElement as HTMLElement | null;
+
       e.preventDefault();
       e.stopPropagation();
 
-      const active = document.activeElement as HTMLElement | null;
       if (key === "Enter") {
         if (active instanceof HTMLButtonElement && overlay.contains(active)) {
           active.click();
-        } else {
-          buttons[0].click();
+          return;
         }
+        buttons[0]?.focus();
+        buttons[0]?.click();
         return;
       }
 

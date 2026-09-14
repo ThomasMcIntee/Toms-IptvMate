@@ -2,6 +2,13 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { isChannelVisible, isGroupVisible } from "../core/channelStore";
 import { getIndexedEPGForChannel, getEPGVersion, hasStoredEPGForChannel, subscribeEPG } from "../core/epgStore";
 import { getEpgTimeOffsetMinutes } from "../core/epgTime";
+import {
+  activateFocusedRemoteControl,
+  focusRemoteControl,
+  isRemoteControlVisible,
+  normalizeRemoteNavKey,
+  stepSpatialFocus
+} from "../core/remoteKeys";
 import { sortGroupNames, type GroupSortDirection } from "./groupSorting";
 
 const GUIDE_OFFSET_KEY = "iptvmate_guide_only_offset_minutes";
@@ -36,6 +43,8 @@ export default function EPGSearch({
   });
   const [guideOffsetMinutes, setGuideOffsetMinutes] = useState(() => loadGuideOffsetMinutes());
   const epgVersion = useSyncExternalStore(subscribeEPG, getEPGVersion, getEPGVersion);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const didInitialFocusRef = useRef(false);
 
   useEffect(() => {
     saveGuideOffsetMinutes(guideOffsetMinutes);
@@ -59,6 +68,7 @@ export default function EPGSearch({
       setActiveGroup("All Channels");
       setSelectedChannelId("");
       setEpgRefreshTick(0);
+      didInitialFocusRef.current = false;
     }
   }, [visible]);
 
@@ -184,19 +194,89 @@ export default function EPGSearch({
     });
   }, [filteredChannels, columnSlots, guideOffsetMinutes, epgVersion]);
 
+  useEffect(() => {
+    if (!visible) return;
+
+    const focusInitial = () => {
+      if (didInitialFocusRef.current) return;
+      const closeBtn = overlayRef.current?.querySelector<HTMLButtonElement>(".epg-search-close");
+      if (!closeBtn) return;
+      focusRemoteControl(closeBtn);
+      if (document.activeElement === closeBtn) {
+        didInitialFocusRef.current = true;
+      }
+    };
+    const timers = [40, 160, 400].map((ms) => window.setTimeout(focusInitial, ms));
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const overlay = overlayRef.current;
+      if (!overlay) return;
+
+      const key = normalizeRemoteNavKey(event);
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter"].includes(key)) return;
+
+      const stops = Array.from(
+        overlay.querySelectorAll<HTMLElement>(
+          "button, .epg-search-input, .epg-search-guide-row[tabindex]"
+        )
+      ).filter((el) => isRemoteControlVisible(el) && !el.classList.contains("epg-search-guide-row-header"));
+      if (stops.length === 0) return;
+
+      const active = document.activeElement as HTMLElement | null;
+      const activeInOverlay = !!(active && overlay.contains(active));
+      const inSearch = activeInOverlay && active instanceof HTMLInputElement;
+
+      if (inSearch && (key === "ArrowLeft" || key === "ArrowRight")) return;
+
+      if (key === "Enter") {
+        if (!activeInOverlay) {
+          event.preventDefault();
+          event.stopPropagation();
+          focusRemoteControl(stops[0]);
+          return;
+        }
+        if (inSearch || event.repeat) return;
+        event.preventDefault();
+        event.stopPropagation();
+        activateFocusedRemoteControl(active);
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const next = stepSpatialFocus(
+        stops,
+        activeInOverlay ? active : null,
+        key as "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight"
+      );
+      focusRemoteControl(next);
+      if (next?.classList.contains("epg-search-guide-row")) {
+        next.click();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [visible]);
+
   if (!visible) return null;
 
   return (
-    <div className="side-panel side-panel-epg-search epg-search-screen">
+    <div className="side-panel side-panel-epg-search epg-search-screen" ref={overlayRef}>
       <div className="epg-search-screen-header">
         <h2>Search TV Guide</h2>
-        <button type="button" className="series-main-search-btn" onClick={onClose}>
+        <button type="button" className="series-main-search-btn epg-search-close" onClick={onClose}>
           Close
         </button>
       </div>
 
       <input
         type="text"
+        className="epg-search-input"
         placeholder="Search channels or programs..."
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -297,7 +377,8 @@ export default function EPGSearch({
                       role="button"
                       tabIndex={0}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
+                        const key = normalizeRemoteNavKey(e.nativeEvent);
+                        if (key === "Enter" || e.key === " ") {
                           e.preventDefault();
                           setSelectedChannelId(channelId);
                         }

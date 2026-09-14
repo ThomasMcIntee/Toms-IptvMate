@@ -7,6 +7,8 @@
 // event.key alone. MainMenuScreen has always self-normalized for this reason —
 // this is the shared equivalent for the other screens.
 
+import { isAndroidRuntime } from "./player/platformDetection";
+
 const KEYCODE_MAP: Record<number, string> = {
   13: "Enter",
   23: "Enter",
@@ -22,6 +24,16 @@ const KEYCODE_MAP: Record<number, string> = {
   29463: "ArrowDown"
 };
 
+// Android/Fire TV KeyEvent codes. Chromium often leaves these on keyCode
+// even when event.key is already Arrow*. HTML's 19 is Pause, so Android must
+// win on Fire Stick or D-pad Up is treated as MediaPause.
+export const ANDROID_DPAD_KEYCODE_MAP: Record<number, string> = {
+  19: "ArrowUp",
+  20: "ArrowDown",
+  21: "ArrowLeft",
+  22: "ArrowRight"
+};
+
 const KEY_ALIASES: Record<string, string> = {
   Up: "ArrowUp",
   Down: "ArrowDown",
@@ -35,12 +47,24 @@ const KEY_ALIASES: Record<string, string> = {
 export function normalizeRemoteNavKey(event: KeyboardEvent): string {
   const raw = String(event.key || "");
   if (KEY_ALIASES[raw]) return KEY_ALIASES[raw];
+  const keyCode = Number(event.keyCode || 0);
+  if (isAndroidRuntime() && ANDROID_DPAD_KEYCODE_MAP[keyCode]) {
+    if (!raw || raw === "Unidentified" || raw.startsWith("Arrow") || raw === "MediaPause") {
+      return ANDROID_DPAD_KEYCODE_MAP[keyCode];
+    }
+  }
   if (raw && raw !== "Unidentified") return raw;
-  return KEYCODE_MAP[Number(event.keyCode || 0)] || raw;
+  return KEYCODE_MAP[keyCode] || raw;
 }
 
 const MEDIA_KEYCODE_MAP: Record<number, string> = {
   19: "MediaPause",
+  85: "MediaPlayPause",
+  86: "MediaStop",
+  89: "MediaRewind",
+  90: "MediaFastForward",
+  126: "MediaPlay",
+  127: "MediaPause",
   412: "MediaRewind",
   413: "MediaStop",
   415: "MediaPlay",
@@ -60,10 +84,96 @@ const MEDIA_KEY_ALIASES: Record<string, string> = {
 };
 
 export function normalizeRemoteMediaKey(event: KeyboardEvent): string | null {
+  const navKey = normalizeRemoteNavKey(event);
+  if (
+    navKey === "ArrowUp" ||
+    navKey === "ArrowDown" ||
+    navKey === "ArrowLeft" ||
+    navKey === "ArrowRight" ||
+    navKey === "Enter"
+  ) {
+    return null;
+  }
   const raw = String(event.key || "");
   if (MEDIA_KEY_ALIASES[raw]) return MEDIA_KEY_ALIASES[raw];
   if (raw.startsWith("Media")) return raw;
-  return MEDIA_KEYCODE_MAP[Number(event.keyCode || 0)] || null;
+  const keyCode = Number(event.keyCode || 0);
+  if (isAndroidRuntime() && ANDROID_DPAD_KEYCODE_MAP[keyCode]) return null;
+  return MEDIA_KEYCODE_MAP[keyCode] || null;
+}
+
+export function focusRemoteControl(el: HTMLElement | null | undefined) {
+  if (!el) return;
+  el.focus();
+  try {
+    el.scrollIntoView({ block: "nearest", inline: "nearest" });
+  } catch {
+    try {
+      el.scrollIntoView();
+    } catch {
+      // Older WebViews may not support scrollIntoView.
+    }
+  }
+}
+
+export function isRemoteControlVisible(el: HTMLElement): boolean {
+  if ((el as HTMLButtonElement | HTMLInputElement).disabled) return false;
+  if (el.offsetParent === null) return false;
+  const rect = el.getBoundingClientRect();
+  return rect.width >= 2 && rect.height >= 2;
+}
+
+export function stepSpatialFocus(
+  stops: HTMLElement[],
+  active: HTMLElement | null,
+  key: "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight"
+): HTMLElement | null {
+  if (stops.length === 0) return null;
+  const index = active ? stops.indexOf(active) : -1;
+  if (index < 0) return stops[0] || null;
+
+  const current = stops[index];
+  const currentRect = current.getBoundingClientRect();
+  const currentCenterX = currentRect.left + currentRect.width / 2;
+  const currentCenterY = currentRect.top + currentRect.height / 2;
+  const sameRow = (el: HTMLElement) =>
+    Math.abs(el.getBoundingClientRect().top - currentRect.top) < 18;
+
+  if (key === "ArrowLeft" || key === "ArrowRight") {
+    const goingRight = key === "ArrowRight";
+    const row = stops.filter(sameRow);
+    const rowIndex = row.indexOf(current);
+    const inline = goingRight ? row[rowIndex + 1] : row[rowIndex - 1];
+    if (inline) return inline;
+
+    const sideways = stops.filter((el) => {
+      const rect = el.getBoundingClientRect();
+      return goingRight
+        ? rect.left >= currentRect.right - 8
+        : rect.right <= currentRect.left + 8;
+    });
+    if (sideways.length === 0) return current;
+    sideways.sort((a, b) => spatialScore(a, currentCenterX, currentCenterY) - spatialScore(b, currentCenterX, currentCenterY));
+    return sideways[0] || current;
+  }
+
+  const downward = key === "ArrowDown";
+  const candidates = stops.filter((el) => {
+    const top = el.getBoundingClientRect().top;
+    return downward ? top > currentRect.top + 10 : top < currentRect.top - 10;
+  });
+  if (candidates.length === 0) {
+    return (downward ? stops[index + 1] : stops[index - 1]) || current;
+  }
+  candidates.sort((a, b) => spatialScore(a, currentCenterX, currentCenterY) - spatialScore(b, currentCenterX, currentCenterY));
+  return candidates[0] || current;
+}
+
+function spatialScore(el: HTMLElement, originX: number, originY: number): number {
+  const rect = el.getBoundingClientRect();
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+  return Math.abs(centerY - originY) * 8 + Math.abs(centerX - originX);
 }
 
 // webOS Magic Remote OK often delivers a real click AND keydown Enter.

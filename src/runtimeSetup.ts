@@ -1,4 +1,5 @@
-import { consumeRemoteActivate, normalizeRemoteNavKey, noteRemoteActivate, resolveRemoteActivateTarget } from "./core/remoteKeys";
+import { ANDROID_DPAD_KEYCODE_MAP, consumeRemoteActivate, normalizeRemoteNavKey, noteRemoteActivate, resolveRemoteActivateTarget } from "./core/remoteKeys";
+import { isAndroidRuntime, isWebOsRuntime } from "./core/player/platformDetection";
 
 declare const __APP_VERSION__: string;
 
@@ -21,12 +22,19 @@ const REMOTE_KEYCODE_MAP: Record<number, string> = {
   29462: "ArrowUp",
   29463: "ArrowDown",
   19: "MediaPause",
+  85: "MediaPlayPause",
+  86: "MediaStop",
+  89: "MediaRewind",
+  90: "MediaFastForward",
+  126: "MediaPlay",
+  127: "MediaPause",
   412: "MediaRewind",
   413: "MediaStop",
   415: "MediaPlay",
   417: "MediaFastForward",
   463: "MediaPlayPause",
-  10252: "MediaPlayPause"
+  10252: "MediaPlayPause",
+  ...(isAndroidRuntime() ? ANDROID_DPAD_KEYCODE_MAP : {})
 };
 
 const REMOTE_KEY_ALIASES: Record<string, string> = {
@@ -133,7 +141,12 @@ function normalizeRemoteKeyEvents() {
   window.addEventListener("keydown", (event) => {
     const rawKey = String(event.key || "");
     const keyCode = Number(event.keyCode || 0);
-    const normalizedKey = REMOTE_KEY_ALIASES[rawKey] || REMOTE_KEYCODE_MAP[keyCode];
+    const hasRealKey = !!rawKey && rawKey !== "Unidentified";
+    const fromKeyCode = REMOTE_KEYCODE_MAP[keyCode];
+    // Only fill blank Unidentified keys from keyCode. Fire TV D-pad often
+    // reports ArrowUp with Android keyCode 19; rewriting that to MediaPause
+    // stole Up while live playback was still in the background.
+    const normalizedKey = REMOTE_KEY_ALIASES[rawKey] || (hasRealKey ? undefined : fromKeyCode);
     if (normalizedKey && normalizedKey !== rawKey) {
       try {
         Object.defineProperty(event, "key", { value: normalizedKey, configurable: true });
@@ -180,7 +193,9 @@ function normalizeRemoteKeyEvents() {
     }
   });
 
-  enableMagicRemotePointerClicks();
+  if (isWebOsRuntime()) {
+    enableMagicRemotePointerClicks();
+  }
   keepKeyboardFocus();
 }
 

@@ -446,6 +446,25 @@ public class MainActivity extends BridgeActivity {
             dispatchBackKeyToWebApp();
             return true;
         }
+        int code = event.getKeyCode();
+        boolean dpad = code == KeyEvent.KEYCODE_DPAD_UP
+                || code == KeyEvent.KEYCODE_DPAD_DOWN
+                || code == KeyEvent.KEYCODE_DPAD_LEFT
+                || code == KeyEvent.KEYCODE_DPAD_RIGHT
+                || code == KeyEvent.KEYCODE_DPAD_CENTER
+                || code == KeyEvent.KEYCODE_ENTER;
+        if (dpad && exoPlayerManager != null && exoPlayerManager.shouldKeepRemoteOnControls()) {
+            if (exoPlayerManager.consumeFullscreenRemote(event)) {
+                return true;
+            }
+            return super.dispatchKeyEvent(event);
+        }
+        if (dpad) {
+            WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+            if (webView != null && !webView.hasFocus()) {
+                webView.requestFocus();
+            }
+        }
         return super.dispatchKeyEvent(event);
     }
 }

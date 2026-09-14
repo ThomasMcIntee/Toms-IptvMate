@@ -291,12 +291,43 @@ function isSeriesLikeFavoriteChannel(channel: Partial<Channel> | null | undefine
   if (!channel) return false;
 
   const contentType = String(channel.contentType || "").trim().toLowerCase();
-  if (contentType === "series") {
+  if (
+    contentType === "series" ||
+    contentType === "movie" ||
+    contentType === "movies" ||
+    contentType === "vod"
+  ) {
     return true;
   }
 
   const id = String(channel.id || "").trim();
-  return /^series_\d+(?:_episode_\d+)?$/i.test(id);
+  if (
+    /^series_\d+(?:_episode_\d+)?$/i.test(id) ||
+    /^movie_\d+$/i.test(id) ||
+    /^vod_\d+$/i.test(id)
+  ) {
+    return true;
+  }
+
+  const group = String(channel.group || "").toLowerCase();
+  if (
+    group.startsWith("movies:") ||
+    group.startsWith("series:") ||
+    group.startsWith("vod:") ||
+    group.includes("movie") ||
+    group.includes("series") ||
+    group.includes("film") ||
+    group.includes("vod")
+  ) {
+    return true;
+  }
+
+  const url = String(channel.url || "").toLowerCase();
+  if (url.includes("/movie/") || url.includes("/series/") || url.includes("/vod/")) {
+    return true;
+  }
+
+  return false;
 }
 
 function hasUniqueCurrentChannelId(id: string): boolean {
@@ -1287,6 +1318,14 @@ let capacitorVodGroupCounts: Record<CapacitorVodCacheScope, Record<string, numbe
   movies: {},
   series: {}
 };
+let capacitorVodIngestSeen: Record<CapacitorVodCacheScope, Set<string>> = {
+  movies: new Set(),
+  series: new Set()
+};
+let capacitorVodIngestPrevious: Record<CapacitorVodCacheScope, string[]> = {
+  movies: [],
+  series: []
+};
 
 function idbVodGroupRecordKey(scope: CapacitorVodCacheScope, groupName: string): string {
   return `vod-group:${scope}:${groupName}`;
@@ -1337,6 +1376,31 @@ function saveCapacitorVodGroupCatalog(
   }
 }
 
+async function pruneUnseenCapacitorVodGroups(scope: CapacitorVodCacheScope) {
+  const seen = capacitorVodIngestSeen[scope] || new Set();
+  const previous = capacitorVodIngestPrevious[scope] || [];
+  const current = capacitorVodGroupNames[scope];
+  const keep = current.filter((name) => seen.has(name));
+  const toDelete = new Set<string>([
+    ...previous.filter((name) => !keep.includes(name)),
+    ...current.filter((name) => !keep.includes(name))
+  ]);
+  if (toDelete.size > 0) {
+    const db = capacitorIngestDb || (await openChannelsCacheDb());
+    if (db) {
+      for (const groupName of toDelete) {
+        await deleteCachedChannelsFromIndexedDb(db, idbVodGroupRecordKey(scope, groupName));
+      }
+      if (!capacitorIngestDb) db.close();
+    }
+  }
+  const counts = { ...capacitorVodGroupCounts[scope] };
+  for (const groupName of toDelete) {
+    delete counts[groupName];
+  }
+  saveCapacitorVodGroupCatalog(scope, keep, counts);
+}
+
 export function getCapacitorVodGroupNames(scope: CapacitorVodCacheScope): string[] {
   if (capacitorVodGroupNames[scope].length > 0) {
     return capacitorVodGroupNames[scope];
@@ -1355,18 +1419,39 @@ export function getCapacitorVodGroupCounts(scope: CapacitorVodCacheScope): Recor
   return stored;
 }
 
-export async function beginCapacitorVodCatalogIngest(scope: CapacitorVodCacheScope) {
-  saveCapacitorVodGroupCatalog(scope, [], {});
+export async function beginCapacitorVodCatalogIngest(
+  scope: CapacitorVodCacheScope,
+  options?: { keepExisting?: boolean }
+) {
+  getCapacitorVodGroupNames(scope);
+  getCapacitorVodGroupCounts(scope);
+  capacitorVodIngestPrevious[scope] = [...capacitorVodGroupNames[scope]];
+  capacitorVodIngestSeen[scope] = new Set();
+  if (!options?.keepExisting) {
+    saveCapacitorVodGroupCatalog(scope, [], {});
+  }
   await acquireCapacitorIngestDb();
 }
 
-export function finishCapacitorVodCatalogIngest(scope: CapacitorVodCacheScope) {
-  saveCapacitorVodGroupCatalog(
-    scope,
-    capacitorVodGroupNames[scope],
-    capacitorVodGroupCounts[scope]
-  );
-  releaseCapacitorIngestDb();
+export async function finishCapacitorVodCatalogIngest(
+  scope: CapacitorVodCacheScope,
+  options?: { pruneMissing?: boolean }
+) {
+  try {
+    if (options?.pruneMissing) {
+      await pruneUnseenCapacitorVodGroups(scope);
+    } else {
+      saveCapacitorVodGroupCatalog(
+        scope,
+        capacitorVodGroupNames[scope],
+        capacitorVodGroupCounts[scope]
+      );
+    }
+  } finally {
+    capacitorVodIngestSeen[scope] = new Set();
+    capacitorVodIngestPrevious[scope] = [];
+    releaseCapacitorIngestDb();
+  }
 }
 
 export async function appendCapacitorVodGroup(
@@ -1394,6 +1479,7 @@ export async function appendCapacitorVodGroups(
     records.push({ key: idbVodGroupRecordKey(scope, normalized), list: members });
     if (!names.includes(normalized)) names.push(normalized);
     capacitorVodGroupCounts[scope][normalized] = members.length;
+    capacitorVodIngestSeen[scope]?.add(normalized);
     rebuildCapacitorFavoriteIndexFromCatalog(members);
   }
   if (records.length === 0) return;
@@ -2851,8 +2937,8 @@ export function isFavoriteChannelRecord(channel: Partial<Channel> | null | undef
   const id = String(channel.id || "").trim();
   if (!id) return false;
 
-  // Series stream URLs can legitimately change per provider/refresh while
-  // remaining the same logical series item. Fall back to id matching.
+  // Series and Movie stream URLs can legitimately vary per provider/refresh/detail query
+  // while remaining the same logical title. Fall back to id matching.
   if (isSeriesLikeFavoriteChannel(channel) && hasFavoriteEntryWithId(id)) {
     return true;
   }
@@ -2878,7 +2964,7 @@ export function isFavoriteChannelRecord(channel: Partial<Channel> | null | undef
   // URL drift (rotating stream tokens / proxies / CDN hosts): if the favorited
   // id maps to exactly one current channel, the bookmark is unambiguous, so
   // match on id even when the saved url differs from the channel's current url.
-  return hasFavoriteEntryWithId(id) && hasUniqueCurrentChannelId(id);
+  return hasFavoriteEntryWithId(id) && (isSeriesLikeFavoriteChannel(channel) || hasUniqueCurrentChannelId(id));
 }
 
 export function setChannelFavoriteRecord(channel: Partial<Channel> | null | undefined, isFavorite: boolean) {
@@ -2896,6 +2982,14 @@ export function setChannelFavoriteRecord(channel: Partial<Channel> | null | unde
     const legacyKey = `id:${id}`;
     if (favoriteEntries.delete(legacyKey)) {
       changed = true;
+    }
+
+    if (isSeriesLikeFavoriteChannel(channel)) {
+      for (const [entryKey, entry] of favoriteEntries.entries()) {
+        if (entry.id !== id || entryKey === key) continue;
+        favoriteEntries.delete(entryKey);
+        changed = true;
+      }
     }
 
     if (!favoriteEntries.has(key)) {

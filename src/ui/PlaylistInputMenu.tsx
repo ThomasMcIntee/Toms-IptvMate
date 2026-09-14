@@ -58,7 +58,16 @@ export default function PlaylistInputMenu({ visible, onPlaylistSaved }: { visibl
         active !== document.body &&
         active !== document.documentElement &&
         !root.contains(active);
-      if (activeOutsidePanel) return;
+      if (activeOutsidePanel) {
+        e.preventDefault();
+        e.stopPropagation();
+        const resume =
+          root.querySelector<HTMLButtonElement>(".password-toggle-btn") ||
+          root.querySelector<HTMLButtonElement>(".btn-primary") ||
+          root.querySelector<HTMLElement>("input, select, button");
+        resume?.focus();
+        return;
+      }
 
       if (isHorizontal && (!active || active.tagName !== "BUTTON")) return;
 
@@ -92,6 +101,43 @@ export default function PlaylistInputMenu({ visible, onPlaylistSaved }: { visibl
       rootRef.current?.querySelector<HTMLElement>("input, select, button")?.focus();
     }, 60);
     return () => window.clearTimeout(timer);
+  }, [visible]);
+
+  // Fire TV IME leaves focus outside the panel after password. Bring the
+  // remote back to Show / Save so Down+OK can finish adding the playlist.
+  useEffect(() => {
+    if (!visible) return;
+
+    const recover = () => {
+      const root = rootRef.current;
+      if (!root) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (active && root.contains(active)) return;
+      const resume =
+        root.querySelector<HTMLButtonElement>(".password-toggle-btn") ||
+        root.querySelector<HTMLButtonElement>(".btn-primary");
+      resume?.focus();
+    };
+
+    const onHide = () => {
+      window.setTimeout(recover, 80);
+    };
+    const onKeyboardState = (event: Event) => {
+      const detail = (event as CustomEvent<{ visibility?: boolean | string; state?: string }>).detail;
+      const closed =
+        detail?.visibility === false ||
+        detail?.visibility === "hidden" ||
+        detail?.state === "closed" ||
+        detail?.state === "hidden";
+      if (closed) onHide();
+    };
+
+    window.addEventListener("keyboardDidHide", onHide);
+    document.addEventListener("keyboardStateChange", onKeyboardState);
+    return () => {
+      window.removeEventListener("keyboardDidHide", onHide);
+      document.removeEventListener("keyboardStateChange", onKeyboardState);
+    };
   }, [visible]);
 
   if (!visible) return null;
@@ -310,6 +356,18 @@ export default function PlaylistInputMenu({ visible, onPlaylistSaved }: { visibl
               inputMode="text"
               onChange={(e) => setXtreamPass(e.target.value)}
               onKeyDown={(e) => e.stopPropagation()}
+              onBlur={() => {
+                window.setTimeout(() => {
+                  const root = rootRef.current;
+                  if (!root) return;
+                  const active = document.activeElement as HTMLElement | null;
+                  if (active && root.contains(active)) return;
+                  (
+                    root.querySelector<HTMLButtonElement>(".password-toggle-btn") ||
+                    root.querySelector<HTMLButtonElement>(".btn-primary")
+                  )?.focus();
+                }, 120);
+              }}
             />
             <button
               type="button"

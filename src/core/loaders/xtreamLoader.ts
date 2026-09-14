@@ -99,12 +99,27 @@ function extractXtreamCollection(payload: unknown): any[] {
   return [];
 }
 
+let xtreamCatalogIngestEpoch = 0;
+
+export function cancelBackgroundXtreamCatalogIngest(): void {
+  xtreamCatalogIngestEpoch += 1;
+}
+
+export function getXtreamCatalogIngestEpoch(): number {
+  return xtreamCatalogIngestEpoch;
+}
+
+export type XtreamLoadOptions = {
+  keepExistingVodCatalog?: boolean;
+};
+
 export async function loadXtream(
   url: string,
   user: string,
   pass: string,
   scope: PlaylistLoadScope = "all",
-  onProgress?: XtreamLoadProgress
+  onProgress?: XtreamLoadProgress,
+  options?: XtreamLoadOptions
 ): Promise<Channel[]> {
   const { baseUrl, apiUrl, useProxy, probe } = await resolveReachableBaseUrl(url, user, pass);
   const baseApiUrl = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`;
@@ -138,7 +153,7 @@ export async function loadXtream(
 
   if (scope === "all" || scope === "movies") {
     try {
-      const movies = await loadVODStreams(baseUrl, user, pass, useProxy, onProgress);
+      const movies = await loadVODStreams(baseUrl, user, pass, useProxy, onProgress, options?.keepExistingVodCatalog);
       for (const channel of movies) {
         result.push(channel);
       }
@@ -151,7 +166,7 @@ export async function loadXtream(
 
   if (scope === "all" || scope === "series") {
     try {
-      const series = await loadSeriesStreams(baseUrl, user, pass, useProxy, onProgress);
+      const series = await loadSeriesStreams(baseUrl, user, pass, useProxy, onProgress, options?.keepExistingVodCatalog);
       for (const channel of series) {
         result.push(channel);
       }
@@ -336,12 +351,14 @@ async function persistCategoriesInPairs(
   ) => Channel | null,
   persistBatch: (batch: Array<{ groupName: string; list: Channel[] }>) => Promise<void>,
   onProgress?: XtreamLoadProgress,
-  label = "Loading"
+  label = "Loading",
+  shouldStop?: () => boolean
 ): Promise<number> {
   const categories = categoryItems.filter((category) => category?.category_id != null);
   let saved = 0;
 
   for (let index = 0; index < categories.length; ) {
+    if (shouldStop?.()) return saved;
     const sliceSize = getBackgroundConcurrency(CAPACITOR_CATEGORY_CONCURRENCY);
     const slice = categories.slice(index, index + sliceSize);
     index += slice.length;
@@ -355,6 +372,7 @@ async function persistCategoriesInPairs(
         )
       )
     );
+    if (shouldStop?.()) return saved;
     const toSave: Array<{ groupName: string; list: Channel[] }> = [];
     for (const mapped of batches) {
       if (mapped.length === 0) continue;
@@ -571,7 +589,8 @@ async function loadAndPersistVodByCategory(
     user: string,
     pass: string
   ) => Channel | null,
-  onProgress?: XtreamLoadProgress
+  onProgress?: XtreamLoadProgress,
+  keepExisting = false
 ): Promise<Channel[]> {
   const categoryItems = await fetchXtreamList(baseUrl, user, pass, useProxy, categoriesAction);
   const categoryMap = categoryNameMap(categoryItems);
@@ -579,22 +598,30 @@ async function loadAndPersistVodByCategory(
   // This panel's full get_vod_streams / get_series dump is too large for the
   // Stick, so we never wait on that failed request. Slimmed per-category
   // fetches with high concurrency complete the whole catalog much faster.
-  await beginCapacitorVodCatalogIngest(scope);
-  onProgress?.(`Loading ${scopeLabel}: ${categoryItems.length} categories…`);
-  await persistCategoriesInPairs(
-    categoryItems,
-    categoryMap,
-    baseUrl,
-    user,
-    pass,
-    useProxy,
-    streamsAction,
-    mapItem,
-    (batch) => appendCapacitorVodGroups(scope, batch),
-    onProgress,
-    `Loading ${scopeLabel}`
-  );
-  finishCapacitorVodCatalogIngest(scope);
+  const epoch = xtreamCatalogIngestEpoch;
+  await beginCapacitorVodCatalogIngest(scope, { keepExisting });
+  try {
+    onProgress?.(`Loading ${scopeLabel}: ${categoryItems.length} categories…`);
+    await persistCategoriesInPairs(
+      categoryItems,
+      categoryMap,
+      baseUrl,
+      user,
+      pass,
+      useProxy,
+      streamsAction,
+      mapItem,
+      (batch) => appendCapacitorVodGroups(scope, batch),
+      onProgress,
+      `Loading ${scopeLabel}`,
+      () => epoch !== xtreamCatalogIngestEpoch
+    );
+    const aborted = epoch !== xtreamCatalogIngestEpoch;
+    await finishCapacitorVodCatalogIngest(scope, { pruneMissing: keepExisting && !aborted });
+  } catch (error) {
+    await finishCapacitorVodCatalogIngest(scope, { pruneMissing: false });
+    throw error;
+  }
   return [];
 }
 
@@ -603,7 +630,8 @@ async function loadVODStreams(
   user: string,
   pass: string,
   useProxy: boolean,
-  onProgress?: XtreamLoadProgress
+  onProgress?: XtreamLoadProgress,
+  keepExisting = false
 ): Promise<Channel[]> {
   if (isCapacitorRuntime()) {
     return loadAndPersistVodByCategory(
@@ -615,7 +643,8 @@ async function loadVODStreams(
       "get_vod_categories",
       "get_vod_streams",
       mapVodStream,
-      onProgress
+      onProgress,
+      keepExisting
     );
   }
 
@@ -641,7 +670,8 @@ async function loadSeriesStreams(
   user: string,
   pass: string,
   useProxy: boolean,
-  onProgress?: XtreamLoadProgress
+  onProgress?: XtreamLoadProgress,
+  keepExisting = false
 ): Promise<Channel[]> {
   if (isCapacitorRuntime()) {
     return loadAndPersistVodByCategory(
@@ -653,7 +683,8 @@ async function loadSeriesStreams(
       "get_series_categories",
       "get_series",
       mapSeriesEntry,
-      onProgress
+      onProgress,
+      keepExisting
     );
   }
 

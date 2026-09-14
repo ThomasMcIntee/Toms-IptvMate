@@ -17,6 +17,7 @@ import RecordingPlayback from "./RecordingPlayback";
 import RecordingStorageManager from "./RecordingStorageManager";
 import PlaylistManager from "./PlaylistManager";
 import PlaylistInputMenu from "./PlaylistInputMenu";
+import HelpScreen from "./HelpScreen";
 import type { PlaylistEntry } from "../core/playlistStore";
 export function PanelsHost({
   activePanel,
@@ -59,6 +60,16 @@ export function PanelsHost({
       <VoicePanel visible={activePanel === "voice"} />
       <AudioPanel visible={activePanel === "audio"} />
       <SubtitlePanel visible={activePanel === "subtitles"} />
+      <HelpScreen
+        visible={activePanel === "help"}
+        onClose={() => {
+          if (showPlaylistManager) {
+            setActivePanel(null);
+            return;
+          }
+          onExitToMainMenu();
+        }}
+      />
       <PlaylistInputMenu 
         visible={activePanel === "playlist"}
         onPlaylistSaved={(playlist) => {
@@ -68,7 +79,7 @@ export function PanelsHost({
         }}
       />
       <PlaylistManager
-        visible={showPlaylistManager && activePanel !== "playlist"}
+        visible={showPlaylistManager && activePanel !== "playlist" && activePanel !== "help"}
         onSelectContent={onSelectContent}
         onPlaylistLoadedWithId={onPlaylistLoadedWithId}
         activePlaylistId={activePlaylistId}
