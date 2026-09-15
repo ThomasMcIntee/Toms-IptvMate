@@ -13,12 +13,11 @@ const exo = fs.readFileSync(
 );
 
 assert.ok(app.includes("nativeBackKey"));
+assert.ok(app.includes("capacitorBackKey"));
 assert.ok(app.includes("isWebOsKeyboardOpen"));
-assert.ok(app.includes("handleBackNavigationRef"));
-assert.ok(app.includes("isTextEntryTarget(activeField)"));
-assert.ok(app.includes("isSeriesSearchComposerOpen"));
 assert.ok(app.includes('key === "Return" && isWebOsRuntime()'));
-assert.ok(!/key === "Return"\s*\|\|/.test(app));
+assert.ok(app.includes("dismissActiveTextEntry"));
+assert.ok(!/key === "Backspace" \|\| key === "Return"/.test(app));
 
 assert.ok(main.includes("nativeBackKey"));
 assert.ok(main.includes("handleNativeBack"));

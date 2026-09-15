@@ -450,11 +450,16 @@ public class MainActivity extends BridgeActivity {
                 "try{window.dispatchEvent(new CustomEvent('nativeBackKey'));}catch(e){}" +
                 "try{window.dispatchEvent(new CustomEvent('capacitorBackKey',{bubbles:false}));}catch(e){}" +
                 "try{" +
-                "var ev=new KeyboardEvent('keydown',{" +
-                "key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true" +
-                "});" +
-                "window.dispatchEvent(ev);" +
-                "document.dispatchEvent(ev);" +
+                "var e=document.createEvent('Event');" +
+                "e.initEvent('keydown',true,true);" +
+                "try{" +
+                "Object.defineProperty(e,'key',{get:function(){return 'Escape';}});" +
+                "Object.defineProperty(e,'code',{get:function(){return 'Escape';}});" +
+                "Object.defineProperty(e,'keyCode',{get:function(){return 27;}});" +
+                "Object.defineProperty(e,'which',{get:function(){return 27;}});" +
+                "}catch(x){}" +
+                "window.dispatchEvent(e);" +
+                "document.dispatchEvent(e);" +
                 "}catch(e2){}" +
                 "})();",
                 null

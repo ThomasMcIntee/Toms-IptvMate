@@ -428,6 +428,12 @@ public class ExoPlayerManager {
 
     private void focusDefaultControlOnMain() {
         List<ImageButton> controls = visibleControls();
+        if (languageButton != null
+            && languageButton.getVisibility() == View.VISIBLE
+            && controls.contains(languageButton)) {
+            paintControlSelection(languageButton);
+            return;
+        }
         paintControlSelection(controls.isEmpty() ? playButton : controls.get(0));
     }
 
@@ -928,6 +934,7 @@ public class ExoPlayerManager {
         if (focused != null && (isUnderControls(focused) || isUnderLanguagePanel(focused))) {
             focused.clearFocus();
         }
+        clearControlSelection();
     }
 
     public List<NativeExoPlayerController.AudioTrackOption> getAudioTracks() {
