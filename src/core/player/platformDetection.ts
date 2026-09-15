@@ -47,14 +47,15 @@ export function isCapacitorRuntime(): boolean {
   const cap = (window as any).Capacitor;
   const isNativeCapacitor =
     !!cap && typeof cap.isNativePlatform === "function" && cap.isNativePlatform() === true;
-  const isCap = isNativeCapacitor ||
-               navigator.userAgent.includes("Capacitor") ||
-               // Capacitor on Android typically runs on http://localhost (no port) or http://app
-               // Desktop dev servers run on http://localhost:PORT (with port)
-               (window.location.hostname === "localhost" && !window.location.port) ||
-               (window.location.hostname === "app" && !window.location.port) ||
-               (window.location.protocol === "http:" && !window.location.port && !/localhost/i.test(window.location.href));
-  return isCap || isAndroidRuntime();
+  if (isNativeCapacitor || navigator.userAgent.includes("Capacitor")) return true;
+
+  // Capacitor Android/Fire TV WebViews serve the app on localhost or app
+  // without a port. Desktop Vite (localhost:5173) and Android Chrome hitting
+  // a LAN/dev server must stay on the browser storage path so favorites save.
+  const host = String(window.location.hostname || "");
+  const port = String(window.location.port || "");
+  if (!port && (host === "localhost" || host === "app")) return true;
+  return false;
 }
 
 export function isElectronRuntime(): boolean {
