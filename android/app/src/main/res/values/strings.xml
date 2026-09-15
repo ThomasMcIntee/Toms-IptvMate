@@ -7,4 +7,6 @@
     <string name="native_exo_play">Play or pause</string>
     <string name="native_exo_mute">Mute</string>
     <string name="native_exo_fullscreen">Fullscreen</string>
+    <string name="native_exo_language">Audio language</string>
+    <string name="native_exo_language_title">Audio language</string>
 </resources>

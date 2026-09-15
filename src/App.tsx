@@ -19,6 +19,9 @@ import {
   playNativeUrl,
   resumeNativePlayback,
   revealNativePlayerControls,
+  focusNativePlayerControls,
+  moveNativePlayerControl,
+  activateNativePlayerControl,
   setNativeMuted,
   stopNativePlayback,
   syncNativePlayerBounds,
@@ -74,7 +77,8 @@ import {
   type ChannelVisibilitySnapshot
 } from "./core/channelStore";
 import NowNextOverlay from "./ui/NowNextOverlay";
-import { PlayerControlBar, VodExitButton } from "./ui/PlayerControlBar";
+import { PlayerControlBar, VodExitButton, VodLanguageSelect } from "./ui/PlayerControlBar";
+import { isAudioLanguagePickerOpen, setAudioLanguagePickerOpen } from "./core/audioTracks";
 import { LAST_WATCHED_GROUP, recordLastWatched, resolveLastWatchedChannels } from "./core/lastWatched";
 import { VodResumePrompt } from "./ui/VodResumePrompt";
 import {
@@ -1078,6 +1082,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }
 
   function exitVodPlayback() {
+    setAudioLanguagePickerOpen(false);
+    window.dispatchEvent(new Event("closeAudioLanguagePicker"));
     captureVodProgress();
     const playing = currentChannelRef.current;
     const playingSeriesEpisode =
@@ -2102,8 +2108,12 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   }, [currentChannel]);
 
   useEffect(() => {
-    if (!!(window as any).Capacitor) {
-      document.body.classList.add('is-capacitor');
+    // Importing @capacitor/core defines window.Capacitor in the browser bundle.
+    // Only mark the real native shell so localhost/web keep the HTML play bar.
+    if (isCapacitorRuntime()) {
+      document.body.classList.add("is-capacitor");
+    } else {
+      document.body.classList.remove("is-capacitor");
     }
   }, []);
 
@@ -2390,8 +2400,29 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return true;
       }
 
+      if (document.querySelector(".vod-language-panel")) {
+        setAudioLanguagePickerOpen(false);
+        window.dispatchEvent(new Event("closeAudioLanguagePicker"));
+        return true;
+      }
+
+      if (
+        isVodPlaybackFullscreen ||
+        document.querySelector(".vod-playback-shell") ||
+        document.querySelector(".vod-exit-btn")
+      ) {
+        exitVodPlayback();
+        return true;
+      }
+
       if (isSeriesPickerVisible) {
         setIsSeriesPickerVisible(false);
+        return true;
+      }
+
+      if (isAudioLanguagePickerOpen()) {
+        setAudioLanguagePickerOpen(false);
+        window.dispatchEvent(new Event("closeAudioLanguagePicker"));
         return true;
       }
 
@@ -2417,11 +2448,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
       if (String(seriesMainSearchDebouncedTerm || "").trim() || String(moviesMainSearchTerm || "").trim()) {
         clearCatalogSearch();
-        return true;
-      }
-
-      if (isVodPlaybackFullscreen) {
-        exitVodPlayback();
         return true;
       }
 
@@ -2479,6 +2505,14 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
     // Listen for custom webosBackKey event (dispatched by webOS SDK)
     const handleWebosBack = () => {
+      if (
+        document.querySelector(".vod-playback-shell") ||
+        document.querySelector(".vod-exit-btn") ||
+        document.querySelector(".vod-language-panel")
+      ) {
+        handleBackNavigation();
+        return;
+      }
       if (isRemoteTextComposerOpen()) {
         document.querySelector<HTMLButtonElement>(".remote-text-composer-done")?.click();
         return;
@@ -2489,8 +2523,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       handleBackNavigation();
     };
     
-    window.addEventListener('webosBackKey', handleWebosBack);
-    window.addEventListener('capacitorBackKey', handleWebosBack);
+    window.addEventListener("webosBackKey", handleWebosBack);
+    document.addEventListener("webosBackKey", handleWebosBack);
+    window.addEventListener("capacitorBackKey", handleWebosBack);
 
     const onKeyboardStateChange = (event: Event) => {
       const detail = (event as CustomEvent<{ visibility?: boolean | string; state?: string }>).detail;
@@ -2575,44 +2610,70 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
 
       if (isVodPlaybackFullscreen) {
         window.dispatchEvent(new Event("playerRevealControls"));
-        const barButtons = Array.from(
-          document.querySelectorAll<HTMLButtonElement>(".vod-playback-shell .player-control-bar-btn")
-        ).filter((btn) => btn.tabIndex !== -1);
-        const activeBtn = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
-        const barIndex = activeBtn ? barButtons.indexOf(activeBtn) : -1;
+        if (document.querySelector(".vod-language-panel")) {
+          return;
+        }
+        if (document.body.classList.contains("native-exo-active")) {
+          if (navKey === "ArrowDown" || navKey === "ArrowUp") {
+            e.preventDefault();
+            e.stopPropagation();
+            focusNativePlayerControls();
+            return;
+          }
+          if (navKey === "ArrowLeft") {
+            e.preventDefault();
+            e.stopPropagation();
+            moveNativePlayerControl(-1);
+            return;
+          }
+          if (navKey === "ArrowRight") {
+            e.preventDefault();
+            e.stopPropagation();
+            moveNativePlayerControl(1);
+            return;
+          }
+          if (navKey === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+            activateNativePlayerControl();
+            return;
+          }
+        } else {
+        const barButtons = vodPlayBarButtons();
+        const barIndex = focusedVodPlayBarIndex(barButtons);
         if (navKey === "ArrowDown" || navKey === "ArrowUp") {
           e.preventDefault();
-          (barButtons[0] || null)?.focus();
-          return;
-        }
-        if (barIndex >= 0 && navKey === "ArrowLeft") {
-          e.preventDefault();
-          barButtons[Math.max(0, barIndex - 1)]?.focus();
-          return;
-        }
-        if (barIndex >= 0 && navKey === "ArrowRight") {
-          e.preventDefault();
-          barButtons[Math.min(barButtons.length - 1, barIndex + 1)]?.focus();
+          focusPlayBarRemoteButton(barButtons[barIndex >= 0 ? barIndex : 0] || null);
           return;
         }
         if (navKey === "ArrowLeft") {
           e.preventDefault();
-          seekPlayback(-15);
+          if (barIndex < 0) {
+            focusPlayBarRemoteButton(barButtons[0] || null);
+          } else {
+            focusPlayBarRemoteButton(barButtons[Math.max(0, barIndex - 1)] || null);
+          }
           return;
         }
         if (navKey === "ArrowRight") {
           e.preventDefault();
-          seekPlayback(15);
+          if (barIndex < 0) {
+            focusPlayBarRemoteButton(barButtons[0] || null);
+          } else {
+            focusPlayBarRemoteButton(barButtons[Math.min(barButtons.length - 1, barIndex + 1)] || null);
+          }
           return;
         }
         if (navKey === "Enter") {
           e.preventDefault();
-          if (barIndex >= 0 && activeBtn) {
-            activeBtn.click();
+          const current = barIndex >= 0 ? barButtons[barIndex] : null;
+          if (current) {
+            current.click();
           } else {
             togglePlayPause();
           }
           return;
+        }
         }
       }
 
@@ -2651,8 +2712,9 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     // Use capture phase so we get the event before webOS shell
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
-      window.removeEventListener('webosBackKey', handleWebosBack);
-      window.removeEventListener('capacitorBackKey', handleWebosBack);
+      window.removeEventListener("webosBackKey", handleWebosBack);
+      document.removeEventListener("webosBackKey", handleWebosBack);
+      window.removeEventListener("capacitorBackKey", handleWebosBack);
       document.removeEventListener("keyboardStateChange", onKeyboardStateChange);
       window.removeEventListener("keydown", onKeyDown, true);
     };
@@ -5360,23 +5422,51 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
               onStop={exitVodPlayback}
             />
           )}
+          <VodLanguageSelect visible={isVodPlaybackFullscreen} />
         </div>
       )}
       {shouldRenderMainVideo && !useLivePreviewShell && !useVodPlaybackShell && (
+        isMovieOrSeriesSelected ? (
+          <div className="vod-playback-shell" aria-hidden="false">
+            <video
+              id="player-main"
+              className="player-main player-main-shell-video player-main-live"
+              playsInline
+              controls={false}
+              disablePictureInPicture={true}
+              disableRemotePlayback={true}
+              tabIndex={isCapacitorRuntime() || isWebOsRuntime() ? -1 : 0}
+              style={{ background: "transparent", zIndex: 0 }}
+            />
+            {currentChannel && (
+              <PlayerControlBar
+                mode="vod"
+                channel={currentChannel}
+                paused={isPlaybackPaused()}
+                muted={isPlaybackMuted()}
+                fullscreen
+                isFavorite={isFavoriteChannelRecord(currentChannel)}
+                onPlayPause={togglePlayPause}
+                onMute={toggleMute}
+                onFullscreen={toggleFullscreen}
+                onToggleFavorite={() => toggleFavoriteChannel(currentChannel)}
+                onStop={exitVodPlayback}
+              />
+            )}
+            <VodLanguageSelect visible />
+          </div>
+        ) : (
         <video
           id="player-main"
           className={`player-main ${shouldShowOpeningMenu && !currentChannel ? "player-main-idle" : showContentPreviewWindow ? "player-main-preview" : contentPage === "live" ? (isEffectiveLiveFullscreen ? "player-main-live" : "player-main-compact") : currentChannel ? "player-main-live" : "player-main-compact"}${forceLivePreviewLayout ? " player-main-force-preview" : ""}`}
           playsInline
-          controls={!!currentChannel && !forceLivePreviewLayout && !isWebOsRuntime()}
+          controls={false}
           disablePictureInPicture={contentPage === "live"}
           disableRemotePlayback={contentPage === "live"}
           tabIndex={isCapacitorRuntime() || isWebOsRuntime() ? -1 : 0}
           style={{ background: 'transparent', zIndex: 0 }}
         />
-
-
-
-
+        )
       )}
       {forceLivePreviewLayout && !isPlaylistInputPanelOpen && (
         <div className="live-preview-placeholder" aria-hidden="true">
@@ -5398,7 +5488,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       {currentChannel && !playerStatus && playerWarning && <div className="player-status player-status-info">{playerWarning}</div>}
       {currentChannel && playerError && <div className="player-status player-status-error">{playerError}</div>}
       {isVodPlaybackFullscreen && !useVodPlaybackShell && (
-        <VodExitButton visible={isVodPlaybackFullscreen} onExit={exitVodPlayback} />
+        <>
+          <VodExitButton visible={isVodPlaybackFullscreen} onExit={exitVodPlayback} />
+          <VodLanguageSelect visible={isVodPlaybackFullscreen} />
+        </>
       )}
 
       {isLoginOverlayVisible && (
@@ -6074,6 +6167,32 @@ function stepPlaylistCardFocus(
     return da - db;
   });
   return candidates[0];
+}
+
+function vodPlayBarButtons(): HTMLButtonElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLButtonElement>(".vod-playback-shell [data-playbar-btn]")
+  );
+}
+
+function focusedVodPlayBarIndex(buttons: HTMLButtonElement[]): number {
+  const remote = buttons.findIndex((btn) => btn.classList.contains("is-remote-focused"));
+  if (remote >= 0) return remote;
+  const active = document.activeElement;
+  return active instanceof HTMLButtonElement ? buttons.indexOf(active) : -1;
+}
+
+function focusPlayBarRemoteButton(btn: HTMLButtonElement | null): void {
+  document.querySelectorAll(".is-remote-focused").forEach((el) => {
+    el.classList.remove("is-remote-focused");
+  });
+  if (!btn) return;
+  btn.classList.add("is-remote-focused");
+  try {
+    btn.focus({ preventScroll: true });
+  } catch {
+    btn.focus();
+  }
 }
 
 function isFavoriteFocusTarget(el: Element | null): el is HTMLButtonElement {

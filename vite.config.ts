@@ -11,6 +11,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 const RELAY_PATH = "/__stream";
 const PING_PATH = "/__iptv_ping";
 const TRANSCODE_PATH = "/__transcode";
+const AUDIO_TRACKS_PATH = "/__audio-tracks";
 const REDIRECT_LIMIT = 5;
 const CURRENT_TRANSCODE_PROFILE = "mpegts-v18";
 const TRANSCODE_MANIFEST_WAIT_MS = 60000;
@@ -58,6 +59,16 @@ type TranscodeSession = {
 
 const transcodeSessions = new Map<string, TranscodeSession>();
 const sourceProbeCache = new Map<string, SourceProbeInfo>();
+const sourceAudioTrackCache = new Map<string, SourceAudioTrackInfo[]>();
+
+type SourceAudioTrackInfo = {
+  order: number;
+  language: string;
+  title: string;
+  codec: string;
+  channels: number | null;
+  default: boolean;
+};
 const movieVariantCache = new Map<string, string>();
 const TRANSCODE_STALE_SESSION_MS = 60_000;
 const TRANSCODE_RESPAWN_COOLDOWN_MS = 2500;
@@ -253,6 +264,59 @@ function getSourceProbeInfo(sourceUrl: string): SourceProbeInfo {
   const probed = probeSourceStreamInfo(sourceUrl);
   sourceProbeCache.set(sourceUrl, probed);
   return probed;
+}
+
+function listSourceAudioTracks(inputUrl: string): SourceAudioTrackInfo[] {
+  const cached = sourceAudioTrackCache.get(inputUrl);
+  if (cached) return cached;
+
+  const ffprobeExecutable = resolveFfprobeExecutable();
+  const probe = spawnSync(
+    ffprobeExecutable,
+    [
+      "-v",
+      "error",
+      "-probesize",
+      "20000000",
+      "-analyzeduration",
+      "20000000",
+      "-show_streams",
+      "-select_streams",
+      "a",
+      "-of",
+      "json",
+      inputUrl
+    ],
+    {
+      encoding: "utf8",
+      timeout: 20000,
+      windowsHide: true
+    }
+  );
+
+  if (probe.error || probe.status !== 0 || !probe.stdout) {
+    sourceAudioTrackCache.set(inputUrl, []);
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(probe.stdout) as { streams?: ProbedStream[] };
+    const tracks = (parsed.streams || [])
+      .filter((stream) => stream.codec_type === "audio" || !stream.codec_type)
+      .map((stream, order) => ({
+        order,
+        language: String(stream.tags?.language || ""),
+        title: String(stream.tags?.title || ""),
+        codec: String(stream.codec_name || ""),
+        channels: stream.channels || null,
+        default: !!stream.disposition?.default
+      }));
+    sourceAudioTrackCache.set(inputUrl, tracks);
+    return tracks;
+  } catch {
+    sourceAudioTrackCache.set(inputUrl, []);
+    return [];
+  }
 }
 
 function ensureCleanSessionDir(dir: string) {
@@ -1126,6 +1190,58 @@ async function fetchAndRelay(
   upstream.end();
 }
 
+function audioTracksMiddleware(req: http.IncomingMessage, res: http.ServerResponse, next: () => void) {
+  if (!req.url) {
+    next();
+    return;
+  }
+
+  const requestUrl = new URL(req.url, "http://localhost");
+  if (requestUrl.pathname !== AUDIO_TRACKS_PATH) {
+    next();
+    return;
+  }
+
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
+  res.setHeader("Cache-Control", "no-store");
+
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+
+  const targetUrl = requestUrl.searchParams.get("url");
+  if (!targetUrl) {
+    res.statusCode = 400;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ tracks: [], error: "Missing url query parameter" }));
+    return;
+  }
+
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      res.statusCode = 400;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ tracks: [], error: "Only http(s) URLs are supported" }));
+      return;
+    }
+  } catch {
+    res.statusCode = 400;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ tracks: [], error: "Invalid target URL" }));
+    return;
+  }
+
+  const tracks = listSourceAudioTracks(targetUrl);
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify({ tracks }));
+}
+
 function pingMiddleware(req: http.IncomingMessage, res: http.ServerResponse, next: () => void) {
   if (!req.url) {
     next();
@@ -1413,11 +1529,13 @@ export default defineConfig({
       name: "iptvmate-stream-relay",
       configureServer(server) {
         server.middlewares.use(pingMiddleware);
+        server.middlewares.use(audioTracksMiddleware);
         server.middlewares.use(streamRelayMiddleware);
         server.middlewares.use(transcodeMiddleware);
       },
       configurePreviewServer(server) {
         server.middlewares.use(pingMiddleware);
+        server.middlewares.use(audioTracksMiddleware);
         server.middlewares.use(streamRelayMiddleware);
         server.middlewares.use(transcodeMiddleware);
       }

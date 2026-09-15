@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  refreshAudioTracks,
+  selectAudioTrack,
+  setAudioLanguagePickerOpen,
+  useAudioTracks
+} from "../core/audioTracks";
 import { getEPGForChannel, getEPGVersion, subscribeEPG } from "../core/epgStore";
 import { formatEpgTime } from "../core/epgTime";
 import { setNativePlayerGuide } from "../core/nativePlayerBridge";
+import { isWebOsRuntime } from "../core/player/platformDetection";
+import { normalizeRemoteNavKey } from "../core/remoteKeys";
 
 const CONTROLS_HIDE_MS = 3500;
 
@@ -139,6 +147,8 @@ export function PlayerControlBar({
     const reveal = () => {
       ignoreFocusUntilRef.current = 0;
       setRevealed(true);
+      barRef.current?.classList.remove("player-control-bar-hidden");
+      if (barRef.current) barRef.current.inert = false;
       scheduleHide();
     };
 
@@ -156,6 +166,10 @@ export function PlayerControlBar({
     if (isVod) {
       document.addEventListener("pointerdown", onPointer);
       document.addEventListener("mousedown", onPointer);
+      if (!isWebOsRuntime()) {
+        shell?.addEventListener("mousemove", onPointer);
+        document.addEventListener("mousemove", onPointer);
+      }
     }
 
     const onPlayerReveal = () => reveal();
@@ -168,6 +182,10 @@ export function PlayerControlBar({
       if (isVod) {
         document.removeEventListener("pointerdown", onPointer);
         document.removeEventListener("mousedown", onPointer);
+        if (!isWebOsRuntime()) {
+          shell?.removeEventListener("mousemove", onPointer);
+          document.removeEventListener("mousemove", onPointer);
+        }
       }
       window.removeEventListener("playerRevealControls", onPlayerReveal);
     };
@@ -202,13 +220,15 @@ export function PlayerControlBar({
       className={`player-control-bar${revealed ? "" : " player-control-bar-hidden"}`}
       role="group"
       aria-label="Player controls"
-      inert={!revealed || undefined}
       onFocusCapture={(event) => {
+        if (Date.now() < ignoreFocusUntilRef.current) {
+          return;
+        }
         if (
-          Date.now() < ignoreFocusUntilRef.current ||
-          barRef.current?.classList.contains("player-control-bar-hidden")
+          barRef.current?.classList.contains("player-control-bar-hidden") &&
+          event.target instanceof HTMLElement &&
+          !event.target.classList.contains("is-remote-focused")
         ) {
-          if (event.target instanceof HTMLElement) event.target.blur();
           return;
         }
         focusedRef.current = true;
@@ -269,6 +289,7 @@ export function PlayerControlBar({
         <button
           type="button"
           className="player-control-bar-btn"
+          data-playbar-btn="play"
           tabIndex={revealed ? 0 : -1}
           onClick={onPlayPause}
           aria-label={paused ? "Play" : "Pause"}
@@ -283,10 +304,12 @@ export function PlayerControlBar({
             </svg>
           )}
         </button>
+        <PlayBarLanguageButton revealed={revealed} />
         {onStop && (
           <button
             type="button"
             className="player-control-bar-btn player-control-bar-stop"
+            data-playbar-btn="stop"
             tabIndex={revealed ? 0 : -1}
             onClick={onStop}
             aria-label="Stop playback"
@@ -302,6 +325,7 @@ export function PlayerControlBar({
         <button
           type="button"
           className="player-control-bar-btn"
+          data-playbar-btn="mute"
           tabIndex={revealed ? 0 : -1}
           onClick={onMute}
           aria-label={muted ? "Unmute" : "Mute"}
@@ -326,6 +350,7 @@ export function PlayerControlBar({
           <button
             type="button"
             className={`player-control-bar-btn player-control-bar-favorite${isFavorite ? " is-favorite" : ""}`}
+            data-playbar-btn="favorite"
             tabIndex={revealed ? 0 : -1}
             onClick={onToggleFavorite}
             aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
@@ -458,5 +483,295 @@ export function VodExitButton({
     >
       Back
     </button>
+  );
+}
+
+function PlayBarLanguageButton({ revealed }: { revealed: boolean }) {
+  const tracks = useAudioTracks();
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    void refreshAudioTracks();
+    const refresh = () => {
+      void refreshAudioTracks();
+    };
+    window.addEventListener("playerAudioTracks", refresh);
+    window.addEventListener("playerPlaying", refresh);
+    const poll = window.setInterval(refresh, 1000);
+    const stopPoll = window.setTimeout(() => window.clearInterval(poll), 30000);
+    return () => {
+      window.clearInterval(poll);
+      window.clearTimeout(stopPoll);
+      window.removeEventListener("playerAudioTracks", refresh);
+      window.removeEventListener("playerPlaying", refresh);
+      setAudioLanguagePickerOpen(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    setAudioLanguagePickerOpen(open);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const root = document.querySelector(".play-bar-language");
+    const selected =
+      root?.querySelector<HTMLButtonElement>(".vod-language-option.is-selected") ||
+      root?.querySelector<HTMLButtonElement>(".vod-language-option");
+    if (selected) {
+      document.querySelectorAll(".player-control-bar-btn.is-remote-focused").forEach((el) => {
+        el.classList.remove("is-remote-focused");
+      });
+      selected.classList.add("is-remote-focused");
+      selected.focus();
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const key = normalizeRemoteNavKey(event);
+      const panel = document.querySelector(".play-bar-language");
+      const languageBtn = panel?.querySelector<HTMLButtonElement>(".vod-language-btn");
+      if (key === "Escape" || key === "Backspace") {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        if (languageBtn) {
+          document.querySelectorAll(".player-control-bar-btn.is-remote-focused").forEach((el) => {
+            el.classList.remove("is-remote-focused");
+          });
+          languageBtn.classList.add("is-remote-focused");
+          languageBtn.focus();
+        }
+        return;
+      }
+      const options = Array.from(panel?.querySelectorAll<HTMLButtonElement>(".vod-language-option") || []);
+      const index = options.findIndex((option) => option === document.activeElement || option.classList.contains("is-remote-focused"));
+      if (index < 0) return;
+      if (key === "ArrowDown" || key === "ArrowRight") {
+        event.preventDefault();
+        const next = options[Math.min(options.length - 1, index + 1)];
+        options.forEach((option) => option.classList.remove("is-remote-focused"));
+        next?.classList.add("is-remote-focused");
+        next?.focus();
+      } else if (key === "ArrowUp" || key === "ArrowLeft") {
+        event.preventDefault();
+        const next = options[Math.max(0, index - 1)];
+        options.forEach((option) => option.classList.remove("is-remote-focused"));
+        next?.classList.add("is-remote-focused");
+        next?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    const onClose = () => setOpen(false);
+    window.addEventListener("closeAudioLanguagePicker", onClose);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("closeAudioLanguagePicker", onClose);
+    };
+  }, [open]);
+
+  const selected = tracks.find((track) => track.selected) || tracks[0];
+  const selectedLabel = selected?.label || "Audio language";
+
+  return (
+    <span className="play-bar-language">
+      <button
+        type="button"
+        className="player-control-bar-btn vod-language-btn"
+        data-playbar-btn="language"
+        tabIndex={revealed ? 0 : -1}
+        aria-label={selectedLabel}
+        aria-expanded={open}
+        onClick={() => {
+          void refreshAudioTracks();
+          setOpen((current) => !current);
+        }}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4.35h-6.5V2.5H8.85V4.35H2v1.65h11.17C12.46 8.13 11.41 9.83 9.87 11.19c-.94-.83-1.72-1.77-2.32-2.84H5.9c.67 1.4 1.6 2.68 2.76 3.74l-5.05 5.02L5 18.5l5.11-5.07 3.11 3.11.03-.04zM18.5 10.5h-1.84L13.5 18.5h1.84l.75-2h3.82l.75 2H22.5l-4-8zM16.74 15l1.34-3.56L19.42 15h-2.68z"
+          />
+        </svg>
+        <span className="play-bar-language-label">Audio</span>
+      </button>
+      {open && (
+        <div className="vod-language-panel play-bar-language-panel" role="listbox" aria-label="Audio language">
+          {tracks.length === 0 && (
+            <div className="vod-language-empty">Looking for audio tracks…</div>
+          )}
+          {tracks.map((track) => (
+            <button
+              key={track.id}
+              type="button"
+              role="option"
+              aria-selected={track.selected}
+              className={`player-control-bar-btn vod-language-option${track.selected ? " is-selected" : ""}`}
+              onClick={() => {
+                void selectAudioTrack(track.id).then(() => setOpen(false));
+              }}
+            >
+              {track.label}
+              {track.selected ? "  ✓" : ""}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+export function VodLanguageSelect({ visible }: { visible: boolean }) {
+  const tracks = useAudioTracks();
+  const [open, setOpen] = useState(false);
+  const [revealed, setRevealed] = useState(true);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const hideTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!visible) {
+      setOpen(false);
+      setAudioLanguagePickerOpen(false);
+      return;
+    }
+    void refreshAudioTracks();
+    const refresh = () => {
+      void refreshAudioTracks();
+    };
+    window.addEventListener("playerAudioTracks", refresh);
+    window.addEventListener("playerPlaying", refresh);
+    const poll = window.setInterval(refresh, 1000);
+    const stopPoll = window.setTimeout(() => window.clearInterval(poll), 30000);
+    return () => {
+      window.clearInterval(poll);
+      window.clearTimeout(stopPoll);
+      window.removeEventListener("playerAudioTracks", refresh);
+      window.removeEventListener("playerPlaying", refresh);
+      setAudioLanguagePickerOpen(false);
+    };
+  }, [visible]);
+
+  useEffect(() => {
+    setAudioLanguagePickerOpen(visible && open);
+  }, [visible, open]);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    const clearHideTimer = () => {
+      if (hideTimerRef.current !== null) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+    };
+
+    const scheduleHide = () => {
+      if (open) {
+        clearHideTimer();
+        return;
+      }
+      clearHideTimer();
+      hideTimerRef.current = window.setTimeout(() => {
+        hideTimerRef.current = null;
+        if (rootRef.current?.contains(document.activeElement)) return;
+        setRevealed(false);
+      }, CONTROLS_HIDE_MS);
+    };
+
+    const reveal = () => {
+      setRevealed(true);
+      scheduleHide();
+    };
+
+    reveal();
+    window.addEventListener("playerRevealControls", reveal);
+    return () => {
+      clearHideTimer();
+      window.removeEventListener("playerRevealControls", reveal);
+    };
+  }, [visible, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const selected =
+      rootRef.current?.querySelector<HTMLButtonElement>(".vod-language-option.is-selected") ||
+      rootRef.current?.querySelector<HTMLButtonElement>(".vod-language-option");
+    selected?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const key = normalizeRemoteNavKey(event);
+      if (key === "Escape" || key === "Backspace") {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        rootRef.current?.querySelector<HTMLButtonElement>(".vod-language-btn")?.focus();
+        return;
+      }
+      const options = Array.from(rootRef.current?.querySelectorAll<HTMLButtonElement>(".vod-language-option") || []);
+      const index = options.findIndex((option) => option === document.activeElement);
+      if (index < 0) return;
+      if (key === "ArrowDown" || key === "ArrowRight") {
+        event.preventDefault();
+        options[Math.min(options.length - 1, index + 1)]?.focus();
+      } else if (key === "ArrowUp" || key === "ArrowLeft") {
+        event.preventDefault();
+        options[Math.max(0, index - 1)]?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    const onClose = () => setOpen(false);
+    window.addEventListener("closeAudioLanguagePicker", onClose);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("closeAudioLanguagePicker", onClose);
+    };
+  }, [open, tracks.length]);
+
+  if (!visible) return null;
+
+  const selected = tracks.find((track) => track.selected) || tracks[0];
+  const selectedLabel = selected?.label || "Audio";
+
+  return (
+    <div
+      ref={rootRef}
+      className="vod-language-select"
+    >
+      <button
+        type="button"
+        className="vod-language-btn"
+        data-playbar-btn="language-select"
+        aria-label={`Audio language: ${selectedLabel}`}
+        aria-expanded={open}
+        onClick={() => {
+          void refreshAudioTracks();
+          setOpen((current) => !current);
+        }}
+        onFocus={() => setRevealed(true)}
+      >
+        {selectedLabel}
+      </button>
+      {open && (
+        <div className="vod-language-panel" role="listbox" aria-label="Audio language">
+          {tracks.length === 0 && (
+            <div className="vod-language-empty">Looking for audio tracks…</div>
+          )}
+          {tracks.map((track) => (
+            <button
+              key={track.id}
+              type="button"
+              role="option"
+              aria-selected={track.selected}
+              className={`vod-language-option${track.selected ? " is-selected" : ""}`}
+              onClick={() => {
+                void selectAudioTrack(track.id).then(() => setOpen(false));
+              }}
+            >
+              {track.label}
+              {track.selected ? "  ✓" : ""}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

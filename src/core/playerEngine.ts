@@ -27,6 +27,7 @@ import {
   orderFormatsByLastGood,
   rememberWorkingStreamFormat
 } from "./streamFormatPreference";
+import { preferredAudioTrackIndex } from "./audioLanguage";
 
 let hls: Hls | null = null;
 type HlsConstructor = typeof import("hls.js").default;
@@ -43,6 +44,8 @@ let skipShakaOnce = false;
 let videoEl: HTMLVideoElement | null = null;
 let playRequestToken = 0;
 let lastRootSourceUrl: string | null = null;
+let lastContentType: ContentType = "live";
+let lastAudioStreamOrder: number | null = null;
 let rapidRetryChain: { rootUrl: string | null; count: number; lastAt: number } = {
   rootUrl: null,
   count: 0,
@@ -332,6 +335,7 @@ function emitPlayerPlaying() {
     rememberWorkingStreamFormat(lastRootSourceUrl);
   }
   window.dispatchEvent(new CustomEvent("playerPlaying"));
+  emitPlayerAudioTracks();
 }
 
 function emitPlayerTranscoding(message: string) {
@@ -385,6 +389,39 @@ function bindVodNearEndWatcher(el: HTMLVideoElement | null, contentType: Content
   vodNearEndWatcher = { el, onTimeUpdate };
 }
 
+function emitPlayerAudioTracks() {
+  window.dispatchEvent(new CustomEvent("playerAudioTracks"));
+}
+
+export function getActiveHlsPlayer(): Hls | null {
+  return hls;
+}
+
+export function getActiveShakaPlayer(): any | null {
+  return shakaPlayer;
+}
+
+export function getLastRootSourceUrl(): string | null {
+  return lastRootSourceUrl;
+}
+
+export function getCurrentAudioStreamOrder(): number | null {
+  return lastAudioStreamOrder;
+}
+
+export function playAudioStreamOrder(order: number): boolean {
+  if (!lastRootSourceUrl || !Number.isInteger(order) || order < 0) return false;
+  const nextUrl = toTranscodeFallbackUrl(lastRootSourceUrl, false, "compat", order);
+  if (!nextUrl) return false;
+  lastAudioStreamOrder = order;
+  playUrl(nextUrl, false, false, 0, false, true, false, lastContentType);
+  return true;
+}
+
+export function getActiveVideoElement(): HTMLVideoElement | null {
+  return videoEl || (document.getElementById("player-main") as HTMLVideoElement | null);
+}
+
 async function teardownShakaPlayer() {
   if (!shakaPlayer) return;
   try {
@@ -398,16 +435,21 @@ async function teardownShakaPlayer() {
 function selectPreferredHlsAudioTrack(hlsInstance: Hls) {
   const tracks = hlsInstance.audioTracks || [];
   if (!tracks.length) {
+    emitPlayerAudioTracks();
     return;
   }
 
-  const preferredIndex = tracks.findIndex((track) => (track as { default?: boolean }).default) >= 0
-    ? tracks.findIndex((track) => (track as { default?: boolean }).default)
-    : 0;
+  const preferredIndex = preferredAudioTrackIndex(
+    tracks.map((track) => ({
+      language: (track as { lang?: string }).lang,
+      default: !!(track as { default?: boolean }).default
+    }))
+  );
 
-  if (hlsInstance.audioTrack !== preferredIndex) {
+  if (preferredIndex >= 0 && hlsInstance.audioTrack !== preferredIndex) {
     hlsInstance.audioTrack = preferredIndex;
   }
+  emitPlayerAudioTracks();
 }
 
 function isUnsupportedAudioDecoderError(mediaErr: MediaError | null | undefined): boolean {
@@ -1567,6 +1609,7 @@ export function stopPlayback() {
   } catch {
     // Ignore media element reset errors while stopping playback.
   }
+  emitPlayerAudioTracks();
 }
 
 export function playUrl(
@@ -1587,6 +1630,9 @@ export function playUrl(
   if (isWebOsRuntime()) ensureWebOsResourceObserver();
   let normalizedUrl = normalizeProblematicXtreamSourceUrl(normalizeStreamUrl(url));
   contentType = inferContentTypeFromUrl(normalizedUrl, contentType);
+  lastContentType = contentType;
+  const audioOrderHint = getAudioStreamOrderHint(normalizedUrl);
+  if (audioOrderHint !== null) lastAudioStreamOrder = audioOrderHint;
   bindVodNearEndWatcher(videoEl, contentType);
   if (isWebOsRuntime() && contentType === "live") {
     if (normalizedUrl.includes("/__transcode")) {
@@ -1914,10 +1960,15 @@ export function playUrl(
     !isLiveContent && isTranscodeSessionUrl(normalizedUrl)
       ? toTranscodeFallbackUrl(rootSourceUrl, false, "compat")
       : null;
+  const vodNeedsTranscode =
+    !isLikelyHlsManifestUrl(rootSourceUrl) &&
+    !/\.mpd(?:\?|$)/i.test(rootSourceUrl) &&
+    !/\.mp4(?:\?|$)/i.test(rootSourceUrl);
   const initialVodTranscodeUrl =
     !forceNativePlayback &&
     !isRequestedTranscode &&
     !isLiveContent &&
+    vodNeedsTranscode &&
     (!isWebOsRuntime() ||
       (isWebOsSimulator() && (contentType === "series" || /\.mkv(?:\?|$)/i.test(normalizedUrl))))
       ? toTranscodeFallbackUrl(rootSourceUrl, false, "compat")
@@ -2239,6 +2290,7 @@ export function playUrl(
           });
 
           await shakaPlayer.load(playbackUrl);
+          emitPlayerAudioTracks();
 
           if (isStaleRequest()) {
             if (videoEl) {
