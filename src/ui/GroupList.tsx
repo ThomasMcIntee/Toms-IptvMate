@@ -137,7 +137,7 @@ export function GroupList({
                 className="group-list-bulk-btn"
                 onClick={() => onSetAllVisible?.(true)}
               >
-                Unhide All
+                Play All
               </button>
             </>
           )}
@@ -196,7 +196,7 @@ export function GroupList({
             >
               <span className="group-item-name">{g}</span>
               <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
-                {groupCounts[g] ?? 0}
+                  {groupCounts[g] ? groupCounts[g].toLocaleString() : ""}
               </span>
             </button>
           )}

@@ -116,10 +116,22 @@ function ChannelItem({
     );
   }
 
-  const channelLabel = ch.number != null && String(ch.number).trim() !== "" ? `${ch.number} • ${ch.name}` : ch.name;
-  const showListFavorite = showFavoriteControls && !!onToggleFavorite;
+  const favoriteButton =
+    showFavoriteControls && onToggleFavorite ? (
+      <button
+        type="button"
+        className={`channel-row-favorite${isFavoriteChannel(ch) ? " active" : ""}`}
+        aria-label={`${isFavoriteChannel(ch) ? "Remove" : "Add"} ${ch.name} to favorites`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleFavorite(ch);
+        }}
+      >
+        {isFavoriteChannel(ch) ? "★" : "☆"}
+      </button>
+    ) : null;
 
-  if (showVisibilityControls || showListFavorite) {
+  if (showVisibilityControls) {
     return (
       <div className={itemClass} onClick={handleClick}>
         <div className="list-toggle-row">
@@ -156,6 +168,26 @@ function ChannelItem({
               {isFavoriteChannel(ch) ? "★" : "☆"}
             </button>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  if (favoriteButton) {
+    return (
+      <div className={itemClass}>
+        <div className="list-toggle-row">
+          {favoriteButton}
+          <button
+            type="button"
+            className="channel-select-btn"
+            disabled={!visible}
+            onClick={() => {
+              if (visible) onSelect(ch);
+            }}
+          >
+            {ch.number} • {ch.name}
+          </button>
         </div>
       </div>
     );
