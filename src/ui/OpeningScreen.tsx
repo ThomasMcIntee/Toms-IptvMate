@@ -20,7 +20,7 @@ export default function OpeningScreen({ visible, onStartLive, onOpenPanel }: Pro
       <div className="opening-glow" />
       <div className="opening-card">
         <div className="opening-badge">Welcome</div>
-        <h1 className="opening-title">Toms IPTVmate</h1>
+        <h1 className="opening-title">Tom's IPTVmate</h1>
         <p className="opening-subtitle">Choose an action to start your session</p>
 
         <div className="opening-actions">

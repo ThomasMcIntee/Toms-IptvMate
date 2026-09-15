@@ -1,4 +1,7 @@
 import "./styles/main.css";
+import { initTaskScheduler } from "./core/taskScheduler";
+
+initTaskScheduler();
 
 function isFireTvLiteRuntime() {
   if (typeof window === "undefined") return false;
@@ -26,7 +29,7 @@ function showBootShell(root: HTMLElement) {
     height: "100vh",
     justifyContent: "center"
   });
-  shell.textContent = "Loading Toms IPTVmate...";
+  shell.textContent = "Loading Tom's IPTVmate...";
   root.appendChild(shell);
 }
 
@@ -48,7 +51,7 @@ function showBootError(root: HTMLElement, message: string) {
   });
 
   const title = document.createElement("div");
-  title.textContent = "Failed to start Toms IPTVmate.";
+  title.textContent = "Failed to start Tom's IPTVmate.";
   shell.appendChild(title);
 
   const detail = document.createElement("div");
@@ -93,7 +96,9 @@ const loadApp = () => {
     });
 };
 
-if (typeof requestIdleCallback === "function") {
+if (/AFT|Android/i.test(navigator.userAgent || "")) {
+  window.setTimeout(loadApp, 800);
+} else if (typeof requestIdleCallback === "function") {
   requestIdleCallback(() => loadApp(), { timeout: 1500 });
 } else {
   window.setTimeout(loadApp, 100);

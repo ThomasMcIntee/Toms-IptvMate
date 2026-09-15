@@ -22,14 +22,12 @@ assert.ok(store.includes("lastFavoriteWriteById"));
 assert.ok(store.includes("isVodFavoriteChannel"));
 assert.ok(store.includes('contentType === "movie"'));
 assert.ok(!/favoriteEntries\s*=\s*restored/.test(store));
-assert.ok(app.includes("activateFocusedFavoriteControl"));
-assert.ok(app.includes("stopImmediatePropagation"));
-assert.ok(app.includes('".channel-list-favorite, .channel-icon-favorite, .player-control-bar-favorite"'));
+assert.ok(app.includes("lastFavoriteToggleAtByIdRef"));
+assert.ok(app.includes("nativeBackKey"));
+assert.ok(app.includes("onToggleFavorite={() => toggleFavoriteChannel(currentChannel)}"));
 
 assert.ok(!platform.includes("return isCap || isAndroidRuntime()"));
 assert.ok(platform.includes("localhost:5173"));
-
-assert.ok(app.includes("onToggleFavorite={() => toggleFavoriteChannel(currentChannel)}"));
 
 function unwrapFavoriteUrl(value) {
   const raw = String(value || "").trim();

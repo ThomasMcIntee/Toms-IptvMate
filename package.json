@@ -1,6 +1,6 @@
 {
   "name": "toms-iptvmate",
-  "version": "1.5.18",
+  "version": "1.6.4",
   "main": "electron/main.cjs",
   "files": [
     "dist",
@@ -36,13 +36,13 @@
     "shaka-player": "^5.2.9"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.5.1",
+    "@capacitor/cli": "^8.4.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
-    "@webos-tools/cli": "^3.2.3",
-    "electron": "^44.2.0",
-    "electron-builder": "^26.16.0",
+    "@webos-tools/cli": "^3.2.6",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.16.1",
     "typescript": "^7.0.2",
     "vite": "^8.2.2",
     "webpack-cli": "^7.2.3"
@@ -57,7 +57,7 @@
   },
   "build": {
     "appId": "tv.toms.iptvmate.desktop",
-    "productName": "Toms IPTVmate",
+    "productName": "Tom's IPTVmate",
     "directories": {
       "output": "release"
     },
@@ -68,7 +68,7 @@
     ],
     "win": {
       "target": "nsis",
-      "artifactName": "Toms-IPTVmate-${version}-Setup.${ext}"
+      "artifactName": "Tom's-IPTVmate-${version}-Setup.${ext}"
     }
   }
 }

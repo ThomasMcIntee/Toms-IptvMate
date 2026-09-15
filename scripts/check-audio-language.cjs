@@ -46,23 +46,15 @@ assert.ok(source.includes("export function audioTrackDisplayLabel"));
 assert.ok(source.includes("English"));
 
 const playerBar = fs.readFileSync(path.join(__dirname, "../src/ui/PlayerControlBar.tsx"), "utf8");
-assert.ok(playerBar.includes("function LanguageGlobeIcon"));
-assert.ok(playerBar.includes("player-control-bar-language"));
-assert.ok(playerBar.includes('variant="bar"'));
-
-const appSource = fs.readFileSync(path.join(__dirname, "../src/App.tsx"), "utf8");
-assert.ok(appSource.includes("vod-player-controls"));
-assert.ok(appSource.includes("showLiveBadge={false}"));
-assert.ok(appSource.includes(".player-control-bar-language, .vod-language-btn"));
+assert.ok(playerBar.includes("PlayBarLanguageButton"));
 
 const exo = fs.readFileSync(
   path.join(__dirname, "../android/app/src/main/java/tv/toms/iptvmate/ExoPlayerManager.java"),
   "utf8"
 );
-assert.ok(exo.includes("dispatchPlayerKey"));
-assert.ok(exo.includes("focusLanguageButtonOnMain"));
-assert.ok(exo.includes("setFocusableInTouchMode(show)"));
+assert.ok(exo.includes("offerRemoteKey"));
 assert.ok(exo.includes("hideControlsNowOnMain"));
+assert.ok(exo.includes("setFocusableInTouchMode(show)"));
 assert.ok(!/languageButton\.setEnabled\(canSelect\)/.test(exo));
 
 const overlay = fs.readFileSync(

@@ -63,7 +63,10 @@ try {
   process.exit(1);
 }
 
-const wrapper = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
+const wrapper = path.join(
+  androidDir,
+  process.platform === "win32" ? "gradlew.bat" : "gradlew"
+);
 const result = spawnSync(wrapper, ["assembleDebug"], {
   cwd: androidDir,
   stdio: "inherit",

@@ -11,6 +11,9 @@ import android.os.Looper;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
+
+import java.util.ArrayList;
+import java.util.List;
 import androidx.media3.common.C;
 import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
@@ -82,6 +85,8 @@ public class NativeExoPlayerController {
     private boolean triedTsFallback = false;
     private boolean isLiveContent = true;
     private boolean muted = false;
+    private final List<String> vodFallbackUrls = new ArrayList<>();
+    private int vodFallbackIndex = 0;
     private boolean userSelectedAudio = false;
 
     private final AudioManager.OnAudioFocusChangeListener audioFocusListener = focusChange ->
@@ -120,11 +125,18 @@ public class NativeExoPlayerController {
             muted = false;
             userSelectedAudio = false;
             originalStreamUrl = trimmed;
+            triedTsFallback = false;
             // Only live streams get the .ts -> .m3u8 HLS preference. Rewriting a VOD
             // .ts movie/episode to .m3u8 targets a playlist that usually doesn't exist
             // and breaks progressive playback.
-            activeStreamUrl = isLive ? preferHlsUrl(originalStreamUrl) : originalStreamUrl;
-            triedTsFallback = false;
+            if (isLive) {
+                vodFallbackUrls.clear();
+                vodFallbackIndex = 0;
+                activeStreamUrl = preferHlsUrl(originalStreamUrl);
+            } else {
+                buildVodFallbacks(originalStreamUrl);
+                activeStreamUrl = vodFallbackUrls.isEmpty() ? originalStreamUrl : vodFallbackUrls.get(0);
+            }
             Log.i(TAG, "play original=" + originalStreamUrl + " active=" + activeStreamUrl + " isLive=" + isLive);
             preparePlayer();
         });
@@ -357,8 +369,11 @@ public class NativeExoPlayerController {
                     return;
                 }
 
-                String message = error.getMessage() != null ? error.getMessage() : "Native playback failed";
-                callback.onError(message);
+                if (!isLiveContent && tryNextVodFallback()) {
+                    return;
+                }
+
+                callback.onError(userFacingPlaybackError(error));
             }
         });
 
@@ -461,10 +476,103 @@ public class NativeExoPlayerController {
                         .build()
                 );
             }
+        } else if (lower.contains(".mkv")) {
+            builder.setMimeType("video/x-matroska");
+        } else if (lower.contains(".mp4")) {
+            builder.setMimeType(MimeTypes.VIDEO_MP4);
         } else if (lower.contains(".ts")) {
             builder.setMimeType(MimeTypes.VIDEO_MP2T);
         }
         return builder.build();
+    }
+
+    private void buildVodFallbacks(String url) {
+        vodFallbackUrls.clear();
+        vodFallbackIndex = 0;
+        boolean emulator = isEmulator();
+        boolean mkv = isMkvUrl(url);
+        // Android TV emulator images usually have no HEVC decoder. Start on MP4
+        // (typically H.264) so the movie can play; keep MKV as a later try.
+        if (emulator && mkv) {
+            addVodFallback(rewriteContainer(url, "mp4"));
+        }
+        addVodFallback(url);
+        addVodFallback(rewriteContainer(url, "mp4"));
+        addVodFallback(rewriteContainer(url, "m3u8"));
+        addVodFallback(rewriteContainer(url, "ts"));
+        if (!emulator || !mkv) {
+            addVodFallback(rewriteContainer(url, "mkv"));
+        }
+        Log.i(TAG, "VOD fallbacks emulator=" + emulator + " count=" + vodFallbackUrls.size());
+    }
+
+    private void addVodFallback(String url) {
+        if (url == null || url.isEmpty()) return;
+        if (!vodFallbackUrls.contains(url)) {
+            vodFallbackUrls.add(url);
+        }
+    }
+
+    private boolean tryNextVodFallback() {
+        vodFallbackIndex += 1;
+        if (vodFallbackIndex >= vodFallbackUrls.size()) return false;
+        activeStreamUrl = vodFallbackUrls.get(vodFallbackIndex);
+        Log.i(TAG, "VOD format failed, retrying " + activeStreamUrl);
+        preparePlayer();
+        return true;
+    }
+
+    private static String userFacingPlaybackError(PlaybackException error) {
+        String raw = error.getMessage() != null ? error.getMessage() : "";
+        String lower = raw.toLowerCase();
+        boolean hevc = lower.contains("hevc") || lower.contains("h265") || lower.contains("hvc1") || lower.contains("hev1");
+        boolean mkv = lower.contains("mkv") || lower.contains("matroska");
+        boolean decoder = error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED
+            || error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED
+            || error.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED
+            || lower.contains("format_supported=no")
+            || lower.contains("mediacodec");
+        if (hevc || mkv || (decoder && isEmulator())) {
+            if (isEmulator()) {
+                return "This Android TV emulator cannot play HEVC/MKV. Try a movie offered as MP4, or play this title on a real Fire TV / Android TV.";
+            }
+            return "This device cannot decode this movie's video format (HEVC/MKV).";
+        }
+        return raw.isEmpty() ? "Native playback failed" : raw;
+    }
+
+    private static boolean isEmulator() {
+        String fingerprint = String.valueOf(Build.FINGERPRINT);
+        String model = String.valueOf(Build.MODEL);
+        String product = String.valueOf(Build.PRODUCT);
+        String hardware = String.valueOf(Build.HARDWARE);
+        String brand = String.valueOf(Build.BRAND);
+        String device = String.valueOf(Build.DEVICE);
+        String manufacturer = String.valueOf(Build.MANUFACTURER);
+        return fingerprint.contains("generic")
+            || fingerprint.contains("unknown")
+            || model.contains("sdk")
+            || model.contains("Emulator")
+            || model.contains("Android SDK")
+            || product.contains("sdk")
+            || product.contains("emulator")
+            || product.contains("simulator")
+            || hardware.contains("goldfish")
+            || hardware.contains("ranchu")
+            || hardware.contains("vbox")
+            || brand.startsWith("generic")
+            || device.startsWith("generic")
+            || manufacturer.contains("Genymotion");
+    }
+
+    private static boolean isMkvUrl(String url) {
+        return url != null && url.toLowerCase().contains(".mkv");
+    }
+
+    private static String rewriteContainer(String url, String ext) {
+        if (url == null || ext == null) return null;
+        if (!url.matches("(?i).+\\.(mp4|mkv|ts|m3u8|avi|wmv)(\\?.*)?$")) return null;
+        return url.replaceAll("(?i)\\.(mp4|mkv|ts|m3u8|avi|wmv)(\\?.*)?$", "." + ext + "$2");
     }
 
     private static String preferHlsUrl(String url) {
