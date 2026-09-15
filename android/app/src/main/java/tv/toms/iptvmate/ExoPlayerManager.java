@@ -6,11 +6,13 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.Gravity;
-import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebView;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
+import android.widget.ProgressBar;
+import android.widget.TextView;
 
 import androidx.coordinatorlayout.widget.CoordinatorLayout;
 import androidx.media3.ui.PlayerView;
@@ -18,12 +20,14 @@ import androidx.media3.ui.PlayerView;
 /**
  * Bounded PlayerView overlay + in-process ExoPlayer (Activity context for Fire TV HDMI audio).
  *
- * Place the overlay AFTER the WebView in the view tree so SurfaceView's default
- * hole-punch is visible in the preview rect. Do not hide the WebView, and do not
- * call setZOrderMediaOverlay — that reboots Fire TV's compositor.
+ * TextureView (not SurfaceView) so Fire TV does not create a SurfaceFlinger
+ * hardware overlay. SurfaceView hole-punch produced continuous
+ * HWComposer "Invalid display" / vendor.dpframework dumpbuffer errors.
+ * Place the overlay AFTER the WebView so the texture draws on top.
  */
 public class ExoPlayerManager {
     private static final String TAG = "IPTVMate_ExoPlayer";
+    private static final int CONTROLS_HIDE_MS = 3500;
 
     public interface JsNotifier {
         void evaluateJs(String script);
@@ -35,14 +39,32 @@ public class ExoPlayerManager {
     private final NativeExoPlayerController playerController;
 
     private boolean isPlayingNative = false;
+    private Runnable overlayHideRunnable;
 
     private FrameLayout overlay;
     private PlayerView playerView;
+    private View controlsBar;
+    private ProgressBar progressBar;
+    private ImageButton playButton;
+    private ImageButton muteButton;
+    private ImageButton fullscreenButton;
+    private TextView timeView;
+    private TextView titleView;
+    private Runnable controlsTicker;
+    private Runnable hideControlsRunnable;
+    private boolean controlsRevealed = true;
+    private boolean focusListenerAttached = false;
+    private String guideTitle = "";
+    private long guideStartMs;
+    private long guideEndMs;
+    private boolean overlayLooksFullscreen;
 
     private int boundLeft;
     private int boundTop;
     private int boundWidth;
     private int boundHeight;
+    private int cssViewportWidth;
+    private int cssViewportHeight;
     private boolean hasBounds;
     private boolean playIsLive = true;
 
@@ -91,6 +113,8 @@ public class ExoPlayerManager {
             boundTop = Math.max(0, top);
             boundWidth = Math.max(1, width);
             boundHeight = Math.max(1, height);
+            this.cssViewportWidth = Math.max(0, cssViewportWidth);
+            this.cssViewportHeight = Math.max(0, cssViewportHeight);
             hasBounds = boundWidth >= 2 && boundHeight >= 2;
             Log.i(TAG, "setBounds css=" + left + "," + top + " " + width + "x" + height
                 + " viewport=" + cssViewportWidth + "x" + cssViewportHeight);
@@ -109,15 +133,20 @@ public class ExoPlayerManager {
         final String trimmed = url.trim();
         runOnMain(() -> {
             try {
+                cancelHideOverlay();
                 isPlayingNative = true;
                 playIsLive = isLive;
                 ensureOverlayOnMain();
                 if (overlay != null) {
+                    overlay.setVisibility(View.VISIBLE);
                     overlay.bringToFront();
                 }
                 applyBoundsOnMain();
+                setWebViewOpaque(true);
                 silenceWebViewMedia();
                 playBound(trimmed, isLive);
+                startControlsTicker();
+                revealControls();
                 requestJsBoundsOnMain();
             } catch (RuntimeException e) {
                 Log.e(TAG, "play failed on main thread", e);
@@ -130,6 +159,8 @@ public class ExoPlayerManager {
         runOnMain(() -> {
             if (!isPlayingNative) return;
             playerController.pause();
+            refreshControlsOnMain();
+            notifyJsPlayerState();
         });
     }
 
@@ -137,11 +168,29 @@ public class ExoPlayerManager {
         runOnMain(() -> {
             if (!isPlayingNative) return;
             playerController.resume();
+            refreshControlsOnMain();
+            notifyJsPlayerState();
         });
     }
 
     public void setMuted(boolean muted) {
-        runOnMain(() -> playerController.setMuted(muted));
+        runOnMain(() -> {
+            playerController.setMuted(muted);
+            refreshControlsOnMain();
+        });
+    }
+
+    public void setGuide(String title, long startMs, long endMs) {
+        runOnMain(() -> {
+            guideTitle = title != null ? title : "";
+            guideStartMs = Math.max(0, startMs);
+            guideEndMs = Math.max(0, endMs);
+            refreshControlsOnMain();
+        });
+    }
+
+    public void revealControls() {
+        runOnMain(this::revealControlsOnMain);
     }
 
     private void playBound(String url, boolean isLive) {
@@ -150,12 +199,11 @@ public class ExoPlayerManager {
             overlay.setVisibility(View.VISIBLE);
             overlay.bringToFront();
         }
-        configureSurfaceZOrderOnMain();
 
         jsNotifier.evaluateJs(
             "document.body.classList.add('native-exo-active');" +
             "document.querySelectorAll('video,audio').forEach(function(el){" +
-            "try{el.pause();el.muted=true;el.volume=0;el.removeAttribute('src');if(el.load)el.load();}catch(e){}" +
+            "try{el.pause();el.muted=true;el.volume=0;el.removeAttribute('src');}catch(e){}" +
             "});"
         );
 
@@ -169,36 +217,64 @@ public class ExoPlayerManager {
         }
     }
 
+    private void setWebViewOpaque(boolean opaque) {
+        WebView webView = activity.getBridge() != null ? activity.getBridge().getWebView() : null;
+        if (webView == null) return;
+        webView.setBackgroundColor(opaque ? Color.BLACK : Color.TRANSPARENT);
+    }
+
     private void hideNativeSurface() {
         if (overlay != null) {
             overlay.setVisibility(View.GONE);
         }
+        setWebViewOpaque(true);
+    }
+
+    private void cancelHideOverlay() {
+        if (overlayHideRunnable != null) {
+            mainHandler.removeCallbacks(overlayHideRunnable);
+            overlayHideRunnable = null;
+        }
+    }
+
+    private void scheduleHideOverlay() {
+        cancelHideOverlay();
+        overlayHideRunnable = () -> {
+            overlayHideRunnable = null;
+            if (!isPlayingNative) {
+                hideNativeSurface();
+            }
+        };
+        mainHandler.postDelayed(overlayHideRunnable, 180);
     }
 
     public void stop() {
         runOnMain(() -> {
-            if (!isPlayingNative) return;
+            if (!isPlayingNative && overlayHideRunnable == null) return;
 
             isPlayingNative = false;
             Log.i(TAG, "Stopping native player");
-
-            if (overlay != null) {
-                overlay.setVisibility(View.GONE);
-            }
+            stopControlsTicker();
+            cancelHideControls();
             jsNotifier.evaluateJs(
                 "document.body.classList.remove('native-exo-active');" +
                 "document.body.classList.remove('native-exo-vod');"
             );
             playerController.stop();
+            // Delay hiding the overlay so a quick channel change does not
+            // tear down the compositor layer.
+            scheduleHideOverlay();
         });
     }
 
     public void release() {
         runOnMain(() -> {
             isPlayingNative = false;
-            if (overlay != null) {
-                overlay.setVisibility(View.GONE);
-            }
+            cancelHideOverlay();
+            stopControlsTicker();
+            cancelHideControls();
+            hideNativeSurface();
+            setWebViewOpaque(true);
             jsNotifier.evaluateJs(
                 "document.body.classList.remove('native-exo-active');" +
                 "document.body.classList.remove('native-exo-vod');"
@@ -231,7 +307,10 @@ public class ExoPlayerManager {
         String escaped = message != null
             ? message.replace("\\", "\\\\").replace("'", "\\'")
             : "Native playback failed";
-        mainHandler.post(this::hideNativeSurface);
+        mainHandler.post(() -> {
+            hideNativeSurface();
+            setWebViewOpaque(true);
+        });
         jsNotifier.evaluateJs(
             "document.body.classList.remove('native-exo-active');" +
             "document.body.classList.remove('native-exo-vod');" +
@@ -241,8 +320,6 @@ public class ExoPlayerManager {
     }
 
     void handleNativePlaybackStopped() {
-        if (isPlayingNative) return;
-        mainHandler.post(this::hideNativeSurface);
         jsNotifier.evaluateJs(
             "document.body.classList.remove('native-exo-active');" +
             "document.body.classList.remove('native-exo-vod');"
@@ -271,27 +348,28 @@ public class ExoPlayerManager {
         overlay = (FrameLayout) activity.getLayoutInflater()
             .inflate(R.layout.native_exo_overlay, parent, false);
         overlay.setVisibility(View.GONE);
-        overlay.setClickable(false);
+        overlay.setClickable(true);
         overlay.setFocusable(false);
         overlay.setFocusableInTouchMode(false);
+        overlay.setOnClickListener(v -> revealControlsOnMain());
 
         playerView = overlay.findViewById(R.id.native_exo_player_view);
         if (playerView == null) {
             throw new IllegalStateException("native_exo_player_view missing from overlay layout");
         }
         playerView.setUseController(false);
-        playerView.setKeepContentOnPlayerReset(true);
+        playerView.setKeepContentOnPlayerReset(false);
         playerView.setShutterBackgroundColor(Color.BLACK);
         playerView.setKeepScreenOn(true);
         playerView.setClickable(false);
         playerView.setFocusable(false);
         playerView.setFocusableInTouchMode(false);
         playerController.attachPlayerView(playerView);
+        bindControlsOnMain();
         configureSurfaceZOrderOnMain();
 
-        // Overlay must sit AFTER the WebView so the hole-punch is not covered by
-        // Chromium's own surface. Behind-WebView placement yields audio-only
-        // (SurfaceFlinger drops every decoded frame).
+        // Overlay must sit AFTER the WebView so TextureView paints on top of
+        // Chromium. SurfaceView hole-punch is no longer used.
         int insertAt = parent.indexOfChild(webView) + 1;
         if (insertAt < 1) {
             insertAt = parent.getChildCount();
@@ -305,16 +383,6 @@ public class ExoPlayerManager {
         if (overlay == null) return;
 
         ViewGroup parent = (ViewGroup) overlay.getParent();
-        ViewGroup.LayoutParams raw = overlay.getLayoutParams();
-        ViewGroup.MarginLayoutParams lp;
-        if (raw instanceof ViewGroup.MarginLayoutParams) {
-            lp = (ViewGroup.MarginLayoutParams) raw;
-        } else {
-            lp = parent != null
-                ? createOverlayLayoutParams(parent, boundWidth, boundHeight)
-                : new FrameLayout.LayoutParams(boundWidth, boundHeight);
-        }
-
         WebView webView = activity.getBridge() != null ? activity.getBridge().getWebView() : null;
         int hostWidth = webView != null && webView.getWidth() > 0
             ? webView.getWidth()
@@ -323,18 +391,28 @@ public class ExoPlayerManager {
             ? webView.getHeight()
             : (parent != null ? parent.getHeight() : 0);
 
-        boolean jsLooksFullscreen = hasBounds
-            && hostWidth > 0
-            && boundWidth >= (int) (hostWidth * 0.85f)
-            && boundHeight >= (int) (hostHeight * 0.70f);
+        boolean jsLooksFullscreen = hasBounds && (
+            cssViewportWidth > 0 && cssViewportHeight > 0
+                ? boundWidth >= (int) (cssViewportWidth * 0.85f)
+                    && boundHeight >= (int) (cssViewportHeight * 0.70f)
+                : hostWidth > 0
+                    && boundWidth >= (int) (hostWidth * 0.85f)
+                    && boundHeight >= (int) (hostHeight * 0.70f)
+        );
+
+        int nextWidth;
+        int nextHeight;
+        int nextLeft;
+        int nextTop;
+        int nextRight = 0;
+        int nextBottom = 0;
 
         if (!playIsLive || jsLooksFullscreen) {
-            lp.width = ViewGroup.LayoutParams.MATCH_PARENT;
-            lp.height = ViewGroup.LayoutParams.MATCH_PARENT;
-            lp.leftMargin = 0;
-            lp.topMargin = 0;
-            lp.rightMargin = 0;
-            lp.bottomMargin = 0;
+            nextWidth = ViewGroup.LayoutParams.MATCH_PARENT;
+            nextHeight = ViewGroup.LayoutParams.MATCH_PARENT;
+            nextLeft = 0;
+            nextTop = 0;
+            overlayLooksFullscreen = true;
             Log.i(TAG, "applyBounds fullscreen isLive=" + playIsLive);
         } else if (hostWidth >= 2 && hostHeight >= 2) {
             float density = activity.getResources().getDisplayMetrics().density;
@@ -345,40 +423,257 @@ public class ExoPlayerManager {
                 previewWidth = Math.max(240, hostWidth - margin * 2);
                 previewHeight = Math.round(previewWidth * 9f / 16f);
             }
-            lp.width = previewWidth;
-            lp.height = previewHeight;
-            lp.leftMargin = Math.max(0, hostWidth - previewWidth - margin);
-            lp.topMargin = margin;
-            lp.rightMargin = 0;
-            lp.bottomMargin = 0;
-            Log.i(TAG, "applyBounds live-preview " + lp.leftMargin + "," + lp.topMargin
-                + " " + previewWidth + "x" + previewHeight + " host=" + hostWidth + "x" + hostHeight);
+            // Fill the preview window; the control bar overlays the picture.
+            nextWidth = previewWidth;
+            nextHeight = previewHeight;
+            nextLeft = Math.max(0, hostWidth - previewWidth - margin);
+            nextTop = margin;
+            overlayLooksFullscreen = false;
+            Log.i(TAG, "applyBounds live-preview " + nextLeft + "," + nextTop
+                + " " + previewWidth + "x" + nextHeight + " host=" + hostWidth + "x" + hostHeight);
         } else if (hasBounds) {
-            lp.width = boundWidth;
-            lp.height = boundHeight;
-            lp.leftMargin = boundLeft;
-            lp.topMargin = boundTop;
+            nextWidth = boundWidth;
+            nextHeight = boundHeight;
+            nextLeft = boundLeft;
+            nextTop = boundTop;
+            overlayLooksFullscreen = jsLooksFullscreen;
         } else {
             return;
         }
+
+        ViewGroup.LayoutParams raw = overlay.getLayoutParams();
+        ViewGroup.MarginLayoutParams lp;
+        if (raw instanceof ViewGroup.MarginLayoutParams) {
+            lp = (ViewGroup.MarginLayoutParams) raw;
+            if (lp.width == nextWidth
+                && lp.height == nextHeight
+                && lp.leftMargin == nextLeft
+                && lp.topMargin == nextTop
+                && lp.rightMargin == nextRight
+                && lp.bottomMargin == nextBottom) {
+                return;
+            }
+        } else {
+            lp = parent != null
+                ? createOverlayLayoutParams(parent, nextWidth, nextHeight)
+                : new FrameLayout.LayoutParams(nextWidth, nextHeight);
+        }
+
+        lp.width = nextWidth;
+        lp.height = nextHeight;
+        lp.leftMargin = nextLeft;
+        lp.topMargin = nextTop;
+        lp.rightMargin = nextRight;
+        lp.bottomMargin = nextBottom;
 
         if (lp instanceof CoordinatorLayout.LayoutParams) {
             ((CoordinatorLayout.LayoutParams) lp).gravity = Gravity.TOP | Gravity.START;
         } else if (lp instanceof FrameLayout.LayoutParams) {
             ((FrameLayout.LayoutParams) lp).gravity = Gravity.TOP | Gravity.START;
         }
+
         overlay.setLayoutParams(lp);
         overlay.requestLayout();
+        refreshControlsOnMain();
+        applyControlsVisibilityOnMain();
+    }
+
+    private void bindControlsOnMain() {
+        if (overlay == null) return;
+        controlsBar = overlay.findViewById(R.id.native_exo_controls);
+        progressBar = overlay.findViewById(R.id.native_exo_progress);
+        playButton = overlay.findViewById(R.id.native_exo_play);
+        muteButton = overlay.findViewById(R.id.native_exo_mute);
+        fullscreenButton = overlay.findViewById(R.id.native_exo_fullscreen);
+        timeView = overlay.findViewById(R.id.native_exo_time);
+        titleView = overlay.findViewById(R.id.native_exo_title);
+
+        if (playButton != null) {
+            playButton.setOnClickListener(v -> {
+                playerController.togglePlayPause();
+                refreshControlsOnMain();
+                notifyJsPlayerState();
+                revealControlsOnMain();
+            });
+        }
+        if (muteButton != null) {
+            muteButton.setOnClickListener(v -> {
+                playerController.toggleMuted();
+                refreshControlsOnMain();
+                notifyJsPlayerState();
+                revealControlsOnMain();
+            });
+        }
+        if (fullscreenButton != null) {
+            fullscreenButton.setOnClickListener(v -> {
+                revealControlsOnMain();
+                jsNotifier.evaluateJs(
+                    "try{window.dispatchEvent(new CustomEvent('nativePlayerCommand',"
+                        + "{detail:{action:'fullscreen'}}));}catch(e){}"
+                );
+            });
+        }
+        attachControlsFocusListener();
+        refreshControlsOnMain();
+        revealControlsOnMain();
+    }
+
+    private void startControlsTicker() {
+        stopControlsTicker();
+        controlsTicker = () -> {
+            refreshControlsOnMain();
+            if (isPlayingNative && overlay != null && overlay.getVisibility() == View.VISIBLE) {
+                mainHandler.postDelayed(controlsTicker, 500);
+            }
+        };
+        mainHandler.post(controlsTicker);
+    }
+
+    private void stopControlsTicker() {
+        if (controlsTicker != null) {
+            mainHandler.removeCallbacks(controlsTicker);
+            controlsTicker = null;
+        }
+    }
+
+    private void refreshControlsOnMain() {
+        if (controlsBar == null) return;
+
+        boolean paused = playerController.isPlaybackPaused();
+        boolean muted = playerController.isMuted();
+        if (playButton != null) {
+            playButton.setImageResource(paused ? R.drawable.ic_player_play : R.drawable.ic_player_pause);
+        }
+        if (muteButton != null) {
+            muteButton.setImageResource(muted ? R.drawable.ic_player_volume_off : R.drawable.ic_player_volume_on);
+        }
+        if (fullscreenButton != null) {
+            fullscreenButton.setImageResource(
+                overlayLooksFullscreen ? R.drawable.ic_player_fullscreen_exit : R.drawable.ic_player_fullscreen
+            );
+        }
+
+        long now = System.currentTimeMillis();
+        boolean hasGuide = guideEndMs > guideStartMs && guideEndMs > now - 60_000;
+        int progress = 0;
+        if (hasGuide) {
+            long span = Math.max(1, guideEndMs - guideStartMs);
+            progress = (int) Math.max(0, Math.min(1000, ((now - guideStartMs) * 1000L) / span));
+        }
+        if (progressBar != null) {
+            progressBar.setProgress(progress);
+        }
+        if (timeView != null) {
+            timeView.setText(hasGuide ? formatGuideRange(guideStartMs, guideEndMs) : "Live");
+        }
+        if (titleView != null) {
+            titleView.setText(guideTitle);
+        }
+    }
+
+    private void revealControlsOnMain() {
+        controlsRevealed = true;
+        applyControlsVisibilityOnMain();
+        if (controlsHaveFocus()) {
+            cancelHideControls();
+            return;
+        }
+        scheduleHideControls();
+    }
+
+    private void scheduleHideControls() {
+        cancelHideControls();
+        hideControlsRunnable = () -> {
+            hideControlsRunnable = null;
+            if (controlsHaveFocus()) {
+                return;
+            }
+            controlsRevealed = false;
+            applyControlsVisibilityOnMain();
+        };
+        mainHandler.postDelayed(hideControlsRunnable, CONTROLS_HIDE_MS);
+    }
+
+    private void cancelHideControls() {
+        if (hideControlsRunnable != null) {
+            mainHandler.removeCallbacks(hideControlsRunnable);
+            hideControlsRunnable = null;
+        }
+    }
+
+    private void applyControlsVisibilityOnMain() {
+        if (controlsBar == null) return;
+        boolean show = isPlayingNative && controlsRevealed;
+        if (show) {
+            controlsBar.animate().cancel();
+            controlsBar.setVisibility(View.VISIBLE);
+            if (controlsBar.getAlpha() < 0.99f) {
+                controlsBar.animate().alpha(1f).setDuration(180).start();
+            } else {
+                controlsBar.setAlpha(1f);
+            }
+        } else if (controlsBar.getVisibility() == View.VISIBLE) {
+            controlsBar.animate().cancel();
+            controlsBar.animate().alpha(0f).setDuration(180).withEndAction(() -> {
+                if (!controlsRevealed || !isPlayingNative) {
+                    controlsBar.setVisibility(View.GONE);
+                }
+            }).start();
+        } else {
+            controlsBar.setVisibility(View.GONE);
+        }
+    }
+
+    private boolean controlsHaveFocus() {
+        View focused = activity.getCurrentFocus();
+        return isUnderControls(focused);
+    }
+
+    private boolean isUnderControls(View view) {
+        if (controlsBar == null || view == null) return false;
+        View current = view;
+        while (current != null) {
+            if (current == controlsBar) return true;
+            if (!(current.getParent() instanceof View)) return false;
+            current = (View) current.getParent();
+        }
+        return false;
+    }
+
+    private void attachControlsFocusListener() {
+        if (focusListenerAttached || activity.getWindow() == null) return;
+        View decor = activity.getWindow().getDecorView();
+        if (decor.getViewTreeObserver() == null) return;
+        decor.getViewTreeObserver().addOnGlobalFocusChangeListener((oldFocus, newFocus) -> {
+            if (!isPlayingNative || controlsBar == null) return;
+            if (isUnderControls(newFocus)) {
+                controlsRevealed = true;
+                applyControlsVisibilityOnMain();
+                cancelHideControls();
+            } else if (isUnderControls(oldFocus)) {
+                scheduleHideControls();
+            }
+        });
+        focusListenerAttached = true;
+    }
+
+    private String formatGuideRange(long startMs, long endMs) {
+        java.text.DateFormat format = android.text.format.DateFormat.getTimeFormat(activity);
+        return format.format(new java.util.Date(startMs)) + " – " + format.format(new java.util.Date(endMs));
+    }
+
+    private void notifyJsPlayerState() {
+        boolean paused = playerController.isPlaybackPaused();
+        boolean muted = playerController.isMuted();
+        jsNotifier.evaluateJs(
+            "try{window.dispatchEvent(new CustomEvent('nativePlayerCommand',"
+                + "{detail:{action:'state',paused:" + paused + ",muted:" + muted + "}}));}catch(e){}"
+        );
     }
 
     private void configureSurfaceZOrderOnMain() {
-        if (playerView == null) return;
-        View surface = playerView.getVideoSurfaceView();
-        if (surface instanceof SurfaceView) {
-            // Default z-order (behind the window) + hole punch. setZOrderMediaOverlay
-            // puts a second compositor layer on top of WebView and reboots Fire TV.
-            ((SurfaceView) surface).setZOrderOnTop(false);
-        }
+        // TextureView has no SurfaceFlinger overlay plane. Leave z-order alone
+        // if a SurfaceView is ever restored — setZOrderMediaOverlay reboots Fire TV.
     }
 
     private void requestJsBoundsOnMain() {

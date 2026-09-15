@@ -54,7 +54,11 @@ function ChannelItem({
     (activeChannel?.id === ch.id ? " active" : "") +
     (visible ? "" : " hidden");
 
-  const handleClick = () => {
+  const handleClick = (event?: { target?: EventTarget | null }) => {
+    const target = event?.target;
+    if (target instanceof Element && target.closest(".channel-list-favorite, .channel-icon-favorite")) {
+      return;
+    }
     if ((!showVisibilityControls || showAsIcons) && visible) {
       onSelect(ch);
     }
@@ -81,8 +85,10 @@ function ChannelItem({
             <button
               type="button"
               className={`channel-icon-favorite${isFavoriteChannel(ch) ? " active" : ""}`}
+              data-channel-id={String(ch.id || "")}
               aria-label={`${isFavoriteChannel(ch) ? "Remove" : "Add"} ${ch.name} to favorites`}
               onClick={(e) => {
+                e.preventDefault();
                 e.stopPropagation();
                 onToggleFavorite(ch);
               }}
@@ -146,14 +152,28 @@ function ChannelItem({
           <button
             type="button"
             className="channel-select-btn"
-            disabled={!visible}
             onClick={(e) => {
               e.stopPropagation();
               if (visible) onSelect(ch);
             }}
           >
-            {ch.number} • {ch.name}
+            {channelLabel}
           </button>
+          {showListFavorite && (
+            <button
+              type="button"
+              className={`channel-list-favorite${isFavoriteChannel(ch) ? " active" : ""}`}
+              data-channel-id={String(ch.id || "")}
+              aria-label={`${isFavoriteChannel(ch) ? "Remove" : "Add"} ${ch.name} to favorites`}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onToggleFavorite(ch);
+              }}
+            >
+              {isFavoriteChannel(ch) ? "★" : "☆"}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -181,7 +201,7 @@ function ChannelItem({
 
   return (
     <button type="button" className={`${itemClass} channel-row-btn`} onClick={handleClick}>
-      <span>{ch.number} • {ch.name}</span>
+      <span>{channelLabel}</span>
     </button>
   );
 }
@@ -223,17 +243,22 @@ export function ChannelList({
   const [visibleCount, setVisibleCount] = useState(effectiveBatchSize);
   const listRef = useRef<HTMLDivElement | null>(null);
 
+  const safeChannels = useMemo(() => {
+    return channels.filter((channel) => !!channel && typeof channel === "object");
+  }, [channels]);
+
+  const channelIdentity = useMemo(
+    () => safeChannels.map((channel) => `${String(channel?.id || "")}|${String(channel?.url || "")}`).join("\n"),
+    [safeChannels]
+  );
+
   useEffect(() => {
     setVisibleCount(effectiveBatchSize);
     const listEl = listRef.current;
     if (listEl) {
       listEl.scrollTop = 0;
     }
-  }, [channels, showAsIcons, effectiveBatchSize]);
-
-  const safeChannels = useMemo(() => {
-    return channels.filter((channel) => !!channel && typeof channel === "object");
-  }, [channels]);
+  }, [channelIdentity, showAsIcons, effectiveBatchSize]);
 
   const visibleChannels = useMemo(() => {
     return safeChannels.slice(0, visibleCount);

@@ -7,6 +7,8 @@ const MAIN_MENU_KEYCODE_MAP: Record<number, string> = {
   39: "ArrowRight",
   40: "ArrowDown",
   13: "Enter",
+  23: "Enter",
+  66: "Enter",
   29443: "Enter",
   29460: "ArrowLeft",
   29461: "ArrowRight",
@@ -36,13 +38,7 @@ function isWebOsRuntime(): boolean {
 function normalizedMenuKey(event: KeyboardEvent): { key: string; fromFallback: boolean } {
   const raw = String(event.key || "");
   const keyCode = Number(event.keyCode || 0);
-  
-  // Debug logging
-  const debugLog = (window as any).webosDebugLog;
-  if (debugLog) {
-    debugLog(`menu-key: raw=${raw} code=${keyCode}`);
-  }
-  
+
   // First check if it's a known Back key alias
   if (BACK_KEY_ALIASES[raw]) {
     return { key: "Backspace", fromFallback: false };
@@ -122,37 +118,6 @@ export default function MainMenuScreen({
     return () => window.clearTimeout(timer);
   }, [visible]);
 
-  // Some webOS pointer firmwares deliver mousedown/mouseup on these buttons
-  // but drop the synthesized click, leaving the menu unclickable by Magic
-  // Remote. Fire the action from mouseup when no click follows shortly after.
-  useEffect(() => {
-    if (!visible) return;
-    const container = containerRef.current;
-    if (!container) return;
-
-    let lastClickAt = 0;
-    const onClickCapture = () => {
-      lastClickAt = Date.now();
-    };
-    const onMouseUp = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      const btn = target?.closest?.(".opening-btn") as HTMLButtonElement | null;
-      if (!btn || btn.disabled) return;
-      window.setTimeout(() => {
-        if (Date.now() - lastClickAt > 250) {
-          btn.click();
-        }
-      }, 260);
-    };
-
-    container.addEventListener("click", onClickCapture, true);
-    container.addEventListener("mouseup", onMouseUp);
-    return () => {
-      container.removeEventListener("click", onClickCapture, true);
-      container.removeEventListener("mouseup", onMouseUp);
-    };
-  }, [visible]);
-
   useEffect(() => {
     if (!visible) {
       setHydrationWaitExpired(false);
@@ -179,14 +144,8 @@ export default function MainMenuScreen({
     const timer = window.setTimeout(focusFirstMenuButton, 0);
 
     const onKeyDown = (event: KeyboardEvent) => {
-      const { key, fromFallback } = normalizedMenuKey(event);
-      
-      // Log all navigation keys for debugging
-      const debugLog = (window as any).webosDebugLog;
-      if (debugLog) {
-        debugLog(`MENU: key=${key} fb=${fromFallback}`);
-      }
-      
+      const { key } = normalizedMenuKey(event);
+
       if (!["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Enter", "Backspace", "Escape"].includes(key)) {
         return;
       }
@@ -207,12 +166,10 @@ export default function MainMenuScreen({
         containerRef.current?.querySelectorAll<HTMLButtonElement>(".opening-btn") || []
       );
       if (buttons.length === 0) {
-        if (debugLog) debugLog(`MENU: no buttons found`);
         return;
       }
 
       const active = document.activeElement as HTMLElement | null;
-      if (debugLog) debugLog(`MENU: active=${active?.tagName} btns=${buttons.length}`);
       
       let index = active ? buttons.indexOf(active as HTMLButtonElement) : -1;
       if (index < 0 && (key === "ArrowDown" || key === "ArrowRight")) {

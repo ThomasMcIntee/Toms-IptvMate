@@ -1,4 +1,6 @@
 import { Channel, ContentType } from "../channelStore";
+import { isWebOsRuntime } from "../player/platformDetection";
+import { fetchWebOsRemote } from "../webosStreamRelay";
 
 function detectContentType(name: string, group: string): ContentType {
   const text = `${group} ${name}`.toLowerCase();
@@ -45,13 +47,15 @@ function hashText(value: string): string {
 }
 
 export async function loadM3U(url: string): Promise<Channel[]> {
-  const { requestUrl, baseUrl } = await resolveReachableUrl(url, "M3U");
-  const res = await fetch(requestUrl);
-  if (!res.ok) {
-    throw new Error(`M3U request failed (${res.status})`);
+  const { requestUrl, baseUrl, text: prefetchedText } = await resolveReachableUrl(url, "M3U");
+  let text = prefetchedText;
+  if (text == null) {
+    const res = await fetch(requestUrl);
+    if (!res.ok) {
+      throw new Error(`M3U request failed (${res.status})`);
+    }
+    text = await res.text();
   }
-
-  const text = await res.text();
 
   const lines = text.split("\n");
   const channels: Channel[] = [];
@@ -125,6 +129,9 @@ function getUrlCandidates(url: string): string[] {
   }
 
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    if (isWebOsRuntime() && trimmed.startsWith("https://")) {
+      return [trimmed, `http://${trimmed.slice("https://".length)}`];
+    }
     return [trimmed];
   }
 
@@ -134,11 +141,20 @@ function getUrlCandidates(url: string): string[] {
 async function resolveReachableUrl(
   url: string,
   label: string
-): Promise<{ requestUrl: string; baseUrl: string }> {
+): Promise<{ requestUrl: string; baseUrl: string; text?: string }> {
   const candidates = getUrlCandidates(url);
   const reasons: string[] = [];
 
   for (const candidate of candidates) {
+    if (isWebOsRuntime()) {
+      const remote = await fetchWebOsRemote(candidate);
+      if (remote) {
+        return { requestUrl: remote.url, baseUrl: candidate, text: remote.text };
+      }
+      reasons.push(`${candidate} -> webOS fetch failed`);
+      continue;
+    }
+
     try {
       const res = await fetch(candidate);
       if (res.ok) {

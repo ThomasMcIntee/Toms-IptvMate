@@ -1,0 +1,6 @@
+{
+  "name": "tv.toms.iptvmate.relay",
+  "version": "1.4.13",
+  "description": "Local HTTP relay so webOS Chromium never opens the CDN TLS socket",
+  "main": "relay.js"
+}

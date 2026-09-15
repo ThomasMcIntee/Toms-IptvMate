@@ -1,0 +1,14 @@
+{
+  "role": {
+    "exeName": "js",
+    "type": "regular",
+    "allowedNames": ["tv.toms.iptvmate.relay"]
+  },
+  "permissions": [
+    {
+      "service": "tv.toms.iptvmate.relay",
+      "inbound": ["*"],
+      "outbound": ["*"]
+    }
+  ]
+}

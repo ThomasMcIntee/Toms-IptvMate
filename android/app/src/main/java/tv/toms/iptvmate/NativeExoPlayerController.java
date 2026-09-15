@@ -127,18 +127,37 @@ public class NativeExoPlayerController {
         });
     }
 
+    public void togglePlayPause() {
+        runOnMain(() -> {
+            if (exoPlayer == null) return;
+            if (exoPlayer.getPlayWhenReady()) {
+                exoPlayer.pause();
+            } else {
+                exoPlayer.play();
+            }
+        });
+    }
+
+    public void toggleMuted() {
+        setMuted(!muted);
+    }
+
+    public boolean isPlaybackPaused() {
+        return exoPlayer == null || !exoPlayer.getPlayWhenReady();
+    }
+
+    public boolean isMuted() {
+        return muted;
+    }
+
     public void stop() {
         runOnMain(() -> {
             Log.i(TAG, "stopPlayback");
             abandonAudioFocus();
-            if (playerView != null) {
-                playerView.setPlayer(null);
-            }
             if (exoPlayer != null) {
                 exoPlayer.stop();
                 exoPlayer.clearMediaItems();
-                exoPlayer.release();
-                exoPlayer = null;
+                exoPlayer.setPlayWhenReady(false);
             }
             callback.onStopped();
         });
@@ -190,6 +209,10 @@ public class NativeExoPlayerController {
 
             ensureSystemAudible();
             acquireAudioFocus();
+            if (playerView != null) {
+                playerView.setKeepContentOnPlayerReset(false);
+                playerView.setShutterBackgroundColor(android.graphics.Color.BLACK);
+            }
             exoPlayer.stop();
             exoPlayer.clearMediaItems();
             exoPlayer.setVolume(muted ? 0f : 1f);
@@ -253,7 +276,6 @@ public class NativeExoPlayerController {
                 if (playbackState == Player.STATE_READY) {
                     ensureSystemAudible();
                     player.setVolume(muted ? 0f : 1f);
-                    player.setPlayWhenReady(true);
                     logAudioDiagnostics("ready");
                     Log.i(TAG, "Playback ready volume=" + player.getVolume()
                         + " playing=" + player.isPlaying());

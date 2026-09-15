@@ -7,5 +7,10 @@
   "title": "Toms IPTVmate",
   "icon": "icon.png",
   "disableBackHistoryAPI": true,
-  "handlesRelaunch": true
+  "handlesRelaunch": true,
+  "requiredPermissions": [
+    "network.connection",
+    "network.protocols",
+    "download"
+  ]
 }

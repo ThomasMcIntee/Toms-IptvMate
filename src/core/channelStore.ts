@@ -29,9 +29,9 @@ import { isWebOsDbAvailable, webosDbGetLarge, webosDbSetLarge } from "./webosSto
 let channels: Channel[] = [];
 let activeGroup: string = "All";
 let roleChannelWriteLock: "adult" | "child" | null = null;
-const VISIBILITY_KEY = "iptvmate_visibility";             // live/runtime — overwritten by reset
-const ADULT_SAVED_KEY = "iptvmate_visibility_adult";       // admin-saved adult settings (never reset)
-const CHILD_SAVED_KEY = "iptvmate_visibility_child";       // admin-saved child settings (never reset)
+const VISIBILITY_KEY = "iptvmate_visibility";             // live/runtime hide/show — restored on open
+const ADULT_SAVED_KEY = "iptvmate_visibility_adult";       // adult profile hide/show
+const CHILD_SAVED_KEY = "iptvmate_visibility_child";       // child profile hide/show
 let activeVisibilityRole: "adult" | "child" = "adult";
 const FAVORITES_KEY = "iptvmate_favorites";
 const FAVORITES_GROUP = "Favorites";
@@ -46,6 +46,9 @@ const CHANNELS_CACHE_LIVE_RECORD_KEY = "latest-live";
 const CAPACITOR_MAX_IDB_CACHE_CHANNELS = 12000;
 const CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD = 8000;
 const CAPACITOR_MAX_GROUP_CHANNELS = 2500;
+// Persist a full Xtream category on Fire TV. Keep this under ~8k so a single
+// group (e.g. EN - NEW RELEASE) fits without tripping the low-memory killer.
+const CAPACITOR_MAX_IDB_GROUP_CHANNELS = 8000;
 const CAPACITOR_BULK_GROUP_THRESHOLD = 150;
 const CAPACITOR_IDB_PERSIST_BATCH_SIZE = 6;
 const CAPACITOR_INGEST_CHUNK_SIZE = 350;
@@ -99,6 +102,10 @@ type VisibilityState = {
   channels: Record<string, boolean>;
   /** Capacitor/Fire TV: compact hide-all without storing 900+ group keys. */
   allGroupsHidden?: boolean;
+  /** Compact Hide All for Movies: groups — missing keys are hidden. */
+  allMoviesHidden?: boolean;
+  /** Compact Hide All for Series: groups — missing keys are hidden. */
+  allSeriesHidden?: boolean;
 };
 
 type FavoriteEntry = {
@@ -112,6 +119,8 @@ export type ChannelVisibilitySnapshot = {
   groups: Record<string, boolean>;
   channels: Record<string, boolean>;
   allGroupsHidden?: boolean;
+  allMoviesHidden?: boolean;
+  allSeriesHidden?: boolean;
 };
 
 export type ChannelWriteTrace = {
@@ -334,6 +343,10 @@ function migrateLegacyFavoritesForCurrentChannels() {
   dispatchFavoritesChanged();
 }
 
+function shouldKeepCapacitorLogo(contentType?: ContentType): boolean {
+  return contentType === "movie" || contentType === "series";
+}
+
 function toCacheChannel(item: Channel): Channel {
   const result: Channel = {
     id: String(item.id),
@@ -341,7 +354,12 @@ function toCacheChannel(item: Channel): Channel {
     url: String(item.url)
   };
 
-  if (typeof item.logo === "string") result.logo = item.logo;
+  // Live catalogs are huge; skip artwork there. Movies/Series grids need posters.
+  if (typeof item.logo === "string" && item.logo.trim()) {
+    if (!isCapacitorRuntime() || shouldKeepCapacitorLogo(item.contentType)) {
+      result.logo = item.logo.trim();
+    }
+  }
   if (typeof item.group === "string") result.group = item.group;
   if (item.contentType === "live" || item.contentType === "movie" || item.contentType === "series") {
     result.contentType = item.contentType;
@@ -419,12 +437,15 @@ function applyCachedChannels(list: Channel[]) {
   activeGroup = firstGroup || "All";
 }
 
+function shouldSplitCapacitorLiveCatalog(list: Channel[], source?: string): boolean {
+  if (!isCapacitorRuntime()) return false;
+  if (source && CAPACITOR_TRANSIENT_SOURCES.has(source)) return false;
+  if (getCapacitorLiveGroupNames().length > 0) return false;
+  return list.length > CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD && list.some(isLiveChannel);
+}
+
 function applyRestoredChannels(list: Channel[]) {
-  if (
-    isCapacitorRuntime() &&
-    list.length > CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD &&
-    list.some(isLiveChannel)
-  ) {
+  if (shouldSplitCapacitorLiveCatalog(list, "restore-cache")) {
     ingestCapacitorLiveChannelCatalog(list);
     return;
   }
@@ -440,15 +461,12 @@ export function clearCurrentChannels(source: string = "unknown") {
 }
 
 function loadCachedChannelsWithPresence(): { hasValue: boolean; channels: Channel[] } {
-  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
   try {
     const raw = localStorage.getItem(CHANNELS_CACHE_KEY);
-    debugLog(`cache-load: raw=${raw ? raw.length + ' chars' : 'null'}`);
     if (raw === null) return { hasValue: false, channels: [] };
 
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) {
-      debugLog('cache-load: not array');
       return { hasValue: true, channels: [] };
     }
 
@@ -458,10 +476,8 @@ function loadCachedChannelsWithPresence(): { hasValue: boolean; channels: Channe
         .map(toValidChannel)
         .filter((item): item is Channel => !!item)
     };
-    debugLog(`cache-load: ${result.channels.length} channels`);
     return result;
   } catch (e) {
-    debugLog(`cache-load error: ${e}`);
     return { hasValue: true, channels: [] };
   }
 }
@@ -482,8 +498,6 @@ function saveCachedChannels(list: Channel[]) {
   } catch (err) {
     // Large channel lists routinely exceed the localStorage quota on TVs.
     // IndexedDB remains the durable store; surface the failure for on-TV debugging.
-    const debugLog = (window as any).webosDebugLog;
-    if (debugLog) debugLog(`cache-save: localStorage failed (${err instanceof Error ? err.name : "error"})`);
   }
 }
 
@@ -626,13 +640,34 @@ async function readCachedChannelsFromIndexedDb(
   });
 }
 
+async function writeCachedChannelRecordsToIndexedDb(
+  db: IDBDatabase,
+  records: Array<{ key: string; list: Channel[] }>
+): Promise<boolean> {
+  const ready = records.filter((record) => record.list.length > 0);
+  if (ready.length === 0) return true;
+  return new Promise<boolean>((resolve) => {
+    try {
+      const tx = db.transaction(CHANNELS_CACHE_STORE, "readwrite");
+      const store = tx.objectStore(CHANNELS_CACHE_STORE);
+      for (const record of ready) {
+        store.put(record.list.map(toCacheChannel), record.key);
+      }
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+      tx.onabort = () => resolve(false);
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
 async function writeCachedChannelsToIndexedDb(
   db: IDBDatabase,
   recordKey: string,
   list: Channel[],
   options?: { quiet?: boolean }
 ): Promise<boolean> {
-  const debugLog = (window as any).webosDebugLog;
   const quiet = options?.quiet === true;
 
   return new Promise<boolean>((resolve) => {
@@ -640,38 +675,27 @@ async function writeCachedChannelsToIndexedDb(
       const tx = db.transaction(CHANNELS_CACHE_STORE, "readwrite");
       tx.objectStore(CHANNELS_CACHE_STORE).put(list.map(toCacheChannel), recordKey);
       tx.oncomplete = () => {
-        if (debugLog && !quiet) {
-          debugLog(`cache-save: idb persisted ${list.length} channels (${recordKey})`);
-        }
         resolve(true);
       };
       tx.onerror = () => {
-        if (debugLog) debugLog(`cache-save: idb tx error (${recordKey})`);
         resolve(false);
       };
       tx.onabort = () => {
-        if (debugLog) debugLog(`cache-save: idb tx abort (${recordKey})`);
         resolve(false);
       };
     } catch {
-      if (debugLog) debugLog(`cache-save: idb tx exception (${recordKey})`);
       resolve(false);
     }
   });
 }
 
 async function saveCachedChannelsIndexedDb(list: Channel[]) {
-  const debugLog = (window as any).webosDebugLog;
   const db = await openChannelsCacheDb();
   if (!db) {
-    if (debugLog) debugLog("cache-save: idb open failed, channels NOT persisted");
     return;
   }
 
   if (shouldSkipCapacitorFullIdbPersist(list)) {
-    if (debugLog) {
-      debugLog(`cache-save: Capacitor skip idb full persist (${list.length} channels)`);
-    }
 
     const liveOnly = list.filter(isLiveChannel);
     if (liveOnly.length > 0 && liveOnly.length <= CAPACITOR_MAX_IDB_CACHE_CHANNELS) {
@@ -715,13 +739,10 @@ function saveCachedChannelsWebosDb(list: Channel[]): void {
 
     webosDbSaveInFlight = true;
     void (async () => {
-      const debugLog = (window as any).webosDebugLog;
       try {
         const payload = JSON.stringify(toSave.map(toCacheChannel));
         const ok = await webosDbSetLarge(CHANNELS_CACHE_KEY, payload);
-        if (debugLog) debugLog(`cache-save: db8 ${ok ? "ok" : "FAILED"} (${toSave.length} channels)`);
       } catch (err) {
-        if (debugLog) debugLog(`cache-save: db8 threw ${err instanceof Error ? err.message : "error"}`);
       } finally {
         webosDbSaveInFlight = false;
         // A newer list may have arrived while saving; queue it.
@@ -745,10 +766,8 @@ async function loadCachedChannelsWebosDb(): Promise<Channel[]> {
 }
 
 async function loadCapacitorGroupChannelsFromIndexedDb(db: IDBDatabase): Promise<Channel[]> {
-  const debugLog = (window as any).webosDebugLog;
   const groupNames = getCapacitorLiveGroupNames();
   if (groupNames.length === 0) {
-    if (debugLog) debugLog("cache-load: Capacitor skip monolithic idb (no split groups yet)");
     return [];
   }
 
@@ -756,47 +775,42 @@ async function loadCapacitorGroupChannelsFromIndexedDb(db: IDBDatabase): Promise
     const normalized = normalizeGroupName(groupName);
     const groupChannels = await readCachedChannelsFromIndexedDb(db, idbLiveGroupRecordKey(normalized));
     if (groupChannels.length > 0) {
-      if (debugLog) debugLog(`cache-load: idb group ${normalized} ${groupChannels.length} channels`);
       return groupChannels;
     }
   }
 
-  if (debugLog) debugLog("cache-load: Capacitor group catalog present but no idb group records");
   return [];
 }
 
 async function loadCachedChannelsIndexedDb(): Promise<Channel[]> {
-  const debugLog = (window as any).webosDebugLog;
   const db = await openChannelsCacheDb();
   if (!db) return [];
 
+  const timeoutMs = isCapacitorRuntime() ? CHANNELS_CACHE_DB_TIMEOUT_MS : 30000;
   const loadPromise = (async () => {
     if (isCapacitorRuntime()) {
       return loadCapacitorGroupChannelsFromIndexedDb(db);
     }
 
+    // Desktop/webOS keep live + movies + series in one record. Never prefer the
+    // live-only Fire TV record or trim VOD out of a large catalog on restore.
+    const full = await readCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
+    if (full.length > 0) {
+      return full;
+    }
+
     const liveOnly = await readCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_LIVE_RECORD_KEY);
     if (liveOnly.length > 0) {
-      if (debugLog) debugLog(`cache-load: idb live-only ${liveOnly.length} channels`);
       return liveOnly;
     }
 
-    const full = await readCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
-    if (full.length > CAPACITOR_MAX_IDB_CACHE_CHANNELS) {
-      const trimmedLive = full.filter(isLiveChannel);
-      if (debugLog) {
-        debugLog(`cache-load: trim idb ${full.length} -> ${trimmedLive.length} live channels`);
-      }
-      return trimmedLive;
-    }
-
-    return full;
+    return [];
   })();
 
   const result = await Promise.race([
     loadPromise,
     new Promise<Channel[]>((resolve) => {
-      window.setTimeout(() => resolve([]), CHANNELS_CACHE_DB_TIMEOUT_MS);
+      window.setTimeout(() => resolve([]), timeoutMs);
     })
   ]);
 
@@ -804,9 +818,8 @@ async function loadCachedChannelsIndexedDb(): Promise<Channel[]> {
   return result;
 }
 
-function loadVisibilityState(): VisibilityState {
-  // On module init, activeVisibilityRole is always "adult" — read the adult key.
-  const key = VISIBILITY_KEY;
+function parseVisibilityState(raw: string | null): VisibilityState | null {
+  if (!raw) return null;
   try {
     const raw = localStorage.getItem(key);
     if (!raw) {
@@ -824,28 +837,109 @@ function loadVisibilityState(): VisibilityState {
     }
 
     const parsed = JSON.parse(raw) as Partial<VisibilityState>;
+    if (!parsed || typeof parsed !== "object") return null;
     return {
-      groups: parsed.groups ?? {},
-      channels: parsed.channels ?? {},
-      allGroupsHidden: parsed.allGroupsHidden === true
+      groups: parsed.groups && typeof parsed.groups === "object" ? parsed.groups : {},
+      channels: parsed.channels && typeof parsed.channels === "object" ? parsed.channels : {},
+      allGroupsHidden: parsed.allGroupsHidden === true,
+      allMoviesHidden: parsed.allMoviesHidden === true,
+      allSeriesHidden: parsed.allSeriesHidden === true
     };
+  } catch {
+    return null;
+  }
+}
+
+function visibilityLooksSaved(state: VisibilityState | null | undefined): boolean {
+  if (!state) return false;
+  return (
+    state.allGroupsHidden === true ||
+    state.allMoviesHidden === true ||
+    state.allSeriesHidden === true ||
+    Object.keys(state.groups).length > 0 ||
+    Object.keys(state.channels).length > 0
+  );
+}
+
+function loadVisibilityState(): VisibilityState {
+  try {
+    return parseVisibilityState(localStorage.getItem(VISIBILITY_KEY)) || { groups: {}, channels: {} };
   } catch {
     return { groups: {}, channels: {} };
   }
 }
 
+function isMovieGroupName(group: string): boolean {
+  return String(group || "").startsWith("Movies:");
+}
+
+function isSeriesGroupName(group: string): boolean {
+  return String(group || "").startsWith("Series:");
+}
+
+function stripScopeGroupKeys(groups: Record<string, boolean>, isScope: (group: string) => boolean): void {
+  for (const key of Object.keys(groups)) {
+    if (isScope(key)) delete groups[key];
+  }
+}
+
+/** Collapse Hide All movies/series maps so Save does not exceed Fire TV localStorage quota. */
+function compactVisibilityState(state: VisibilityState): VisibilityState {
+  const groups = { ...state.groups };
+  let allMoviesHidden = state.allMoviesHidden === true;
+  let allSeriesHidden = state.allSeriesHidden === true;
+
+  const compactScope = (
+    alreadyCompact: boolean,
+    isScope: (group: string) => boolean,
+    catalog: string[]
+  ): boolean => {
+    if (alreadyCompact) {
+      for (const key of Object.keys(groups)) {
+        if (isScope(key) && groups[key] !== true) delete groups[key];
+      }
+      return true;
+    }
+    if (catalog.length === 0) return false;
+    const allHidden = catalog.every((group) => groups[group] === false);
+    if (!allHidden) return false;
+    stripScopeGroupKeys(groups, isScope);
+    return true;
+  };
+
+  allMoviesHidden = compactScope(allMoviesHidden, isMovieGroupName, getCapacitorVodGroupNames("movies"));
+  allSeriesHidden = compactScope(allSeriesHidden, isSeriesGroupName, getCapacitorVodGroupNames("series"));
+
+  return {
+    groups,
+    channels: state.channels,
+    allGroupsHidden: state.allGroupsHidden === true,
+    allMoviesHidden,
+    allSeriesHidden
+  };
+}
+
 function saveVisibilityStateNow() {
   try {
+    visibilityState = compactVisibilityState(visibilityState);
     localStorage.setItem(VISIBILITY_KEY, JSON.stringify(visibilityState));
   } catch {
     // Ignore persistence errors.
   }
 }
 
+function mirrorVisibilityToActiveRole() {
+  const key = activeVisibilityRole === "child" ? CHILD_SAVED_KEY : ADULT_SAVED_KEY;
+  try {
+    localStorage.setItem(key, JSON.stringify(visibilityState));
+  } catch {
+    // Large visibility maps can exceed localStorage quota.
+  }
+}
+
 function saveVisibilityState() {
-  // Always write to the live/runtime key. Saved role keys are only written
-  // by saveRoleVisibility() so that resetVisibilityForCurrentChannels() can
-  // never overwrite the admin's configured hide/show settings.
+  // Persist hide/show immediately so the next app open is instant, like
+  // Smarters Pro / TVmate.
   if (isCapacitorRuntime()) {
     if (saveVisibilityStateTimer !== null) {
       window.clearTimeout(saveVisibilityStateTimer);
@@ -860,9 +954,26 @@ function saveVisibilityState() {
   saveVisibilityStateNow();
 }
 
-/** Persist the current visibility state as the saved settings for the given role.
- *  This is the ONLY function that writes to ADULT_SAVED_KEY / CHILD_SAVED_KEY. */
+function persistUserVisibility() {
+  if (isCapacitorRuntime()) {
+    if (saveVisibilityStateTimer !== null) {
+      window.clearTimeout(saveVisibilityStateTimer);
+    }
+    saveVisibilityStateTimer = window.setTimeout(() => {
+      saveVisibilityStateTimer = null;
+      saveVisibilityStateNow();
+      mirrorVisibilityToActiveRole();
+    }, 300);
+    return;
+  }
+
+  saveVisibilityStateNow();
+  mirrorVisibilityToActiveRole();
+}
+
+/** Persist the current visibility state as the saved settings for the given role. */
 export function saveRoleVisibility(role: "adult" | "child") {
+  visibilityState = compactVisibilityState(visibilityState);
   const key = role === "child" ? CHILD_SAVED_KEY : ADULT_SAVED_KEY;
   const snapshot = isCapacitorRuntime() ? getCompactVisibilitySnapshot() : getVisibilitySnapshot();
   try {
@@ -879,20 +990,26 @@ export function saveRoleVisibility(role: "adult" | "child") {
       const tx = db.transaction(VISIBILITY_STORE, "readwrite");
       tx.objectStore(VISIBILITY_STORE).put(snapshot, key);
     } catch {
-      // Ignore
+      try {
+        db.close();
+      } catch {
+        // Ignore
+      }
     }
   })();
 }
 
+/** Restore the live hide/show map used when nobody is logged in as adult/child. */
+export function restoreLiveVisibility() {
+  visibilityState = loadVisibilityState();
+  dispatchVisibilityChanged();
+}
+
 /** Switch between adult (default) and child visibility states.
- *  Reads from the explicitly-saved role key so admin settings survive resets.
- *  Never mixes with the live key, which is reset on every playlist load. */
+ *  Reads the saved role snapshot so hide/show is instant on the next open. */
 export function setActiveVisibilityRole(role: "adult" | "child") {
   activeVisibilityRole = role;
   const savedKey = role === "child" ? CHILD_SAVED_KEY : ADULT_SAVED_KEY;
-
-  // Start with a fallback to empty state
-  let nextState: VisibilityState = { groups: {}, channels: {} };
 
   try {
     const raw = localStorage.getItem(savedKey);
@@ -924,9 +1041,14 @@ export function setActiveVisibilityRole(role: "adult" | "child") {
       const request = tx.objectStore(VISIBILITY_STORE).get(savedKey);
       request.onsuccess = () => {
         const val = request.result as VisibilityState | undefined;
-        if (val && (Object.keys(val.groups).length > 0 || Object.keys(val.channels).length > 0)) {
-          // If IDB has more data or we are currently empty, prefer it.
-          visibilityState = val;
+        if (visibilityLooksSaved(val) && val) {
+          visibilityState = {
+            groups: val.groups ?? {},
+            channels: val.channels ?? {},
+            allGroupsHidden: val.allGroupsHidden === true,
+            allMoviesHidden: val.allMoviesHidden === true,
+            allSeriesHidden: val.allSeriesHidden === true
+          };
           dispatchVisibilityChanged();
         }
       };
@@ -1355,10 +1477,6 @@ export function pruneCapacitorVisibilityIfBloated(): void {
   const groupKeyCount = Object.keys(visibilityState.groups).length;
   if (channelKeyCount <= 500 && groupKeyCount <= 2500) return;
 
-  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
-  debugLog(
-    `capacitor-visibility-trim: channels=${channelKeyCount} groups=${groupKeyCount} -> group-only`
-  );
 
   const catalogGroups = new Set([
     ...getCapacitorCatalogGroupNames("live"),
@@ -1367,15 +1485,19 @@ export function pruneCapacitorVisibilityIfBloated(): void {
   ]);
   const nextGroups: Record<string, boolean> = {};
   Object.entries(visibilityState.groups).forEach(([group, visible]) => {
-    if (visible === false || catalogGroups.has(group)) {
+    if (visible === false || catalogGroups.has(group) || isMovieGroupName(group) || isSeriesGroupName(group)) {
       nextGroups[group] = visible;
     }
   });
 
   visibilityState = {
     groups: nextGroups,
-    channels: {}
+    channels: {},
+    allGroupsHidden: visibilityState.allGroupsHidden === true,
+    allMoviesHidden: visibilityState.allMoviesHidden === true,
+    allSeriesHidden: visibilityState.allSeriesHidden === true
   };
+  visibilityState = compactVisibilityState(visibilityState);
   saveVisibilityState();
   dispatchVisibilityChanged();
 }
@@ -1389,19 +1511,16 @@ export function scheduleCapacitorLegacyCachePurge(): void {
     if (getCapacitorLiveGroupNames().length > 0) return;
 
     void (async () => {
-      const debugLog = (window as any).webosDebugLog;
       const db = await openChannelsCacheDb();
       if (!db) return;
       await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_LIVE_RECORD_KEY);
       await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
       db.close();
-      if (debugLog) debugLog("cache-load: purged legacy monolithic idb on Capacitor");
     })();
   }, 8000);
 }
 
 async function persistCapacitorLiveGroupsToIdb(list: Channel[], groupNames: string[]): Promise<void> {
-  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
   const db = await openChannelsCacheDb();
   if (!db) return;
 
@@ -1411,7 +1530,7 @@ async function persistCapacitorLiveGroupsToIdb(list: Channel[], groupNames: stri
   for (let index = 0; index < groupNames.length; index += CAPACITOR_IDB_PERSIST_BATCH_SIZE) {
     const batch = groupNames.slice(index, index + CAPACITOR_IDB_PERSIST_BATCH_SIZE);
     for (const groupName of batch) {
-      const members = (grouped.get(groupName) || []).slice(0, CAPACITOR_MAX_GROUP_CHANNELS);
+      const members = (grouped.get(groupName) || []).slice(0, CAPACITOR_MAX_IDB_GROUP_CHANNELS);
       if (members.length > 0) {
         await writeCachedChannelsToIndexedDb(db, idbLiveGroupRecordKey(groupName), members, writeOptions);
       }
@@ -1425,7 +1544,6 @@ async function persistCapacitorLiveGroupsToIdb(list: Channel[], groupNames: stri
   await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
 
   db.close();
-  if (debugLog) debugLog(`capacitor-ingest: persisted ${groupNames.length} live groups to idb`);
 }
 
 function yieldToMain(): Promise<void> {
@@ -1436,7 +1554,6 @@ export async function ingestCapacitorLiveChannelCatalogAsync(
   list: Channel[],
   preferredGroup?: string
 ): Promise<{ groupName: string; channelCount: number; totalLive: number }> {
-  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
   const groupCounts = new Map<string, number>();
   const groupBuckets = new Map<string, Channel[]>();
   let totalLive = 0;
@@ -1454,7 +1571,7 @@ export async function ingestCapacitorLiveChannelCatalogAsync(
         bucket = [];
         groupBuckets.set(group, bucket);
       }
-      if (bucket.length < CAPACITOR_MAX_GROUP_CHANNELS) {
+      if (bucket.length < CAPACITOR_MAX_IDB_GROUP_CHANNELS) {
         bucket.push(channel);
       }
       // Drop the source slot so the 50k+ fetch array can GC during IDB persist.
@@ -1504,7 +1621,6 @@ export async function ingestCapacitorLiveChannelCatalogAsync(
     await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_LIVE_RECORD_KEY);
     await deleteCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
     db.close();
-    if (debugLog) debugLog(`capacitor-ingest: persisted ${groupNames.length} live groups to idb`);
   }
 
   groupBuckets.clear();
@@ -1525,8 +1641,6 @@ export function ingestCapacitorLiveChannelCatalog(
 ): { groupName: string; channelCount: number; totalLive: number } {
   if (isCapacitorRuntime() && list.length > CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD) {
     if (capacitorLiveIngestInFlight) {
-      const debugLog = (window as any).webosDebugLog || console.log.bind(console);
-      debugLog("capacitor-ingest: skipped duplicate while a catalog ingest is already running");
       const preferred = preferredGroup ? normalizeGroupName(preferredGroup) : "";
       return {
         groupName: preferred || "Uncategorized",
@@ -1546,7 +1660,6 @@ export function ingestCapacitorLiveChannelCatalog(
     };
   }
 
-  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
   const groupCounts = new Map<string, number>();
   let totalLive = 0;
 
@@ -1581,9 +1694,6 @@ export function ingestCapacitorLiveChannelCatalog(
     if (memoryChannels.length >= CAPACITOR_MAX_GROUP_CHANNELS) break;
   }
 
-  debugLog(
-    `capacitor-ingest: ${list.length} total -> ${memoryChannels.length} in memory (${targetGroup}), ${groupNames.length} groups`
-  );
   setChannelsWithoutSideEffects(memoryChannels, "capacitor-live-ingest");
 
   window.setTimeout(() => {
@@ -1633,7 +1743,6 @@ export async function loadCapacitorLiveGroupChannels(groupName: string): Promise
 // background startup prefetch warm Movies/Series without touching the
 // live-only in-memory catalog.
 // ---------------------------------------------------------------------------
-export type CapacitorVodCacheScope = "movies" | "series";
 
 /** VOD catalogs change often; re-warm scopes older than this at startup. */
 export const CAPACITOR_VOD_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -1736,7 +1845,6 @@ export async function saveCapacitorVodScopeCache(
   if (capacitorVodScopeSaveInFlight[scope]) return capacitorVodScopeSaveInFlight[scope];
 
   capacitorVodScopeSaveInFlight[scope] = (async () => {
-    const debugLog = (window as any).webosDebugLog || console.log.bind(console);
     const expectedType = scope === "movies" ? "movie" : "series";
     const scopedChannels = capCapacitorCatalogList(
       list.filter((channel) => String(channel?.contentType || "").trim().toLowerCase() === expectedType)
@@ -1775,7 +1883,6 @@ export async function saveCapacitorVodScopeCache(
         updatedAt: Date.now()
       };
       saveCapacitorVodCacheMeta(meta);
-      debugLog(`vod-cache: persisted ${scopedChannels.length} ${scope} in ${chunkCount} chunks`);
     } finally {
       db.close();
     }
@@ -2018,8 +2125,6 @@ export function releaseCapacitorMemoryForLivePlayback(
     return channels.length;
   }
 
-  const debugLog = (window as any).webosDebugLog || console.log.bind(console);
-  debugLog(`capacitor-playback-trim: ${channels.length} -> ${trimmed.length} (${normalizedActive})`);
   setChannelsWithoutSideEffects(trimmed, "capacitor-playback-trim");
   return trimmed.length;
 }
@@ -2047,11 +2152,7 @@ function setChannelsWithoutSideEffects(list: Channel[], source: string) {
     return;
   }
 
-  if (
-    isCapacitorRuntime() &&
-    list.length > CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD &&
-    list.some(isLiveChannel)
-  ) {
+  if (shouldSplitCapacitorLiveCatalog(list, source)) {
     ingestCapacitorLiveChannelCatalog(list);
     recordChannelWriteTrace(source, true, channels.length);
     return;
@@ -2079,11 +2180,7 @@ export function setChannels(list: Channel[], source: string = "unknown") {
     return;
   }
 
-  if (
-    isCapacitorRuntime() &&
-    list.length > CAPACITOR_LIVE_MEMORY_TRIM_THRESHOLD &&
-    list.some(isLiveChannel)
-  ) {
+  if (shouldSplitCapacitorLiveCatalog(list, source)) {
     ingestCapacitorLiveChannelCatalog(list);
     recordChannelWriteTrace(source, true, channels.length);
     return;
@@ -2135,6 +2232,38 @@ export async function restoreChannelsCache(): Promise<Channel[]> {
   return restoreChannelsCacheInFlight;
 }
 
+/**
+ * If live channels are already in memory but movies/series were stripped from a
+ * previous restore, pull the full desktop/webOS catalog from IndexedDB.
+ */
+export async function hydrateCachedVodScope(scope: "movies" | "series"): Promise<Channel[]> {
+  const expectedType = scope === "movies" ? "movie" : "series";
+  if (channels.some((channel) => String(channel.contentType || "").toLowerCase() === expectedType)) {
+    return channels;
+  }
+  if (isCapacitorRuntime()) {
+    return channels;
+  }
+  if (roleChannelWriteLock) {
+    return channels;
+  }
+
+  const db = await openChannelsCacheDb();
+  if (!db) return channels;
+
+  try {
+    const full = await readCachedChannelsFromIndexedDb(db, CHANNELS_CACHE_RECORD_KEY);
+    if (full.length > channels.length) {
+      applyRestoredChannels(full);
+      recordChannelWriteTrace("hydrate-vod-scope", true, full.length);
+    }
+  } finally {
+    db.close();
+  }
+
+  return channels;
+}
+
 async function restoreChannelsCacheInternal(): Promise<Channel[]> {
   if (roleChannelWriteLock) {
     // During role-locked sessions, never restore generic global cache.
@@ -2160,7 +2289,7 @@ async function restoreChannelsCacheInternal(): Promise<Channel[]> {
       const fromIndexedDb = await Promise.race([
         loadCachedChannelsIndexedDb(),
         new Promise<Channel[]>((resolve) => {
-          window.setTimeout(() => resolve([]), CHANNELS_CACHE_DB_TIMEOUT_MS);
+          window.setTimeout(() => resolve([]), isCapacitorRuntime() ? CHANNELS_CACHE_DB_TIMEOUT_MS : 30000);
         })
       ]);
       if (roleChannelWriteLock) {
@@ -2192,7 +2321,7 @@ async function restoreChannelsCacheInternal(): Promise<Channel[]> {
   const fromIndexedDb = await Promise.race([
     loadCachedChannelsIndexedDb(),
     new Promise<Channel[]>((resolve) => {
-      window.setTimeout(() => resolve([]), CHANNELS_CACHE_DB_TIMEOUT_MS);
+      window.setTimeout(() => resolve([]), isCapacitorRuntime() ? CHANNELS_CACHE_DB_TIMEOUT_MS : 30000);
     })
   ]);
   if (roleChannelWriteLock) {
@@ -2250,67 +2379,158 @@ export function getGroups(): string[] {
   return Array.from(groups);
 }
 
+function isVodGroupName(group: string): boolean {
+  return isMovieGroupName(group) || isSeriesGroupName(group);
+}
+
 export function isGroupVisible(group: string): boolean {
   if (group === "All" || group === FAVORITES_GROUP) return true;
-  if (visibilityState.allGroupsHidden) {
+
+  if (isMovieGroupName(group) && visibilityState.allMoviesHidden) {
     return visibilityState.groups[group] === true;
   }
+  if (isSeriesGroupName(group) && visibilityState.allSeriesHidden) {
+    return visibilityState.groups[group] === true;
+  }
+
+  if (visibilityState.allGroupsHidden) {
+    if (visibilityState.groups[group] === true) return true;
+    if (visibilityState.groups[group] === false) return false;
+    // Compact hide-all is for the live catalog. Movies/series stay visible
+    // unless the user hid those groups directly.
+    if (isVodGroupName(group)) return true;
+    return false;
+  }
   return visibilityState.groups[group] !== false;
+}
+
+function writeGroupVisibility(
+  nextGroups: Record<string, boolean>,
+  group: string,
+  visible: boolean,
+  liveHideAll: boolean,
+  moviesHideAll: boolean,
+  seriesHideAll: boolean
+): void {
+  if (group === "All" || group === FAVORITES_GROUP) return;
+  if (isMovieGroupName(group) && moviesHideAll) {
+    if (visible) nextGroups[group] = true;
+    else delete nextGroups[group];
+    return;
+  }
+  if (isSeriesGroupName(group) && seriesHideAll) {
+    if (visible) nextGroups[group] = true;
+    else delete nextGroups[group];
+    return;
+  }
+  if (isVodGroupName(group)) {
+    if (visible) delete nextGroups[group];
+    else nextGroups[group] = false;
+    return;
+  }
+  if (liveHideAll) {
+    if (visible) nextGroups[group] = true;
+    else delete nextGroups[group];
+    return;
+  }
+  if (visible) delete nextGroups[group];
+  else nextGroups[group] = false;
 }
 
 export function setGroupVisible(group: string, visible: boolean) {
   if (group === "All" || group === FAVORITES_GROUP) return;
 
   const nextGroups = { ...visibilityState.groups };
-  if (visibilityState.allGroupsHidden) {
-    if (visible) {
-      nextGroups[group] = true;
-    } else {
-      delete nextGroups[group];
-    }
-  } else if (visible) {
-    delete nextGroups[group];
-  } else {
-    nextGroups[group] = false;
-  }
+  writeGroupVisibility(
+    nextGroups,
+    group,
+    visible,
+    visibilityState.allGroupsHidden === true,
+    visibilityState.allMoviesHidden === true,
+    visibilityState.allSeriesHidden === true
+  );
 
   visibilityState = {
     ...visibilityState,
     groups: nextGroups
   };
-  saveVisibilityState();
+  persistUserVisibility();
   dispatchVisibilityChanged();
 }
 
-export function setGroupsVisible(groups: string[], visible: boolean) {
-  if (isCapacitorRuntime() && groups.length >= CAPACITOR_BULK_GROUP_THRESHOLD) {
+function vodVisibilityKeys(groups: Record<string, boolean>): Record<string, boolean> {
+  const next: Record<string, boolean> = {};
+  for (const [name, value] of Object.entries(groups)) {
+    if (isVodGroupName(name)) next[name] = value;
+  }
+  return next;
+}
+
+export function setGroupsVisible(groups: string[], visible: boolean, catalogWide = false) {
+  const targetGroups = groups.filter((group) => group !== "All" && group !== FAVORITES_GROUP);
+  const vodTargets = targetGroups.filter(isVodGroupName);
+  const liveTargets = targetGroups.filter((group) => !isVodGroupName(group));
+  const vodOnly = vodTargets.length > 0 && liveTargets.length === 0;
+  const moviesOnly = vodOnly && vodTargets.every(isMovieGroupName);
+  const seriesOnly = vodOnly && vodTargets.every(isSeriesGroupName);
+
+  // Compact Hide All for Movies/Series so Save does not write hundreds of keys.
+  if (catalogWide && (moviesOnly || seriesOnly)) {
+    const nextGroups = { ...visibilityState.groups };
+    stripScopeGroupKeys(nextGroups, moviesOnly ? isMovieGroupName : isSeriesGroupName);
     visibilityState = {
       ...visibilityState,
-      groups: {},
-      allGroupsHidden: !visible
+      groups: nextGroups,
+      allMoviesHidden: moviesOnly ? !visible : visibilityState.allMoviesHidden,
+      allSeriesHidden: seriesOnly ? !visible : visibilityState.allSeriesHidden
     };
-    saveVisibilityState();
+    persistUserVisibility();
     dispatchVisibilityChanged();
     return;
   }
 
+  // Compact hide-all is live-only. Movies/series must not flip allGroupsHidden
+  // (that would hide Live TV instead).
+  if (
+    catalogWide &&
+    isCapacitorRuntime() &&
+    !vodOnly &&
+    liveTargets.length >= CAPACITOR_BULK_GROUP_THRESHOLD
+  ) {
+    visibilityState = {
+      ...visibilityState,
+      groups: vodVisibilityKeys(visibilityState.groups),
+      allGroupsHidden: !visible
+    };
+    persistUserVisibility();
+    dispatchVisibilityChanged();
+    return;
+  }
+
+  const liveHideAll = !catalogWide && !vodOnly && visibilityState.allGroupsHidden === true;
   const nextGroups = { ...visibilityState.groups };
 
-  for (const group of groups) {
-    if (group === "All" || group === FAVORITES_GROUP) continue;
-    if (visible) {
-      delete nextGroups[group];
-    } else {
-      nextGroups[group] = false;
-    }
+  for (const group of targetGroups) {
+    writeGroupVisibility(
+      nextGroups,
+      group,
+      visible,
+      liveHideAll,
+      visibilityState.allMoviesHidden === true,
+      visibilityState.allSeriesHidden === true
+    );
   }
 
   visibilityState = {
     ...visibilityState,
     groups: nextGroups,
-    allGroupsHidden: false
+    allGroupsHidden: vodOnly
+      ? visibilityState.allGroupsHidden
+      : catalogWide
+        ? !visible
+        : visibilityState.allGroupsHidden
   };
-  saveVisibilityState();
+  persistUserVisibility();
   dispatchVisibilityChanged();
 }
 
@@ -2329,7 +2549,7 @@ export function setChannelVisible(channelId: string, visible: boolean) {
     ...visibilityState,
     channels: nextChannels
   };
-  saveVisibilityState();
+  persistUserVisibility();
   dispatchVisibilityChanged();
 }
 
@@ -2470,17 +2690,22 @@ export function resetVisibilityForCurrentChannels() {
   visibilityState = {
     groups: visibleGroups,
     channels: visibleChannels,
-    allGroupsHidden: false
+    allGroupsHidden: false,
+    allMoviesHidden: false,
+    allSeriesHidden: false
   };
   saveVisibilityState();
   dispatchVisibilityChanged();
 }
 
 export function getVisibilitySnapshot(): ChannelVisibilitySnapshot {
+  visibilityState = compactVisibilityState(visibilityState);
   return {
     groups: { ...visibilityState.groups },
     channels: { ...visibilityState.channels },
-    allGroupsHidden: visibilityState.allGroupsHidden
+    allGroupsHidden: visibilityState.allGroupsHidden,
+    allMoviesHidden: visibilityState.allMoviesHidden,
+    allSeriesHidden: visibilityState.allSeriesHidden
   };
 }
 
@@ -2507,6 +2732,7 @@ export function getCompactVisibilitySnapshot(): ChannelVisibilitySnapshot {
 }
 
 export function getVisibilitySnapshotForChannelIds(channelIds: string[]): ChannelVisibilitySnapshot {
+  visibilityState = compactVisibilityState(visibilityState);
   const ids = new Set(channelIds.map((id) => String(id || "")).filter((id) => id.length > 0));
 
   const nextChannels: Record<string, boolean> = {};
@@ -2525,7 +2751,7 @@ export function getVisibilitySnapshotForChannelIds(channelIds: string[]): Channe
 
   const nextGroups: Record<string, boolean> = {};
   for (const [group, visible] of Object.entries(visibilityState.groups)) {
-    if (allowedGroups.has(group)) {
+    if (allowedGroups.size === 0 || allowedGroups.has(group)) {
       nextGroups[group] = visible;
     }
   }
@@ -2533,7 +2759,9 @@ export function getVisibilitySnapshotForChannelIds(channelIds: string[]): Channe
   return {
     groups: nextGroups,
     channels: nextChannels,
-    allGroupsHidden: visibilityState.allGroupsHidden
+    allGroupsHidden: visibilityState.allGroupsHidden,
+    allMoviesHidden: visibilityState.allMoviesHidden,
+    allSeriesHidden: visibilityState.allSeriesHidden
   };
 }
 
@@ -2546,7 +2774,7 @@ export function applyVisibilitySnapshotForCurrentChannels(snapshot: ChannelVisib
   const nextChannels: Record<string, boolean> = {};
   if (snapshot.channels && typeof snapshot.channels === "object") {
     for (const [id, visible] of Object.entries(snapshot.channels)) {
-      if (!currentIds.has(id)) continue;
+      if (currentIds.size > 0 && !currentIds.has(id)) continue;
       nextChannels[id] = visible !== false;
     }
   }
@@ -2554,16 +2782,18 @@ export function applyVisibilitySnapshotForCurrentChannels(snapshot: ChannelVisib
   const nextGroups: Record<string, boolean> = {};
   if (snapshot.groups && typeof snapshot.groups === "object") {
     for (const [group, visible] of Object.entries(snapshot.groups)) {
-      if (!allowedGroups.has(group)) continue;
+      if (allowedGroups.size > 0 && !allowedGroups.has(group)) continue;
       nextGroups[group] = visible !== false;
     }
   }
 
-  visibilityState = {
+  visibilityState = compactVisibilityState({
     groups: nextGroups,
     channels: nextChannels,
-    allGroupsHidden: snapshot.allGroupsHidden === true
-  };
+    allGroupsHidden: snapshot.allGroupsHidden === true,
+    allMoviesHidden: snapshot.allMoviesHidden === true,
+    allSeriesHidden: snapshot.allSeriesHidden === true
+  });
   saveVisibilityState();
   dispatchVisibilityChanged();
 }

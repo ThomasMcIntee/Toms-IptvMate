@@ -1,4 +1,6 @@
 import { Channel, ContentType } from "../channelStore";
+import { isWebOsRuntime } from "../player/platformDetection";
+import { fetchWebOsRemote, fetchWebOsRemoteJson } from "../webosStreamRelay";
 
 function detectContentType(name: string, group: string): ContentType {
   const text = `${group} ${name}`.toLowerCase();
@@ -43,8 +45,23 @@ export async function loadStalker(portal: string, mac: string): Promise<Channel[
     "Cookie": `mac=${macAddress}; stb_lang=en; timezone=GMT`
   };
 
+  const handshakeUrl = `${portalBase}server/load.php?type=stb&action=handshake&token=`;
+  const channelsUrl = `${portalBase}server/load.php?type=itv&action=get_all_channels`;
+
+  if (isWebOsRuntime()) {
+    const handshake = await fetchWebOsRemote(handshakeUrl);
+    if (!handshake) {
+      throw new Error("Stalker handshake failed (webOS fetch)");
+    }
+    const data = await fetchWebOsRemoteJson(channelsUrl) as { js?: unknown } | null;
+    if (!data?.js || !Array.isArray(data.js)) {
+      throw new Error("Stalker response format is invalid");
+    }
+    return mapStalkerChannels(data.js);
+  }
+
   // Auth
-  const handshakeRes = await fetch(`${portalBase}server/load.php?type=stb&action=handshake&token=`, {
+  const handshakeRes = await fetch(handshakeUrl, {
     headers
   });
   if (!handshakeRes.ok) {
@@ -52,10 +69,7 @@ export async function loadStalker(portal: string, mac: string): Promise<Channel[
   }
 
   // Channels
-  const res = await fetch(
-    `${portalBase}server/load.php?type=itv&action=get_all_channels`,
-    { headers }
-  );
+  const res = await fetch(channelsUrl, { headers });
   if (!res.ok) {
     throw new Error(`Stalker channels request failed (${res.status})`);
   }
@@ -65,14 +79,18 @@ export async function loadStalker(portal: string, mac: string): Promise<Channel[
     throw new Error("Stalker response format is invalid");
   }
 
-  const result = data.js
+  return mapStalkerChannels(data.js);
+}
+
+function mapStalkerChannels(items: any[]): Channel[] {
+  return items
     .filter((item: any) => item.id != null && item.cmd && item.cmd.trim())
     .map((item: any) => {
       const name = item.name || `Channel ${item.id}`;
       const group = (item.tv_genre_id && String(item.tv_genre_id).trim()) || "Uncategorized";
       const contentType = detectContentType(name, group);
       const contentTypePrefix = contentType === "movie" ? "Movies: " : contentType === "series" ? "Series: " : "TV: ";
-      
+
       return {
         id: `stalker_${item.id}`,
         name: name,
@@ -82,8 +100,6 @@ export async function loadStalker(portal: string, mac: string): Promise<Channel[
         contentType: contentType
       };
     });
-
-  return result;
 }
 
 function getPortalCandidates(portal: string): string[] {
@@ -93,7 +109,11 @@ function getPortalCandidates(portal: string): string[] {
   }
 
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-    return [`${trimmed.replace(/\/+$/, "")}/`];
+    const normalized = `${trimmed.replace(/\/+$/, "")}/`;
+    if (isWebOsRuntime() && normalized.startsWith("https://")) {
+      return [normalized, `http://${normalized.slice("https://".length)}`];
+    }
+    return [normalized];
   }
 
   return [`https://${trimmed.replace(/\/+$/, "")}/`, `http://${trimmed.replace(/\/+$/, "")}/`];
@@ -111,8 +131,16 @@ async function resolveReachablePortalBase(portal: string, macAddress: string): P
       "Cookie": `mac=${macAddress}; stb_lang=en; timezone=GMT`
     };
 
+    const handshakeUrl = `${portalBase}server/load.php?type=stb&action=handshake&token=`;
     try {
-      const res = await fetch(`${portalBase}server/load.php?type=stb&action=handshake&token=`, {
+      if (isWebOsRuntime()) {
+        const remote = await fetchWebOsRemote(handshakeUrl);
+        if (remote) return portalBase;
+        reasons.push(`${portalBase} -> webOS fetch failed`);
+        continue;
+      }
+
+      const res = await fetch(handshakeUrl, {
         headers
       });
 

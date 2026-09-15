@@ -1,8 +1,13 @@
-import React, { Suspense } from "react";
+import React, { Suspense, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { ProfileProvider } from "./profiles/ProfileContext";
+import { OpeningBoot } from "./OpeningBoot";
 
 const App = React.lazy(() => import("./App").then((module) => ({ default: module.App })));
+
+function isFireTvLiteRuntime() {
+  return typeof document !== "undefined" && document.documentElement.classList.contains("firetv-lite");
+}
 
 class RootErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -63,19 +68,44 @@ function BootFallback() {
   );
 }
 
+function LiteRoot() {
+  const [bootAction, setBootAction] = useState<string | null>(null);
+
+  if (!bootAction) {
+    return <OpeningBoot onAction={setBootAction} />;
+  }
+
+  return (
+    <ProfileProvider>
+      <Suspense fallback={<BootFallback />}>
+        <App bootAction={bootAction} />
+      </Suspense>
+    </ProfileProvider>
+  );
+}
+
 export function mountApp(rootElement: HTMLElement) {
-  window.setTimeout(() => {
-    void import("./runtimeSetup").then(({ initRuntimeSetup }) => initRuntimeSetup());
-  }, 0);
+  const lite = isFireTvLiteRuntime();
+  // Fire TV menu must stay idle: runtimeSetup attaches debug/key/bridge
+  // listeners and is only needed on webOS/desktop.
+  if (!lite) {
+    window.setTimeout(() => {
+      void import("./runtimeSetup").then(({ initRuntimeSetup }) => initRuntimeSetup());
+    }, 0);
+  }
 
   const root = ReactDOM.createRoot(rootElement);
   const app = (
     <RootErrorBoundary>
-      <ProfileProvider>
-        <Suspense fallback={<BootFallback />}>
-          <App />
-        </Suspense>
-      </ProfileProvider>
+      {lite ? (
+        <LiteRoot />
+      ) : (
+        <ProfileProvider>
+          <Suspense fallback={<BootFallback />}>
+            <App />
+          </Suspense>
+        </ProfileProvider>
+      )}
     </RootErrorBoundary>
   );
 

@@ -33,10 +33,7 @@ type WebOsServiceBridge = {
   };
 };
 
-function debugLog(message: string): void {
-  const log = (window as any).webosDebugLog;
-  if (log) log(message);
-}
+function debugLog(_message: string): void {}
 
 function getLunaService(): NonNullable<WebOsServiceBridge["service"]> | null {
   if (typeof window === "undefined") return null;

@@ -20,7 +20,9 @@ export {
 } from "./bufferManager";
 export { 
   detectPlatformRuntime, 
-  isWebOsRuntime, 
+  isWebOsRuntime,
+  isWebOsSimulator,
+  webOsSupportsNativeHls,
   isCapacitorRuntime, 
   isElectronRuntime, 
   isAndroidRuntime,

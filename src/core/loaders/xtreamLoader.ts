@@ -1,8 +1,57 @@
 import { capCapacitorCatalogList, Channel, ContentType, type CatalogCategoryEntry } from "../channelStore";
 import { isCapacitorRuntime } from "../player/platformDetection";
 import type { PlaylistLoadScope } from "./playlistLoader";
+import type { PlaylistCatalogTotals } from "../playlistStore";
+import { parseXtreamAccountInfo, type XtreamAccountInfo } from "../xtreamAccount";
+import { fetchWebOsRemote, fetchWebOsRemoteJson } from "../webosStreamRelay";
 
-const CAPACITOR_SCOPED_STREAM_CAP = 2500;
+const CAPACITOR_PERSIST_GROUP_CAP = 8000;
+const CAPACITOR_CATEGORY_CONCURRENCY = 8;
+const CAPACITOR_XTREAM_JSON_MAX_BYTES = 3_500_000;
+const CAPACITOR_XTREAM_CATALOG_MAX_BYTES = 20_000_000;
+export type XtreamLoadProgress = (status: string) => void;
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+let capacitorNativeApiPath: "/__api" | "/__stream" | null = null;
+
+function capacitorNativeApiUrls(url: string): string[] {
+  if (!isCapacitorRuntime()) return [];
+  if (!/^https?:\/\//i.test(url)) return [];
+  if (url.includes("/__api") || url.includes("/__stream") || url.includes("corsproxy.io")) {
+    return [url];
+  }
+  const origin =
+    window.location.protocol === "http:" || window.location.protocol === "https:"
+      ? window.location.origin
+      : "http://localhost";
+  if (capacitorNativeApiPath) {
+    return [`${origin}${capacitorNativeApiPath}?url=${encodeURIComponent(url)}`];
+  }
+  return [
+    `${origin}/__api?url=${encodeURIComponent(url)}`,
+    `${origin}/__stream?url=${encodeURIComponent(url)}`
+  ];
+}
+
+function redactXtreamUrl(url: string): string {
+  return String(url || "")
+    .replace(/([?&](?:username|password|user|pass)=)[^&]*/gi, "$1***")
+    .slice(0, 120);
+}
+
+function capacitorIngestHasContent(scope: PlaylistLoadScope): boolean {
+  if (!isCapacitorRuntime()) return false;
+  const live = getCapacitorLiveGroupNames().length > 0;
+  const movies = getCapacitorVodGroupNames("movies").length > 0;
+  const series = getCapacitorVodGroupNames("series").length > 0;
+  if (scope === "live") return live;
+  if (scope === "movies") return movies;
+  if (scope === "series") return series;
+  return live || movies || series;
+}
 
 type XtreamSeriesEpisodeRaw = {
   id?: number | string;
@@ -45,17 +94,18 @@ export async function loadXtream(
   url: string,
   user: string,
   pass: string,
-  scope: PlaylistLoadScope = "all"
+  scope: PlaylistLoadScope = "all",
+  onProgress?: XtreamLoadProgress
 ): Promise<Channel[]> {
-  const { baseUrl, apiUrl, useProxy } = await resolveReachableBaseUrl(url, user, pass);
+  const { baseUrl, apiUrl, useProxy, probe } = await resolveReachableBaseUrl(url, user, pass);
   const baseApiUrl = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`;
 
-  const res = await fetch(apiUrl || baseApiUrl);
-  if (!res.ok) {
-    throw new Error(`Xtream request failed (${res.status})`);
+  const data = (probe ?? (await fetchJsonWithModeFallback(apiUrl || baseApiUrl, useProxy))) as {
+    user_info?: { auth?: number };
+  } | null;
+  if (!data) {
+    throw new Error("Xtream request failed (empty response)");
   }
-
-  const data = await res.json();
 
   if (data?.user_info?.auth === 0) {
     throw new Error("Xtream credentials are invalid.");
@@ -66,7 +116,7 @@ export async function loadXtream(
 
   if (scope === "all" || scope === "live") {
     try {
-      const liveChannels = await loadLiveStreams(baseUrl, user, pass, useProxy);
+      const liveChannels = await loadLiveStreams(baseUrl, user, pass, useProxy, onProgress);
       for (const channel of liveChannels) {
         result.push(channel);
       }
@@ -79,7 +129,7 @@ export async function loadXtream(
 
   if (scope === "all" || scope === "movies") {
     try {
-      const movies = await loadVODStreams(baseUrl, user, pass, useProxy);
+      const movies = await loadVODStreams(baseUrl, user, pass, useProxy, onProgress);
       for (const channel of movies) {
         result.push(channel);
       }
@@ -92,7 +142,7 @@ export async function loadXtream(
 
   if (scope === "all" || scope === "series") {
     try {
-      const series = await loadSeriesStreams(baseUrl, user, pass, useProxy);
+      const series = await loadSeriesStreams(baseUrl, user, pass, useProxy, onProgress);
       for (const channel of series) {
         result.push(channel);
       }
@@ -104,6 +154,10 @@ export async function loadXtream(
   }
 
   if (result.length === 0) {
+    // Fire TV persists each category to IndexedDB and returns [] on purpose.
+    if (capacitorIngestHasContent(scope)) {
+      return [];
+    }
     if (scopeErrors.length > 0) {
       throw new Error(`Xtream ${scope} load failed. ${scopeErrors.join(" | ")}`);
     }
@@ -113,63 +167,249 @@ export async function loadXtream(
   return result;
 }
 
-async function loadLiveStreams(baseUrl: string, user: string, pass: string, useProxy: boolean): Promise<Channel[]> {
-  // Fetch live categories
-  let categoryMap: Record<string, string> = {};
-  try {
-    const catApi = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_live_categories`;
-    const catUrl = useProxy ? toCorsProxyUrl(catApi) : catApi;
-    const catRes = await fetch(catUrl);
-    if (catRes.ok) {
-      const catData = await catRes.json();
-      if (Array.isArray(catData)) {
-        categoryMap = Object.fromEntries(
-          catData.map((c: any) => [c.category_id.toString(), c.category_name || `Category ${c.category_id}`])
-        );
-      }
-    }
-  } catch {
-    // Categories not available, will use fallback
+async function loadLiveStreams(
+  baseUrl: string,
+  user: string,
+  pass: string,
+  useProxy: boolean,
+  onProgress?: XtreamLoadProgress
+): Promise<Channel[]> {
+  if (isCapacitorRuntime()) {
+    return loadAndPersistLiveByCategory(baseUrl, user, pass, useProxy, onProgress);
   }
 
-  let liveStreams = [];
-  try {
-    const liveApi = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_live_streams`;
-    const liveUrl = useProxy ? toCorsProxyUrl(liveApi) : liveApi;
-    const liveRes = await fetch(liveUrl);
-    if (liveRes.ok) {
-      const liveData = await liveRes.json();
-      liveStreams = Array.isArray(liveData) ? liveData : [];
-    }
-  } catch {
-    // Live streams not available
-  }
-
+  onProgress?.("Loading live streams…");
+  const categoryMap = categoryNameMap(
+    await fetchXtreamList(baseUrl, user, pass, useProxy, "get_live_categories")
+  );
+  const liveStreams = await fetchXtreamList(baseUrl, user, pass, useProxy, "get_live_streams");
   const filtered = liveStreams.filter((item: any) => item.stream_id != null);
 
   return filtered
-    .map((item: any) => {
-      let group = "Uncategorized";
-      const liveExtension = String(item.container_extension || "ts").trim() || "ts";
-      
-      if (item.category_name && item.category_name.trim()) {
-        group = item.category_name.trim();
-      } else if (item.category_id && categoryMap[item.category_id.toString()]) {
-        group = categoryMap[item.category_id.toString()];
-      } else if (item.category_id) {
-        group = item.category_id.toString();
-      }
-      
-      return {
-        id: `live_${item.stream_id}`,
-        name: item.name || `Stream ${item.stream_id}`,
-        logo: item.stream_icon,
-        url: `${baseUrl}/live/${user}/${pass}/${item.stream_id}.${liveExtension}`,
-        group: `TV: ${group}`,
-        contentType: "live" as ContentType,
-        epgChannelId: String(item.epg_channel_id || "").trim() || undefined
-      };
-    });
+    .map((item: any) => mapLiveStream(item, categoryMap, baseUrl, user, pass))
+    .filter((channel): channel is Channel => !!channel);
+}
+
+function mapLiveStream(
+  item: any,
+  categoryMap: Record<string, string>,
+  baseUrl: string,
+  user: string,
+  pass: string
+): Channel | null {
+  if (item?.stream_id == null) return null;
+  let group = "Uncategorized";
+  const liveExtension = String(item.container_extension || "ts").trim() || "ts";
+
+  if (item.category_name && item.category_name.trim()) {
+    group = item.category_name.trim();
+  } else if (item.category_id && categoryMap[item.category_id.toString()]) {
+    group = categoryMap[item.category_id.toString()];
+  } else if (item.category_id) {
+    group = item.category_id.toString();
+  }
+
+  return {
+    id: `live_${item.stream_id}`,
+    name: item.name || `Stream ${item.stream_id}`,
+    logo: isCapacitorRuntime() ? undefined : item.stream_icon,
+    url: `${baseUrl}/live/${user}/${pass}/${item.stream_id}.${liveExtension}`,
+    group: `TV: ${group}`,
+    contentType: "live" as ContentType,
+    epgChannelId: String(item.epg_channel_id || "").trim() || undefined
+  };
+}
+
+function groupMappedChannels(
+  streams: any[],
+  mapItem: (item: any) => Channel | null
+): Map<string, Channel[]> {
+  const groups = new Map<string, Channel[]>();
+  for (let i = 0; i < streams.length; i += 1) {
+    const item = streams[i];
+    streams[i] = null;
+    const channel = mapItem(item);
+    if (!channel) continue;
+    const group = String(channel.group || "Uncategorized");
+    let list = groups.get(group);
+    if (!list) {
+      list = [];
+      groups.set(group, list);
+    }
+    if (list.length < CAPACITOR_PERSIST_GROUP_CAP) list.push(channel);
+  }
+  streams.length = 0;
+  return groups;
+}
+
+async function persistGroupedChannels(
+  groups: Map<string, Channel[]>,
+  persistBatch: (batch: Array<{ groupName: string; list: Channel[] }>) => Promise<void>,
+  onProgress?: XtreamLoadProgress,
+  label = "Saving"
+): Promise<number> {
+  const entries = Array.from(groups.entries());
+  groups.clear();
+  let saved = 0;
+  for (let index = 0; index < entries.length; index += 16) {
+    const slice = entries.slice(index, index + 16);
+    const batch: Array<{ groupName: string; list: Channel[] }> = [];
+    for (const [group, list] of slice) {
+      if (list.length === 0) continue;
+      saved += list.length;
+      batch.push({ groupName: group, list });
+    }
+    if (batch.length > 0) {
+      await persistBatch(batch);
+      for (const item of batch) item.list.length = 0;
+    }
+    onProgress?.(
+      `${label} ${Math.min(index + slice.length, entries.length)}/${entries.length} groups (${saved.toLocaleString()} titles)…`
+    );
+    await yieldToMain();
+  }
+  return saved;
+}
+
+async function fetchAndMapCategory(
+  category: any,
+  categoryMap: Record<string, string>,
+  baseUrl: string,
+  user: string,
+  pass: string,
+  useProxy: boolean,
+  streamsAction: string,
+  mapItem: (
+    item: any,
+    categoryMap: Record<string, string>,
+    baseUrl: string,
+    user: string,
+    pass: string
+  ) => Channel | null
+): Promise<Channel[]> {
+  const batch = await fetchXtreamList(
+    baseUrl,
+    user,
+    pass,
+    useProxy,
+    streamsAction,
+    `&category_id=${encodeURIComponent(String(category.category_id))}`
+  );
+  const mapped: Channel[] = [];
+  for (let i = 0; i < batch.length && mapped.length < CAPACITOR_PERSIST_GROUP_CAP; i += 1) {
+    const item = batch[i];
+    batch[i] = null;
+    if (item && item.category_id == null) item.category_id = category.category_id;
+    if (item && !item.category_name && category.category_name) {
+      item.category_name = category.category_name;
+    }
+    const channel = mapItem(item, categoryMap, baseUrl, user, pass);
+    if (channel) mapped.push(channel);
+  }
+  batch.length = 0;
+  return mapped;
+}
+
+async function persistCategoriesInPairs(
+  categoryItems: any[],
+  categoryMap: Record<string, string>,
+  baseUrl: string,
+  user: string,
+  pass: string,
+  useProxy: boolean,
+  streamsAction: string,
+  mapItem: (
+    item: any,
+    categoryMap: Record<string, string>,
+    baseUrl: string,
+    user: string,
+    pass: string
+  ) => Channel | null,
+  persistBatch: (batch: Array<{ groupName: string; list: Channel[] }>) => Promise<void>,
+  onProgress?: XtreamLoadProgress,
+  label = "Loading"
+): Promise<number> {
+  const categories = categoryItems.filter((category) => category?.category_id != null);
+  let saved = 0;
+
+  for (let index = 0; index < categories.length; index += CAPACITOR_CATEGORY_CONCURRENCY) {
+    const slice = categories.slice(index, index + CAPACITOR_CATEGORY_CONCURRENCY);
+    const batches = await Promise.all(
+      slice.map((category) =>
+        fetchAndMapCategory(category, categoryMap, baseUrl, user, pass, useProxy, streamsAction, mapItem).catch(
+          (err) => {
+            console.warn(`[xtream] skipped ${label} category ${String(category.category_name || category.category_id)}:`, err);
+            return [] as Channel[];
+          }
+        )
+      )
+    );
+    const toSave: Array<{ groupName: string; list: Channel[] }> = [];
+    for (const mapped of batches) {
+      if (mapped.length === 0) continue;
+      saved += mapped.length;
+      toSave.push({ groupName: String(mapped[0].group || "Uncategorized"), list: mapped });
+    }
+    if (toSave.length > 0) {
+      await persistBatch(toSave);
+      for (const item of toSave) item.list.length = 0;
+    }
+    onProgress?.(
+      `${label} ${Math.min(index + slice.length, categories.length)}/${categories.length} categories (${saved.toLocaleString()} titles)…`
+    );
+    await yieldToMain();
+  }
+  return saved;
+}
+
+async function loadAndPersistLiveByCategory(
+  baseUrl: string,
+  user: string,
+  pass: string,
+  useProxy: boolean,
+  onProgress?: XtreamLoadProgress
+): Promise<Channel[]> {
+  const categoryItems = await fetchXtreamList(baseUrl, user, pass, useProxy, "get_live_categories");
+  const categoryMap = categoryNameMap(categoryItems);
+  onProgress?.("Loading live TV catalog…");
+  const allStreams = await fetchXtreamList(
+    baseUrl,
+    user,
+    pass,
+    useProxy,
+    "get_live_streams",
+    "",
+    CAPACITOR_XTREAM_CATALOG_MAX_BYTES
+  );
+
+  if (allStreams.length > 0) {
+    await beginCapacitorLiveCatalogIngest();
+    onProgress?.(`Saving ${allStreams.length.toLocaleString()} live channels…`);
+    const groups = groupMappedChannels(allStreams, (item) =>
+      mapLiveStream(item, categoryMap, baseUrl, user, pass)
+    );
+    await persistGroupedChannels(groups, appendCapacitorLiveGroups, onProgress, "Saving live TV");
+    finishCapacitorLiveCatalogIngest();
+    return [];
+  }
+
+  await beginCapacitorLiveCatalogIngest();
+  onProgress?.(`Loading live TV: ${categoryItems.length} categories…`);
+  await persistCategoriesInPairs(
+    categoryItems,
+    categoryMap,
+    baseUrl,
+    user,
+    pass,
+    useProxy,
+    "get_live_streams",
+    mapLiveStream,
+    appendCapacitorLiveGroups,
+    onProgress,
+    "Loading live TV"
+  );
+  finishCapacitorLiveCatalogIngest();
+  return [];
 }
 
 async function fetchXtreamList(
@@ -178,11 +418,17 @@ async function fetchXtreamList(
   pass: string,
   useProxy: boolean,
   action: string,
-  extraQuery = ""
+  extraQuery = "",
+  maxBytes?: number
 ): Promise<any[]> {
-  const api = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=${action}${extraQuery}`;
-  const data = await fetchJsonWithModeFallback(api, useProxy);
-  return extractXtreamCollection(data);
+  try {
+    const api = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=${action}${extraQuery}`;
+    const data = await fetchJsonWithModeFallback(api, useProxy, maxBytes);
+    return extractXtreamCollection(data);
+  } catch (err) {
+    console.warn(`[xtream] ${action}${extraQuery} failed:`, err);
+    return [];
+  }
 }
 
 function categoryNameMap(categoryItems: any[]): Record<string, string> {
@@ -324,39 +570,163 @@ async function loadCappedStreamsByCategory(
   const categoryItems = await fetchXtreamList(baseUrl, user, pass, useProxy, categoriesAction);
   const categoryMap = categoryNameMap(categoryItems);
 
-  if (!isCapacitorRuntime()) {
-    return {
-      categoryMap,
-      streams: await fetchXtreamList(baseUrl, user, pass, useProxy, streamsAction)
-    };
+  let streams = await fetchXtreamList(baseUrl, user, pass, useProxy, streamsAction);
+  if (!Array.isArray(streams) || streams.length === 0) {
+    streams = [];
+    for (const category of categoryItems) {
+      if (category?.category_id == null) continue;
+      const batch = await fetchXtreamList(
+        baseUrl,
+        user,
+        pass,
+        useProxy,
+        streamsAction,
+        `&category_id=${encodeURIComponent(String(category.category_id))}`
+      );
+      for (const item of batch) streams.push(item);
+      await yieldToMain();
+    }
+    return { categoryMap, streams };
   }
 
-  // Fire TV OOMs on an unfiltered 100k+ VOD JSON. Pull one category at a time
-  // and stop once the in-memory cap is reached.
-  const streams: any[] = [];
+  const seenCategoryIds = new Set(
+    streams.map((item) => String(item?.category_id ?? "")).filter((id) => id.length > 0)
+  );
   for (const category of categoryItems) {
-    if (category?.category_id == null) continue;
+    const id = String(category?.category_id ?? "");
+    if (!id || seenCategoryIds.has(id)) continue;
     const batch = await fetchXtreamList(
       baseUrl,
       user,
       pass,
       useProxy,
       streamsAction,
-      `&category_id=${encodeURIComponent(String(category.category_id))}`
+      `&category_id=${encodeURIComponent(id)}`
     );
-    for (const item of batch) {
-      streams.push(item);
-      if (streams.length >= CAPACITOR_SCOPED_STREAM_CAP) {
-        return { categoryMap, streams };
-      }
-    }
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    for (const item of batch) streams.push(item);
+    seenCategoryIds.add(id);
+    await yieldToMain();
   }
 
   return { categoryMap, streams };
 }
 
-async function loadVODStreams(baseUrl: string, user: string, pass: string, useProxy: boolean): Promise<Channel[]> {
+function mapVodStream(
+  item: any,
+  vodCategoryMap: Record<string, string>,
+  baseUrl: string,
+  user: string,
+  pass: string
+): Channel | null {
+  if (item?.stream_id == null) return null;
+  let group = "Movies";
+  const vodExtension = String(item.container_extension || "mp4").trim() || "mp4";
+  if (item.category_name && item.category_name.trim()) {
+    group = item.category_name.trim();
+  } else if (item.category_id && vodCategoryMap[item.category_id.toString()]) {
+    group = vodCategoryMap[item.category_id.toString()];
+  } else if (item.category_id) {
+    group = item.category_id.toString();
+  }
+  return {
+    id: `movie_${item.stream_id}`,
+    name: item.name || `Movie ${item.stream_id}`,
+    logo: String(item.stream_icon || item.cover || "").trim() || undefined,
+    url: `${baseUrl}/movie/${user}/${pass}/${item.stream_id}.${vodExtension}`,
+    group: `Movies: ${group}`,
+    contentType: "movie" as ContentType
+  };
+}
+
+function mapSeriesEntry(
+  series: any,
+  seriesCategoryMap: Record<string, string>,
+  baseUrl: string,
+  user: string,
+  pass: string
+): Channel | null {
+  if (!series?.series_id) return null;
+  let group = "Series";
+  if (series.category_name && series.category_name.trim()) {
+    group = series.category_name.trim();
+  } else if (series.category_id && seriesCategoryMap[series.category_id.toString()]) {
+    group = seriesCategoryMap[series.category_id.toString()];
+  } else if (series.category_id) {
+    group = series.category_id.toString();
+  }
+  return {
+    id: `series_${series.series_id}`,
+    name: series.name || `Series ${series.series_id}`,
+    logo: String(series.cover || series.stream_icon || "").trim() || undefined,
+    url: `${baseUrl}/series/${user}/${pass}/${series.series_id}.m3u8`,
+    group: `Series: ${group}`,
+    contentType: "series" as ContentType
+  };
+}
+
+async function loadAndPersistVodByCategory(
+  scope: CapacitorVodCacheScope,
+  baseUrl: string,
+  user: string,
+  pass: string,
+  useProxy: boolean,
+  categoriesAction: string,
+  streamsAction: string,
+  mapItem: (
+    item: any,
+    categoryMap: Record<string, string>,
+    baseUrl: string,
+    user: string,
+    pass: string
+  ) => Channel | null,
+  onProgress?: XtreamLoadProgress
+): Promise<Channel[]> {
+  const categoryItems = await fetchXtreamList(baseUrl, user, pass, useProxy, categoriesAction);
+  const categoryMap = categoryNameMap(categoryItems);
+  const scopeLabel = scope === "movies" ? "movies" : "series";
+  // This panel's full get_vod_streams / get_series dump is too large for the
+  // Stick, so we never wait on that failed request. Slimmed per-category
+  // fetches with high concurrency complete the whole catalog much faster.
+  await beginCapacitorVodCatalogIngest(scope);
+  onProgress?.(`Loading ${scopeLabel}: ${categoryItems.length} categories…`);
+  await persistCategoriesInPairs(
+    categoryItems,
+    categoryMap,
+    baseUrl,
+    user,
+    pass,
+    useProxy,
+    streamsAction,
+    mapItem,
+    (batch) => appendCapacitorVodGroups(scope, batch),
+    onProgress,
+    `Loading ${scopeLabel}`
+  );
+  finishCapacitorVodCatalogIngest(scope);
+  return [];
+}
+
+async function loadVODStreams(
+  baseUrl: string,
+  user: string,
+  pass: string,
+  useProxy: boolean,
+  onProgress?: XtreamLoadProgress
+): Promise<Channel[]> {
+  if (isCapacitorRuntime()) {
+    return loadAndPersistVodByCategory(
+      "movies",
+      baseUrl,
+      user,
+      pass,
+      useProxy,
+      "get_vod_categories",
+      "get_vod_streams",
+      mapVodStream,
+      onProgress
+    );
+  }
+
   const { categoryMap: vodCategoryMap, streams: vodStreams } = await loadCappedStreamsByCategory(
     baseUrl,
     user,
@@ -365,33 +735,36 @@ async function loadVODStreams(baseUrl: string, user: string, pass: string, usePr
     "get_vod_categories",
     "get_vod_streams"
   );
-  const filtered = capCapacitorCatalogList(vodStreams.filter((item: any) => item.stream_id != null));
 
-  return filtered
-    .map((item: any) => {
-      let group = "Movies";
-      const vodExtension = String(item.container_extension || "mp4").trim() || "mp4";
-      
-      if (item.category_name && item.category_name.trim()) {
-        group = item.category_name.trim();
-      } else if (item.category_id && vodCategoryMap[item.category_id.toString()]) {
-        group = vodCategoryMap[item.category_id.toString()];
-      } else if (item.category_id) {
-        group = item.category_id.toString();
-      }
-      
-      return {
-        id: `movie_${item.stream_id}`,
-        name: item.name || `Movie ${item.stream_id}`,
-        logo: item.stream_icon,
-        url: `${baseUrl}/movie/${user}/${pass}/${item.stream_id}.${vodExtension}`,
-        group: `Movies: ${group}`,
-        contentType: "movie" as ContentType
-      };
-    });
+  const mapped: Channel[] = [];
+  for (const item of vodStreams) {
+    const channel = mapVodStream(item, vodCategoryMap, baseUrl, user, pass);
+    if (channel) mapped.push(channel);
+  }
+  return mapped;
 }
 
-async function loadSeriesStreams(baseUrl: string, user: string, pass: string, useProxy: boolean): Promise<Channel[]> {
+async function loadSeriesStreams(
+  baseUrl: string,
+  user: string,
+  pass: string,
+  useProxy: boolean,
+  onProgress?: XtreamLoadProgress
+): Promise<Channel[]> {
+  if (isCapacitorRuntime()) {
+    return loadAndPersistVodByCategory(
+      "series",
+      baseUrl,
+      user,
+      pass,
+      useProxy,
+      "get_series_categories",
+      "get_series",
+      mapSeriesEntry,
+      onProgress
+    );
+  }
+
   const { categoryMap: seriesCategoryMap, streams: seriesStreams } = await loadCappedStreamsByCategory(
     baseUrl,
     user,
@@ -401,34 +774,12 @@ async function loadSeriesStreams(baseUrl: string, user: string, pass: string, us
     "get_series"
   );
 
-  const result: Channel[] = [];
-  const limitedSeries = capCapacitorCatalogList(seriesStreams);
-
-  // Create one entry per series
-  for (let i = 0; i < limitedSeries.length; i++) {
-    const series = limitedSeries[i];
-    if (!series.series_id) continue;
-
-    let group = "Series";
-    if (series.category_name && series.category_name.trim()) {
-      group = series.category_name.trim();
-    } else if (series.category_id && seriesCategoryMap[series.category_id.toString()]) {
-      group = seriesCategoryMap[series.category_id.toString()];
-    } else if (series.category_id) {
-      group = series.category_id.toString();
-    }
-
-    result.push({
-      id: `series_${series.series_id}`,
-      name: series.name || `Series ${series.series_id}`,
-      logo: series.cover,
-      url: `${baseUrl}/series/${user}/${pass}/${series.series_id}.m3u8`,
-      group: `Series: ${group}`,
-      contentType: "series" as ContentType
-    });
+  const mapped: Channel[] = [];
+  for (const series of seriesStreams) {
+    const channel = mapSeriesEntry(series, seriesCategoryMap, baseUrl, user, pass);
+    if (channel) mapped.push(channel);
   }
-
-  return result;
+  return mapped;
 }
 
 function getBaseCandidates(url: string): string[] {
@@ -450,26 +801,90 @@ function getBaseCandidates(url: string): string[] {
   return [`https://${trimmed}`, `http://${trimmed}`];
 }
 
+type ResolvedXtreamBase = {
+  baseUrl: string;
+  apiUrl: string;
+  useProxy: boolean;
+  probe: unknown | null;
+};
+
+const resolvedBaseCache = new Map<string, { at: number; value: ResolvedXtreamBase }>();
+const RESOLVE_CACHE_MS = 120_000;
+
+function parseProbeJson(raw: string | null | undefined): unknown | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 async function resolveReachableBaseUrl(
   url: string,
   user: string,
   pass: string
-): Promise<{ baseUrl: string; apiUrl: string; useProxy: boolean }> {
+): Promise<ResolvedXtreamBase> {
+  const cacheKey = `${url.trim()}|${user}|${pass}`;
+  const cached = resolvedBaseCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < RESOLVE_CACHE_MS) {
+    return cached.value;
+  }
+
   const candidates = getBaseCandidates(url);
   const reasons: string[] = [];
 
   for (const baseUrl of candidates) {
     const api = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`;
+    if (isWebOsRuntime()) {
+      const remote = await fetchWebOsRemote(api);
+      if (remote) {
+        const value: ResolvedXtreamBase = {
+          baseUrl,
+          apiUrl: api,
+          useProxy: false,
+          probe: parseProbeJson(remote.text)
+        };
+        resolvedBaseCache.set(cacheKey, { at: Date.now(), value });
+        return value;
+      }
+      reasons.push(`${baseUrl} -> webOS fetch failed`);
+      continue;
+    }
+
+    if (isCapacitorRuntime()) {
+      const nativeProbe = await fetchJsonViaCapacitorNative(api);
+      if (nativeProbe != null) {
+        const value: ResolvedXtreamBase = { baseUrl, apiUrl: api, useProxy: false, probe: nativeProbe };
+        resolvedBaseCache.set(cacheKey, { at: Date.now(), value });
+        return value;
+      }
+    }
+
     try {
       const res = await fetch(api);
-      if (res.ok) return { baseUrl, apiUrl: api, useProxy: false };
+      if (res.ok) {
+        let probe: unknown = null;
+        try {
+          probe = await readResponseJsonCapped(res, api);
+        } catch {
+          probe = null;
+        }
+        const value: ResolvedXtreamBase = { baseUrl, apiUrl: api, useProxy: false, probe };
+        resolvedBaseCache.set(cacheKey, { at: Date.now(), value });
+        return value;
+      }
       reasons.push(`${baseUrl} -> ${res.status}`);
 
       // Some providers block browser-origin probes with non-2xx statuses; try proxy fallback as well.
       const proxiedApi = toCorsProxyUrl(api);
       try {
         const proxyRes = await fetch(proxiedApi);
-        if (proxyRes.ok) return { baseUrl, apiUrl: proxiedApi, useProxy: true };
+        if (proxyRes.ok) {
+          const value: ResolvedXtreamBase = { baseUrl, apiUrl: proxiedApi, useProxy: true, probe: null };
+          resolvedBaseCache.set(cacheKey, { at: Date.now(), value });
+          return value;
+        }
         reasons.push(`${proxiedApi} -> ${proxyRes.status}`);
       } catch {
         reasons.push(`${proxiedApi} -> proxy network error`);
@@ -477,11 +892,15 @@ async function resolveReachableBaseUrl(
     } catch {
       reasons.push(`${baseUrl} -> network error`);
 
-      // Browser CORS fallback for Xtream API probe.
+      // Browser / Fire TV WebView CORS fallback for Xtream API probe.
       const proxiedApi = toCorsProxyUrl(api);
       try {
         const proxyRes = await fetch(proxiedApi);
-        if (proxyRes.ok) return { baseUrl, apiUrl: proxiedApi, useProxy: true };
+        if (proxyRes.ok) {
+          const value: ResolvedXtreamBase = { baseUrl, apiUrl: proxiedApi, useProxy: true, probe: null };
+          resolvedBaseCache.set(cacheKey, { at: Date.now(), value });
+          return value;
+        }
         reasons.push(`${proxiedApi} -> ${proxyRes.status}`);
       } catch {
         reasons.push(`${proxiedApi} -> proxy network error`);
@@ -490,6 +909,54 @@ async function resolveReachableBaseUrl(
   }
 
   throw new Error(`Xtream request failed: ${reasons.join(", ")}. Check URL/credentials or CORS restrictions.`);
+}
+
+export async function fetchXtreamAccountInfo(
+  url: string,
+  user: string,
+  pass: string
+): Promise<XtreamAccountInfo | null> {
+  try {
+    const { baseUrl, apiUrl, useProxy, probe } = await resolveReachableBaseUrl(url, user, pass);
+    const api = apiUrl || `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`;
+    const data = probe ?? (await fetchJsonWithModeFallback(api, useProxy));
+    if (!data || (data as { user_info?: { auth?: number } }).user_info?.auth === 0) {
+      return null;
+    }
+    return parseXtreamAccountInfo(data);
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchXtreamCatalogTotals(
+  url: string,
+  user: string,
+  pass: string
+): Promise<PlaylistCatalogTotals | null> {
+  if (isWebOsRuntime() || isCapacitorRuntime()) {
+    // Full stream-list counts OOM or stall TV runtimes. Title totals
+    // are written after Playlist Manager Load instead.
+    return null;
+  }
+
+  try {
+    const { baseUrl, useProxy } = await resolveReachableBaseUrl(url, user, pass);
+    const liveList = await fetchXtreamList(baseUrl, user, pass, useProxy, "get_live_streams");
+    const live = liveList.length;
+    liveList.length = 0;
+    const movieList = await fetchXtreamList(baseUrl, user, pass, useProxy, "get_vod_streams");
+    const movies = movieList.length;
+    movieList.length = 0;
+    const seriesList = await fetchXtreamList(baseUrl, user, pass, useProxy, "get_series");
+    const series = seriesList.length;
+    seriesList.length = 0;
+    const total = live + movies + series;
+    if (total <= 0) return null;
+    return { live, movies, series, total };
+  } catch {
+    return null;
+  }
 }
 
 function toCorsProxyUrl(url: string): string {
@@ -583,6 +1050,10 @@ function parseXtreamSeriesUrl(url: string): {
 }
 
 async function fetchJsonWithProxyFallback(url: string): Promise<unknown> {
+  if (isWebOsRuntime()) {
+    return fetchWebOsRemoteJson(url);
+  }
+
   const direct = await fetch(url).catch(() => null);
   if (direct?.ok) {
     try {
@@ -604,17 +1075,23 @@ async function fetchJsonWithProxyFallback(url: string): Promise<unknown> {
   return null;
 }
 
-const CAPACITOR_XTREAM_JSON_MAX_BYTES = 1_500_000;
-
-async function readResponseJsonCapped(response: Response, url: string): Promise<unknown> {
+async function readResponseJsonCapped(
+  response: Response,
+  url: string,
+  maxBytes = CAPACITOR_XTREAM_JSON_MAX_BYTES
+): Promise<unknown> {
   if (!isCapacitorRuntime()) {
     return response.json();
   }
 
   const declaredLength = Number(response.headers.get("content-length") || 0);
-  if (declaredLength > CAPACITOR_XTREAM_JSON_MAX_BYTES) {
-    console.warn(`[xtream] skipped oversized JSON (${declaredLength} bytes) ${url}`);
+  if (declaredLength > maxBytes) {
+    console.warn(`[xtream] skipped oversized JSON (${declaredLength} bytes) ${redactXtreamUrl(url)}`);
     return null;
+  }
+
+  if (declaredLength > 0) {
+    return response.json();
   }
 
   const reader = response.body?.getReader();
@@ -629,9 +1106,9 @@ async function readResponseJsonCapped(response: Response, url: string): Promise<
     if (done) break;
     if (value) {
       total += value.byteLength;
-      if (total > CAPACITOR_XTREAM_JSON_MAX_BYTES) {
+      if (total > maxBytes) {
         await reader.cancel().catch(() => undefined);
-        console.warn(`[xtream] aborted oversized JSON stream ${url}`);
+        console.warn(`[xtream] aborted oversized JSON stream ${redactXtreamUrl(url)}`);
         return null;
       }
       chunks.push(value);
@@ -644,17 +1121,49 @@ async function readResponseJsonCapped(response: Response, url: string): Promise<
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
+  chunks.length = 0;
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-async function fetchJsonWithModeFallback(url: string, preferProxy: boolean): Promise<unknown> {
+async function fetchJsonViaCapacitorNative(url: string, maxBytes?: number): Promise<unknown | null> {
+  for (const nativeUrl of capacitorNativeApiUrls(url)) {
+    const res = await fetch(nativeUrl).catch(() => null);
+    if (!res?.ok) continue;
+    try {
+      const parsed = await readResponseJsonCapped(res, url, maxBytes);
+      if (parsed != null) {
+        if (nativeUrl.includes("/__api?")) capacitorNativeApiPath = "/__api";
+        else if (nativeUrl.includes("/__stream?")) capacitorNativeApiPath = "/__stream";
+        return parsed;
+      }
+    } catch {
+      // Try the next native endpoint.
+    }
+  }
+  return null;
+}
+
+async function fetchJsonWithModeFallback(
+  url: string,
+  preferProxy: boolean,
+  maxBytes?: number
+): Promise<unknown> {
+  if (isWebOsRuntime()) {
+    return fetchWebOsRemoteJson(url);
+  }
+
+  if (isCapacitorRuntime()) {
+    const native = await fetchJsonViaCapacitorNative(url, maxBytes);
+    if (native != null) return native;
+  }
+
   const first = preferProxy ? toCorsProxyUrl(url) : url;
   const second = preferProxy ? url : toCorsProxyUrl(url);
 
   const firstRes = await fetch(first).catch(() => null);
   if (firstRes?.ok) {
     try {
-      const parsed = await readResponseJsonCapped(firstRes, first);
+      const parsed = await readResponseJsonCapped(firstRes, first, maxBytes);
       if (parsed != null) return parsed;
     } catch {
       // Fall through to alternate mode.
@@ -664,7 +1173,7 @@ async function fetchJsonWithModeFallback(url: string, preferProxy: boolean): Pro
   const secondRes = await fetch(second).catch(() => null);
   if (secondRes?.ok) {
     try {
-      return await readResponseJsonCapped(secondRes, second);
+      return await readResponseJsonCapped(secondRes, second, maxBytes);
     } catch {
       return null;
     }

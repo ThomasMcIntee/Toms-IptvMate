@@ -70,13 +70,15 @@ export function GroupList({
     return [activeGroup, ...sorted];
   }, [groups, sortDirection, activeGroup]);
 
+  const groupListSignature = useMemo(() => sortedGroups.join("\n"), [sortedGroups]);
+
   useEffect(() => {
     setVisibleCount(effectiveBatchSize);
     const listEl = listRef.current;
     if (listEl) {
       listEl.scrollTop = 0;
     }
-  }, [sortedGroups, effectiveBatchSize]);
+  }, [groupListSignature, effectiveBatchSize]);
 
   const renderedGroups = useMemo(() => {
     if (!batchSize && !autoLoadOnScroll) {

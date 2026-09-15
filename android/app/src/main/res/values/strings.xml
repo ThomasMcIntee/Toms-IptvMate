@@ -4,4 +4,7 @@
     <string name="title_activity_main">Toms IPTVmate</string>
     <string name="package_name">tv.toms.iptvmate</string>
     <string name="custom_url_scheme">tv.toms.iptvmate</string>
+    <string name="native_exo_play">Play or pause</string>
+    <string name="native_exo_mute">Mute</string>
+    <string name="native_exo_fullscreen">Fullscreen</string>
 </resources>
