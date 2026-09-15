@@ -1,5 +1,7 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { isCapacitorRuntime } from "./player/platformDetection";
+import { isUserInputActive, setPlaybackActive } from "./taskScheduler";
+import { applyPreferredStreamFormat, getPreferredStreamFormat } from "./streamFormatPreference";
 
 type NativePlayerCapPlugin = {
   isAvailable(): Promise<{ available: boolean }>;
@@ -11,6 +13,7 @@ type NativePlayerCapPlugin = {
   setMuted(options: { muted: boolean }): Promise<void>;
   setGuide(options: { title?: string; startMs?: number; endMs?: number }): Promise<void>;
   revealControls(): Promise<void>;
+  exitApp(): Promise<void>;
   setBounds(options: {
     left: number;
     top: number;
@@ -146,6 +149,8 @@ function resolveNativePlayerBounds(rect: DOMRect): {
 }
 
 export function syncNativePlayerBounds(force = false): void {
+  if (!force && isUserInputActive(90)) return;
+
   const target = resolveNativePlayerTarget();
   if (!target) return;
 
@@ -194,6 +199,10 @@ export function warmNativePlayer(): void {
 export function resolveNativeLiveUrl(url: string): string {
   const trimmed = String(url || "").trim();
   if (!trimmed) return trimmed;
+  const preferred = getPreferredStreamFormat(trimmed);
+  if (preferred === "ts" || preferred === "m3u8") {
+    return applyPreferredStreamFormat(trimmed, ["ts", "m3u8"]);
+  }
   const lower = trimmed.toLowerCase();
   if (lower.includes(".m3u8")) return trimmed;
   if (/\.ts(?:\?|$)/i.test(trimmed)) {
@@ -204,6 +213,7 @@ export function resolveNativeLiveUrl(url: string): string {
 
 export function playNativeUrl(url: string, contentType: "live" | "movie" | "series" = "live"): boolean {
   if (!url || !isNativePlayerAvailable()) return false;
+  setPlaybackActive(true);
 
   // The .ts -> .m3u8 rewrite is a live-stream compatibility trick only. VOD
   // files must keep their original progressive URL.
@@ -332,6 +342,24 @@ export function stopNativePlayback(): void {
   }
   document.body.classList.remove("native-exo-active");
   document.body.classList.remove("native-exo-vod");
+}
+
+export function exitNativeApp(): void {
+  if (!isCapacitorRuntime()) {
+    try {
+      window.close();
+    } catch {
+      // Browser/TV shells may ignore window.close().
+    }
+    return;
+  }
+  void NativePlayerCap.exitApp().catch(() => {
+    try {
+      window.close();
+    } catch {
+      // Native exit is the real path on Fire TV.
+    }
+  });
 }
 
 if (typeof window !== "undefined") {

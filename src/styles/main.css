@@ -1,8 +1,14 @@
+html {
+  font-size: 16px;
+  font-size: clamp(16px, 1.85vmin, 28px);
+}
+
 body {
   margin: 0;
   background: #000;
   color: #fff;
   font-family: system-ui, sans-serif;
+  font-size: 1rem;
 }
 
 body.is-capacitor,
@@ -112,6 +118,38 @@ body.is-capacitor .live-preview-shell-fullscreen {
   z-index: 20 !important;
 }
 
+.vod-playback-shell {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 50;
+  overflow: hidden;
+  background: #000;
+  pointer-events: auto;
+}
+
+.vod-playback-shell .player-main,
+.vod-playback-shell .player-main-shell-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 0;
+  pointer-events: none;
+}
+
+.vod-playback-shell .player-control-bar {
+  z-index: 6;
+  pointer-events: auto;
+}
+
+.vod-playback-shell .player-control-bar-progress-track {
+  cursor: pointer;
+  height: 8px;
+}
+
 
 
 
@@ -135,6 +173,7 @@ body.theme-light .player-status,
 body.theme-light .playlist-card,
 body.theme-light .nownext-overlay,
 body.theme-light .series-picker-panel,
+body.theme-light .movie-details-panel,
 body.theme-light .epg-search-guide-panel,
 body.theme-light .epg-search-item,
 body.theme-light .epg-search-channel-item-nameonly,
@@ -148,7 +187,6 @@ body.theme-light .recording-setup-panel {
 }
 
 body.theme-light input,
-body.theme-light .movies-main-search-input,
 body.theme-light .series-main-search-input {
   background: rgba(255, 255, 255, 0.98);
   color: #111827;
@@ -211,7 +249,7 @@ body.theme-light .epg-search-desc {
 
 .root-crash-title {
   margin: 0 0 10px;
-  font-size: 22px;
+  font-size: 1.375rem;
 }
 
 .root-crash-text {
@@ -261,14 +299,14 @@ body.theme-light .epg-search-desc {
 
 .app-login-title {
   margin: 0;
-  font-size: 24px;
+  font-size: 1.5rem;
   color: #f2f8ff;
 }
 
 .app-login-subtitle {
   margin: 8px 0 12px;
   color: rgba(222, 236, 255, 0.84);
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .app-login-input {
@@ -305,6 +343,83 @@ body.theme-light .app-login-input {
   background: rgba(255, 255, 255, 0.98);
   color: #111827;
   border-color: rgba(17, 24, 39, 0.2);
+}
+
+.vod-resume-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 280;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 8, 24, 0.86);
+}
+
+.vod-resume-card {
+  width: min(92vw, 520px);
+  background: rgba(6, 16, 33, 0.96);
+  border: 1px solid rgba(160, 210, 255, 0.28);
+  border-radius: 14px;
+  padding: 22px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+.vod-resume-title {
+  margin: 0;
+  font-size: 1.375rem;
+  color: #f2f8ff;
+}
+
+.vod-resume-copy {
+  margin: 10px 0 18px;
+  color: rgba(222, 236, 255, 0.9);
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+
+.vod-resume-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.vod-resume-continue,
+.vod-resume-restart {
+  flex: 1;
+  padding: 12px 10px;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.vod-resume-continue {
+  background: #1e90ff;
+}
+
+.vod-resume-restart {
+  background: #555;
+}
+
+.vod-resume-continue:focus,
+.vod-resume-restart:focus {
+  outline: 3px solid #7ec5ff;
+  outline-offset: 2px;
+}
+
+body.theme-light .vod-resume-overlay {
+  background: rgba(241, 245, 249, 0.92);
+}
+
+body.theme-light .vod-resume-card {
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(31, 41, 55, 0.2);
+}
+
+body.theme-light .vod-resume-title,
+body.theme-light .vod-resume-copy {
+  color: #111827;
 }
 
 :root {
@@ -428,14 +543,14 @@ body.theme-light .app-login-input {
 }
 
 .live-preview-placeholder-title {
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 700;
   color: #f5f9ff;
   margin-bottom: 8px;
 }
 
 .live-preview-placeholder-subtitle {
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: rgba(216, 232, 252, 0.9);
 }
 
@@ -469,7 +584,7 @@ body.theme-light .app-login-input {
   background: rgba(0, 0, 0, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.2);
   color: #d9ecff;
-  font-size: 11px;
+  font-size: 0.6875rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   pointer-events: none;
@@ -482,15 +597,18 @@ body.theme-light .app-login-input {
 
 .player-status {
   position: absolute;
-  right: 20px;
-  bottom: 20px;
+  right: clamp(12px, 1.6vw, 24px);
+  bottom: clamp(12px, 2.4vh, 28px);
   z-index: 120;
-  padding: 10px 12px;
+  max-width: min(42vw, 28rem);
+  padding: 0.65em 0.8em;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.68);
   border: 1px solid rgba(255, 255, 255, 0.16);
   color: #e9eef5;
-  font-size: 13px;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  word-break: break-word;
   pointer-events: none;
 }
 
@@ -578,10 +696,31 @@ body.is-capacitor.native-exo-active .player-control-bar {
   height: 36px;
   padding: 6px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
   color: #fff;
   cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease;
+}
+
+.player-control-bar-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.player-control-bar-btn:focus,
+.player-control-bar-btn:focus-visible {
+  outline: none;
+  background: #b5e61d;
+  color: #111;
+  box-shadow: 0 0 0 2px rgba(181, 230, 29, 0.55);
+  transform: scale(1.12);
+}
+
+.player-control-bar-btn.is-favorite:focus,
+.player-control-bar-btn.is-favorite:focus-visible {
+  background: #ffd45c;
+  color: #111;
+  box-shadow: 0 0 0 2px rgba(255, 212, 92, 0.55);
 }
 
 .player-control-bar-btn svg {
@@ -603,7 +742,7 @@ body.is-capacitor.native-exo-active .player-control-bar {
 .player-control-bar-time {
   flex: 0 0 auto;
   color: rgba(255, 255, 255, 0.82);
-  font-size: 12px;
+  font-size: 0.75rem;
   white-space: nowrap;
 }
 
@@ -611,7 +750,7 @@ body.is-capacitor.native-exo-active .player-control-bar {
   flex: 1;
   min-width: 0;
   color: #fff;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -624,7 +763,7 @@ body.is-capacitor.native-exo-active .player-control-bar {
   border-radius: 3px;
   background: #e03131;
   color: #fff;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 700;
   letter-spacing: 0.06em;
 }
@@ -635,7 +774,7 @@ body.is-capacitor.native-exo-active .player-control-bar {
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
   font: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   min-height: 36px;
   padding: 7px 14px;
   cursor: pointer;
@@ -683,9 +822,13 @@ body.is-capacitor.native-exo-active .player-control-bar {
   pointer-events: auto;
 }
 
+.vod-exit-btn:focus,
 .vod-exit-btn:focus-visible {
-  outline: 2px solid #7ec5ff;
-  outline-offset: 2px;
+  outline: none;
+  background: #b5e61d;
+  color: #111;
+  border-color: #b5e61d;
+  box-shadow: 0 0 0 2px rgba(181, 230, 29, 0.55);
 }
 
 .channel-list {
@@ -719,6 +862,17 @@ body.is-capacitor.native-exo-active .player-control-bar {
   color: inherit;
   font: inherit;
   text-align: left;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-row-btn > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .channel-row-btn:focus-visible {
@@ -734,7 +888,7 @@ body.is-capacitor.native-exo-active .player-control-bar {
 }
 
 .channel-header-label {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -778,7 +932,7 @@ body.is-capacitor.native-exo-active .player-control-bar {
   background: rgba(24, 138, 255, 0.22);
   color: #fff;
   font: inherit;
-  font-size: 16px;
+  font-size: 0.9375rem;
   font-weight: 600;
   min-height: 44px;
   line-height: 1;
@@ -857,7 +1011,7 @@ body.is-capacitor .app-root.is-playlist-manager .playlist-manager-actions {
 
 body.is-capacitor .app-root.is-playlist-manager .playlist-manager-actions .btn-flex {
   min-height: 44px;
-  font-size: 13px;
+  font-size: 0.875rem;
   padding: 8px 6px;
 }
 
@@ -938,7 +1092,7 @@ body.theme-light .playlist-mode-active {
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
   font: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   padding: 6px 10px;
   cursor: pointer;
@@ -1056,7 +1210,7 @@ input {
   border-radius: 6px;
   background: #2ecc71;
   color: #07150d;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 700;
 }
 
@@ -1069,7 +1223,7 @@ input {
 }
 
 .playlist-title {
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: bold;
 }
 
@@ -1077,11 +1231,11 @@ input {
   background: rgba(255,255,255,0.2);
   padding: 4px 10px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .playlist-meta {
-  font-size: 12px;
+  font-size: 0.75rem;
   opacity: 0.7;
   margin-bottom: 12px;
 }
@@ -1102,12 +1256,12 @@ input {
 }
 
 .playlist-edit-form strong {
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: #f2f6ff;
 }
 
 .playlist-edit-form label {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   color: rgba(225, 235, 255, 0.9);
@@ -1127,17 +1281,61 @@ input {
   display: flex;
   align-items: stretch;
   gap: 8px;
+  width: 100%;
+  min-width: 0;
 }
 
 .password-input-row input {
-  flex: 1;
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.password-masked-input {
+  -webkit-text-security: disc;
+  text-security: disc;
 }
 
 .password-toggle-btn {
+  flex: 0 0 auto;
   width: auto;
   min-width: 84px;
   margin-top: 0;
   padding: 10px 12px;
+}
+
+.playlist-edit-form input:focus,
+.playlist-edit-field:focus,
+.playlist-edit-field-btn:focus {
+  outline: 2px solid #7ec5ff;
+  outline-offset: 2px;
+}
+
+.playlist-edit-field-btn {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.password-input-row .playlist-edit-field-btn {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+}
+
+body.theme-light .playlist-edit-field-btn {
+  background: rgba(17, 24, 39, 0.08);
+  color: #111827;
 }
 
 body.theme-light .playlist-edit-form {
@@ -1165,7 +1363,7 @@ body.theme-light .playlist-edit-form label {
 .master-min-list-empty {
   margin: 12px 14px;
   color: rgba(255, 255, 255, 0.7);
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.35;
 }
 
@@ -1178,7 +1376,7 @@ body.theme-light .playlist-edit-form label {
 }
 
 .app-root.is-playlist-manager {
-  font-size: 12px;
+  font-size: 1rem;
 }
 
 .app-root.is-playlist-manager .side-panel {
@@ -1203,7 +1401,7 @@ body.is-capacitor .app-root.is-playlist-manager .playlist-manager-parental-actio
 
 .app-root.is-playlist-manager .side-panel h2 {
   margin-bottom: 6px;
-  font-size: 15px;
+  font-size: 1.125rem;
 }
 
 .app-root.is-playlist-manager .playlist-loaded-summary,
@@ -1212,18 +1410,18 @@ body.is-capacitor .app-root.is-playlist-manager .playlist-manager-parental-actio
 .app-root.is-playlist-manager .playlist-account-meta,
 .app-root.is-playlist-manager .playlist-status-banner,
 .app-root.is-playlist-manager .master-min-list-empty {
-  font-size: 11px;
+  font-size: 0.875rem;
 }
 
 .app-root.is-playlist-manager .playlist-title {
-  font-size: 14px;
+  font-size: 1.0625rem;
 }
 
 .app-root.is-playlist-manager .playlist-type,
 .app-root.is-playlist-manager .playlist-loaded-badge,
 .app-root.is-playlist-manager .playlist-edit-form strong,
 .app-root.is-playlist-manager .playlist-edit-form label {
-  font-size: 11px;
+  font-size: 0.875rem;
 }
 
 body.is-webos video.player-main {
@@ -1237,11 +1435,17 @@ body.is-webos select:focus,
 body.is-webos .opening-btn:focus,
 body.is-webos .channel-select-btn:focus,
 body.is-webos .group-select-btn:focus,
-body.is-webos .channel-icon-btn:focus,
-body.is-webos .player-control-bar-btn:focus {
+body.is-webos .channel-icon-btn:focus {
   outline: 3px solid #4da3ff !important;
   outline-offset: 2px;
   box-shadow: 0 0 0 2px rgba(77, 163, 255, 0.35);
+}
+
+body.is-webos .player-control-bar-btn:focus {
+  outline: none !important;
+  background: #b5e61d !important;
+  color: #111 !important;
+  box-shadow: 0 0 0 2px rgba(181, 230, 29, 0.55);
 }
 
 body.is-webos .app-root.is-playlist-manager .playlist-loaded-summary,
@@ -1268,7 +1472,7 @@ body.is-webos .app-root.is-playlist-manager .playlist-edit-form label {
 .app-root.is-playlist-manager .btn-danger,
 .app-root.is-playlist-manager .group-list-bulk-btn {
   padding: 6px 8px;
-  font-size: 11px;
+  font-size: 0.875rem;
   margin-top: 0;
 }
 
@@ -1279,18 +1483,28 @@ body.is-webos .app-root.is-playlist-manager .playlist-edit-form label {
 
 .app-root.is-playlist-manager .group-item,
 .app-root.is-playlist-manager .channel-item {
-  padding: 5px 10px;
-  font-size: 12px;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-size: 1rem;
 }
 
 .app-root.is-playlist-manager .list-header {
   padding: 6px 10px;
-  font-size: 10px;
+  font-size: 0.8125rem;
 }
 
-.app-root.is-playlist-manager .group-item-count,
+.app-root.is-playlist-manager .group-item-count {
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  min-width: 0;
+  padding-left: 8px;
+  overflow: visible;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+}
+
 .app-root.is-playlist-manager .channel-icon-label {
-  font-size: 10px;
+  font-size: 0.8125rem;
 }
 
 .app-root.is-playlist-manager .list-toggle-row input[type="checkbox"] {
@@ -1313,7 +1527,8 @@ body.is-webos .app-root.is-playlist-manager .playlist-edit-form label {
   gap: 6px;
 }
 
-.master-min-list .group-select-btn > span:first-child,
+.master-min-list .group-item-name,
+.group-select-btn > .group-item-name,
 .group-select-btn > span:first-child {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1365,15 +1580,28 @@ body.is-webos .app-root.is-playlist-manager .playlist-edit-form label {
   right: auto;
   top: auto;
   bottom: auto;
+  box-sizing: border-box;
   height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
   flex: 0 0 auto;
 }
 
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-list:not(.group-list-movies-right) {
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
+}
+
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-list .group-list-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .master-min-list {
-  width: 240px;
-  min-width: 240px;
+  width: 300px;
+  min-width: 300px;
   z-index: 6;
 }
 
@@ -1384,32 +1612,62 @@ body.is-webos .app-root.is-playlist-manager .playlist-edit-form label {
 }
 
 .app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-list:not(.group-list-movies-right) {
-  width: 280px;
-  min-width: 280px;
-}
-
-.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .channel-list:not(.channel-list-icons) {
   width: 360px;
   min-width: 360px;
 }
 
-.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-item,
-.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .channel-item {
-  width: 100%;
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .channel-list:not(.channel-list-icons) {
+  width: 420px;
+  min-width: 420px;
 }
 
-.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .list-toggle-row,
-.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-select-btn {
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-item,
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .channel-item {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+}
+
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .master-min-list .list-toggle-row,
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-list .list-toggle-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) max-content;
+  align-items: center;
   width: 100%;
   min-width: 0;
 }
 
-.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .channel-select-btn {
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .master-min-list .group-select-btn,
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-list .group-select-btn {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .channel-select-btn,
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .channel-row-btn,
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .channel-row-btn > span {
   display: block;
   width: 100%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-item-name,
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-select-btn > span:not(.group-item-count) {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-item-count {
+  grid-column: 3;
+  justify-self: end;
+  padding-right: 2px;
 }
 
 body.is-capacitor .app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .master-min-list,
@@ -1424,21 +1682,21 @@ body.is-capacitor .app-root.is-playlist-manager.has-master-min-list .playlist-co
 }
 
 body.is-capacitor .app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .master-min-list {
-  width: 240px;
+  width: 300px;
 }
 
 body.is-capacitor .app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .group-list:not(.group-list-movies-right) {
-  width: 280px;
+  width: 360px;
 }
 
 body.is-capacitor .app-root.is-playlist-manager.has-master-min-list .playlist-columns-scroller .channel-list:not(.channel-list-icons) {
-  width: 360px;
+  width: 420px;
 }
 
 body.is-capacitor .app-root.is-playlist-manager .channel-list-movies-grid .channel-icon-label,
 body.is-capacitor .app-root.is-playlist-manager .channel-list-series-grid .channel-icon-label {
   margin-top: 4px;
-  font-size: 11px;
+  font-size: 0.75rem;
 }
 
 body.is-capacitor .app-root.has-master-min-list .group-list:not(.group-list-movies-right) {
@@ -1457,8 +1715,17 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   width: 360px;
   bottom: 0;
   background: rgba(0,0,0,0.75);
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding-top: 10px;
+}
+
+.group-list-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .group-list.group-list-movies-right {
@@ -1471,7 +1738,7 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
 .group-item {
   padding: 10px 14px;
   cursor: pointer;
-  font-size: 15px;
+  font-size: 0.9375rem;
   color: #ddd;
 }
 
@@ -1489,7 +1756,7 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   top: 0;
   z-index: 2;
   padding: 10px 14px;
-  font-size: 12px;
+  font-size: 0.75rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: rgba(255,255,255,0.75);
@@ -1516,15 +1783,47 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
   font: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   padding: 6px 10px;
   cursor: pointer;
 }
 
+.group-list-bulk-btn:focus,
 .group-list-bulk-btn:focus-visible,
 .group-list-bulk-btn:hover {
-  outline: none;
+  outline: 3px solid #7ec5ff;
+  outline-offset: 2px;
   background: rgba(255, 255, 255, 0.18);
+}
+
+.list-visibility-toggle {
+  flex: 0 0 auto;
+  min-width: 48px;
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.list-visibility-toggle.is-on {
+  background: rgba(126, 197, 255, 0.22);
+  border-color: rgba(126, 197, 255, 0.7);
+}
+
+.list-visibility-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.list-visibility-toggle:focus,
+.list-visibility-toggle:focus-visible {
+  outline: 3px solid #7ec5ff;
+  outline-offset: 2px;
 }
 
 .epg-search-categories-header {
@@ -1570,7 +1869,7 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   color: #ffe082;
   display: grid;
   place-items: center;
-  font-size: 18px;
+  font-size: 1.125rem;
   line-height: 1;
   cursor: pointer;
 }
@@ -1656,6 +1955,13 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   cursor: pointer;
 }
 
+.group-select-btn > span:not(.group-item-count) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .group-select-btn:focus {
   outline: 2px solid #7ec5ff;
   outline-offset: 2px;
@@ -1663,10 +1969,16 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
 }
 
 .group-item-count {
-  min-width: 42px;
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  min-width: 0;
+  padding-left: 8px;
+  overflow: visible;
+  white-space: nowrap;
   color: rgba(255, 255, 255, 0.7);
   font-variant-numeric: tabular-nums;
   text-align: right;
+  cursor: pointer;
 }
 
 .channel-row-favorite {
@@ -1705,6 +2017,10 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   text-align: left;
   padding: 0;
   cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .channel-select-btn:disabled {
@@ -1726,34 +2042,61 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   padding: 8px;
 }
 
-.channel-list.channel-list-icons {
+.channel-list.channel-list-icons:not(.channel-list-live-grid) {
   left: 360px;
   right: 360px;
   width: auto;
 }
 
-.channel-list.channel-list-icons.channel-list-series-grid {
-  left: 368px;
-  right: 8px;
-  top: 56px;
-  bottom: 8px;
+.channel-list.channel-list-icons.channel-list-series-grid,
+.channel-list.channel-list-icons.channel-list-movies-grid {
   width: auto;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-auto-rows: calc((100% - 24px) / 3);
-  gap: 14px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: calc((100% - 32px) / 5);
+  gap: 8px;
+  padding: 8px;
   align-content: unset;
 }
 
+.channel-list.channel-list-icons.channel-list-series-grid,
 .channel-list.channel-list-icons.channel-list-movies-grid {
   left: 368px;
   right: 8px;
   top: 56px;
   bottom: 8px;
+}
+
+.channel-list.channel-list-icons.channel-list-live-grid {
+  left: 360px;
+  right: calc(var(--live-preview-width) + var(--live-preview-right) + 16px);
+  top: 8px;
+  bottom: 8px;
   width: auto;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-  grid-auto-rows: calc((100% - 36px) / 4);
-  gap: 12px;
+  max-width: none;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: calc((100% - 32px) / 5);
+  gap: 8px;
+  padding: 8px;
   align-content: unset;
+  z-index: 6;
+}
+
+.channel-list-series-grid .channel-load-more-btn,
+.channel-list-movies-grid .channel-load-more-btn,
+.channel-list-live-grid .channel-load-more-btn {
+  grid-column: 1 / -1;
+  max-height: 36px;
+  align-self: center;
+}
+
+.channel-list-series-grid .channel-icon-favorite,
+.channel-list-movies-grid .channel-icon-favorite,
+.channel-list-live-grid .channel-icon-favorite {
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  font-size: 0.85rem;
 }
 
 .channel-list-icons .channel-item {
@@ -1766,28 +2109,46 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
 }
 
 .channel-list-series-grid .channel-icon-wrap,
-.channel-list-series-grid .channel-icon-btn {
+.channel-list-series-grid .channel-icon-btn,
+.channel-list-movies-grid .channel-icon-wrap,
+.channel-list-movies-grid .channel-icon-btn,
+.channel-list-live-grid .channel-icon-wrap,
+.channel-list-live-grid .channel-icon-btn {
   height: 100%;
 }
 
-.channel-list-series-grid .channel-icon-btn {
+.channel-list-series-grid .channel-icon-btn,
+.channel-list-movies-grid .channel-icon-btn,
+.channel-list-live-grid .channel-icon-btn {
   display: flex;
   flex-direction: column;
-  padding: 8px;
-  border-radius: 10px;
-}
-
-.channel-list-series-grid .channel-icon-image,
-.channel-list-series-grid .channel-icon-fallback {
-  flex: 1;
-  min-height: 0;
-  aspect-ratio: auto;
+  padding: 4px;
   border-radius: 8px;
 }
 
-.channel-list-series-grid .channel-icon-label {
-  margin-top: 8px;
-  font-size: 13px;
+.channel-list-series-grid .channel-icon-image,
+.channel-list-series-grid .channel-icon-fallback,
+.channel-list-movies-grid .channel-icon-image,
+.channel-list-movies-grid .channel-icon-fallback,
+.channel-list-live-grid .channel-icon-image,
+.channel-list-live-grid .channel-icon-fallback {
+  flex: 1;
+  min-height: 0;
+  aspect-ratio: auto;
+  border-radius: 6px;
+}
+
+.channel-list-live-grid .channel-icon-image,
+.channel-list-live-grid .channel-icon-fallback {
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.channel-list-series-grid .channel-icon-label,
+.channel-list-movies-grid .channel-icon-label,
+.channel-list-live-grid .channel-icon-label {
+  margin-top: 4px;
+  font-size: clamp(0.6rem, 1.1vmin, 0.75rem);
   white-space: normal;
   overflow: hidden;
   display: -webkit-box;
@@ -1796,51 +2157,29 @@ body.is-capacitor .app-root.has-master-min-list .channel-list:not(.channel-list-
   -webkit-box-orient: vertical;
 }
 
-.channel-list-movies-grid .channel-icon-btn {
-  padding: 8px;
-  border-radius: 10px;
-}
-
-.channel-list-movies-grid .channel-icon-image,
-.channel-list-movies-grid .channel-icon-fallback {
-  border-radius: 8px;
-}
-
-.channel-list-movies-grid .channel-icon-label {
-  margin-top: 8px;
-  font-size: 12px;
+body.is-capacitor .channel-list.channel-list-icons.channel-list-live-grid {
+  left: 280px;
 }
 
 body.is-capacitor .channel-list.channel-list-icons.channel-list-movies-grid,
-body.is-capacitor .channel-list.channel-list-icons.channel-list-series-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-auto-rows: calc((100% - 28px) / 3);
-  gap: 16px;
+body.is-capacitor .channel-list.channel-list-icons.channel-list-series-grid,
+body.is-capacitor .channel-list.channel-list-icons.channel-list-live-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: calc((100% - 32px) / 5);
+  gap: 8px;
 }
 
-body.is-capacitor .channel-list-series-grid .channel-icon-image,
-body.is-capacitor .channel-list-series-grid .channel-icon-fallback {
-  flex: unset;
-  min-height: 0;
-  aspect-ratio: 2 / 3;
+body.is-capacitor .channel-list-series-grid .channel-icon-btn,
+body.is-capacitor .channel-list-movies-grid .channel-icon-btn,
+body.is-capacitor .channel-list-live-grid .channel-icon-btn {
+  padding: 4px;
 }
 
-body.is-capacitor .channel-list-series-grid .channel-icon-btn {
-  padding: 12px;
-}
-
-body.is-capacitor .channel-list-movies-grid .channel-icon-btn {
-  padding: 10px;
-}
-
-body.is-capacitor .channel-list-movies-grid .channel-icon-label {
-  margin-top: 10px;
-  font-size: 15px;
-}
-
-body.is-capacitor .channel-list-series-grid .channel-icon-label {
-  margin-top: 12px;
-  font-size: 18px;
+body.is-capacitor .channel-list-series-grid .channel-icon-label,
+body.is-capacitor .channel-list-movies-grid .channel-icon-label,
+body.is-capacitor .channel-list-live-grid .channel-icon-label {
+  margin-top: 4px;
+  font-size: clamp(0.6rem, 1.1vmin, 0.75rem);
 }
 
 body.is-capacitor .opening-quick-actions {
@@ -1851,7 +2190,7 @@ body.is-capacitor .opening-quick-actions {
 body.is-capacitor .opening-btn-quick {
   min-height: 72px;
   padding: 20px 18px;
-  font-size: 22px;
+  font-size: 1.375rem;
   border-radius: 14px;
 }
 
@@ -1897,7 +2236,7 @@ body.is-capacitor .opening-btn-quick {
   height: 32px;
   display: grid;
   place-items: center;
-  font-size: 18px;
+  font-size: 1.125rem;
   line-height: 1;
   cursor: pointer;
 }
@@ -1957,14 +2296,14 @@ body.is-capacitor .opening-btn-quick {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 32px;
+  font-size: 2rem;
   font-weight: 700;
 }
 
 .channel-icon-label {
   display: block;
   margin-top: 6px;
-  font-size: 11px;
+  font-size: clamp(0.65rem, 1.05vmin, 0.85rem);
   line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
@@ -1972,11 +2311,13 @@ body.is-capacitor .opening-btn-quick {
 }
 .nownext-overlay {
   position: absolute;
-  left: 20px;
-  bottom: 40px;
-  width: 420px;
+  left: clamp(12px, 1.6vw, 28px);
+  bottom: clamp(16px, 4.2vh, 52px);
+  width: min(42vw, 28rem);
+  max-width: calc(100vw - 40px);
+  box-sizing: border-box;
   background: rgba(0,0,0,0.75);
-  padding: 14px;
+  padding: clamp(10px, 1.2vw, 18px);
   border-radius: 10px;
   animation: fadeIn 0.2s ease-out;
 }
@@ -1984,37 +2325,57 @@ body.is-capacitor .opening-btn-quick {
 .nn-channel {
   display: flex;
   align-items: center;
+  gap: 0.6em;
+  min-width: 0;
   margin-bottom: 10px;
 }
 
 .nn-logo {
-  width: 42px;
-  height: 42px;
+  width: clamp(2rem, 4vmin, 3.25rem);
+  height: clamp(2rem, 4vmin, 3.25rem);
+  flex: 0 0 auto;
   object-fit: contain;
-  margin-right: 10px;
+  margin-right: 0;
 }
 
 .nn-name {
-  font-size: 20px;
+  flex: 1;
+  min-width: 0;
+  font-size: clamp(1rem, 1.7vw, 1.5rem);
   font-weight: bold;
+  line-height: 1.2;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
 }
 
 .nn-block {
   margin-bottom: 12px;
+  min-width: 0;
 }
 
 .nn-title {
-  font-size: 12px;
+  font-size: clamp(0.7rem, 1vw, 0.85rem);
   opacity: 0.7;
 }
 
 .nn-program {
-  font-size: 16px;
+  font-size: clamp(0.95rem, 1.45vw, 1.35rem);
   font-weight: bold;
+  line-height: 1.25;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
 }
 
 .nn-time {
-  font-size: 12px;
+  font-size: clamp(0.7rem, 1vw, 0.85rem);
   opacity: 0.7;
 }
 
@@ -2093,12 +2454,18 @@ body.is-capacitor .opening-btn-quick {
 }
 
 .epg-event-title {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: bold;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
 }
 
 .epg-event-time {
-  font-size: 12px;
+  font-size: 0.75rem;
   opacity: 0.7;
 }
 .epg-preview-player {
@@ -2128,7 +2495,7 @@ body.is-capacitor .opening-btn-quick {
   right: 0;
   padding: 6px 10px;
   background: rgba(0,0,0,0.6);
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: bold;
 }
 .epg-search-layout {
@@ -2150,7 +2517,7 @@ body.is-capacitor .opening-btn-quick {
 }
 
 .epg-search-section-title {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2193,13 +2560,13 @@ body.is-capacitor .opening-btn-quick {
 }
 
 .epg-search-guide-channel {
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 700;
 }
 
 .epg-search-guide-subtitle {
   margin-top: 2px;
-  font-size: 12px;
+  font-size: 0.75rem;
   opacity: 0.7;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -2214,7 +2581,7 @@ body.is-capacitor .opening-btn-quick {
 }
 
 .epg-search-guide-offset-label {
-  font-size: 12px;
+  font-size: 0.75rem;
   opacity: 0.82;
 }
 
@@ -2242,7 +2609,7 @@ body.is-capacitor .opening-btn-quick {
 }
 
 .epg-search-guide-row-header .epg-search-guide-cell {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 700;
   opacity: 0.92;
 }
@@ -2256,7 +2623,7 @@ body.is-capacitor .opening-btn-quick {
   padding: 8px 10px;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.04);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -2264,8 +2631,9 @@ body.is-capacitor .opening-btn-quick {
 }
 
 .epg-search-guide-cell-channel {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 700;
+  min-width: 0;
 }
 
 .epg-search-guide-programme {
@@ -2280,13 +2648,17 @@ body.is-capacitor .opening-btn-quick {
 
 .epg-search-guide-programme-title {
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
 }
 
 .epg-search-guide-programme-time {
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 500;
   opacity: 0.78;
 }
@@ -2298,7 +2670,7 @@ body.is-capacitor .opening-btn-quick {
   justify-content: center;
   align-items: flex-start;
   color: rgba(255, 255, 255, 0.62);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
 }
 
@@ -2348,25 +2720,25 @@ body.is-capacitor .opening-btn-quick {
 }
 
 .epg-search-title {
-  font-size: 16px;
+  font-size: 1rem;
   font-weight: bold;
 }
 
 .epg-search-channel {
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 700;
   opacity: 0.92;
 }
 
 .epg-search-time {
-  font-size: 12px;
+  font-size: 0.75rem;
   opacity: 0.6;
   margin-top: 3px;
 }
 
 .epg-search-desc {
   margin-top: 6px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.35;
   opacity: 0.74;
 }
@@ -2408,7 +2780,7 @@ body.is-capacitor .opening-btn-quick {
   border: none;
   border-radius: 4px;
   color: white;
-  font-size: 12px;
+  font-size: 0.75rem;
   cursor: pointer;
 }
 
@@ -2450,7 +2822,7 @@ body.is-capacitor .opening-btn-quick {
 }
 
 .playlist-item-type {
-  font-size: 12px;
+  font-size: 0.75rem;
   opacity: 0.7;
 }
 
@@ -2485,17 +2857,29 @@ body.is-capacitor .opening-btn-quick {
 }
 
 .epg-grid-time {
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .epg-grid-title {
-  font-size: 16px;
+  font-size: 1rem;
   font-weight: bold;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
 }
 
 .epg-grid-desc {
-  font-size: 12px;
+  font-size: 0.75rem;
   opacity: 0.7;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
 }
 
 .nn-progress-bar {
@@ -2525,11 +2909,15 @@ body.is-capacitor .opening-btn-quick {
   cursor: default;
 }
 
+.vod-browse-layer[hidden] {
+  display: none !important;
+}
+
 .series-picker-overlay {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.7);
-  z-index: 130;
+  z-index: 210;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2558,7 +2946,7 @@ body.is-capacitor .opening-btn-quick {
 
 .series-picker-title {
   margin: 0;
-  font-size: 20px;
+  font-size: 1.25rem;
   color: #fff;
 }
 
@@ -2607,31 +2995,6 @@ body.is-capacitor .opening-btn-quick {
   gap: 8px;
 }
 
-.movies-main-search-bar {
-  position: absolute;
-  top: 10px;
-  left: 380px;
-  right: 12px;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.movies-main-search-input {
-  margin: 0;
-  width: min(520px, 100%);
-  border: 1px solid rgba(255, 255, 255, 0.24);
-  border-radius: 8px;
-  background: rgba(18, 23, 30, 0.92);
-  color: #fff;
-  padding: 8px 10px;
-}
-
-.movies-main-search-input::placeholder {
-  color: rgba(255, 255, 255, 0.62);
-}
-
 .series-main-search-btn {
   border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 8px;
@@ -2655,12 +3018,79 @@ body.is-capacitor .opening-btn-quick {
 }
 
 .series-main-search-hint {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: rgba(255, 255, 255, 0.72);
   white-space: nowrap;
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.remote-text-composer-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 420;
+}
+
+.remote-text-composer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.remote-text-composer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(720px, calc(100vw - 24px));
+  max-height: min(88vh, 680px);
+  overflow-y: auto;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  background: rgba(12, 17, 24, 0.98);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+  display: grid;
+  gap: 10px;
+}
+
+.remote-text-composer-label {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #f2f6ff;
+}
+
+.remote-text-composer-value {
+  min-height: 40px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.remote-text-composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.remote-text-composer-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.remote-text-composer-actions .series-main-search-btn {
+  min-height: 44px;
+}
+
+.remote-text-composer .series-search-key:focus,
+.remote-text-composer .series-main-search-btn:focus {
+  outline: 2px solid #7ec5ff;
+  outline-offset: 2px;
 }
 
 .series-search-composer {
@@ -2709,7 +3139,7 @@ body.is-capacitor .opening-btn-quick {
   color: #fff;
   min-height: 52px;
   padding: 12px 0;
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 700;
   cursor: pointer;
 }
@@ -2720,8 +3150,10 @@ body.is-capacitor .opening-btn-quick {
   cursor: default;
 }
 
+.series-main-search-btn:focus,
 .series-main-search-btn:focus-visible,
 .series-main-search-input:focus-visible,
+.series-search-key:focus,
 .series-search-key:focus-visible {
   outline: 2px solid #7ec5ff;
   outline-offset: 2px;
@@ -2734,6 +3166,227 @@ body.is-capacitor .opening-btn-quick {
 
 .series-picker-error {
   color: #ff9a9a;
+}
+
+.movie-details-overlay {
+  position: fixed;
+  inset: 0;
+  background: #05070c;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.movie-details-backdrop {
+  position: absolute;
+  inset: -24px;
+  background-size: cover;
+  background-position: center;
+  filter: blur(22px) brightness(0.28);
+  transform: scale(1.08);
+  pointer-events: none;
+}
+
+.movie-details-panel {
+  position: relative;
+  z-index: 1;
+  width: min(1180px, 96vw);
+  max-height: 90vh;
+  background: rgba(10, 14, 22, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+  display: grid;
+  grid-template-columns: minmax(220px, 34%) minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.movie-details-media {
+  position: relative;
+  min-height: 420px;
+  background: #0b0f16;
+}
+
+.movie-details-poster,
+.movie-details-trailer,
+.movie-details-trailer-video,
+.movie-details-poster-fallback {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border: 0;
+  display: block;
+}
+
+.movie-details-poster-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 4rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.45);
+  background: linear-gradient(160deg, #1b2a3d, #0b0f16);
+}
+
+.movie-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px 24px 20px;
+  min-width: 0;
+  overflow: auto;
+}
+
+.movie-details-title {
+  margin: 0;
+  font-size: clamp(1.35rem, 2.4vw, 2rem);
+  line-height: 1.2;
+  color: #fff;
+}
+
+.movie-details-meta,
+.movie-details-credit,
+.movie-details-state {
+  color: rgba(230, 238, 248, 0.88);
+  font-size: 0.95rem;
+}
+
+.movie-details-credit {
+  color: rgba(210, 222, 236, 0.82);
+}
+
+.movie-details-plot {
+  margin: 4px 0 0;
+  flex: 1 1 auto;
+  max-height: 32vh;
+  overflow: auto;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 1.02rem;
+  line-height: 1.45;
+}
+
+.movie-details-plot-empty {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.movie-details-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.movie-details-play,
+.movie-details-favorite,
+.movie-details-preview,
+.movie-details-close {
+  border-radius: 10px;
+  padding: 12px 18px;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  color: #fff;
+}
+
+.movie-details-play {
+  border: 1px solid rgba(90, 170, 255, 0.7);
+  background: #2d7dff;
+}
+
+.movie-details-favorite {
+  border: 1px solid rgba(126, 197, 255, 0.55);
+  background: rgba(126, 197, 255, 0.18);
+}
+
+.movie-details-preview,
+.movie-details-close {
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.movie-details-preview-missing {
+  align-self: center;
+  color: rgba(230, 238, 248, 0.62);
+  font-size: 0.95rem;
+}
+
+.movie-details-play:focus-visible,
+.movie-details-favorite:focus-visible,
+.movie-details-preview:focus-visible,
+.movie-details-close:focus-visible {
+  outline: 3px solid #7ec5ff;
+  outline-offset: 2px;
+}
+
+@media (max-width: 820px) {
+  .movie-details-panel {
+    grid-template-columns: 1fr;
+    max-height: 92vh;
+  }
+
+  .movie-details-media {
+    min-height: 220px;
+    max-height: 32vh;
+  }
+}
+
+.series-details-panel {
+  width: min(1280px, 97vw);
+  height: min(920px, 94vh);
+  max-height: 94vh;
+  grid-template-columns: minmax(200px, 28%) minmax(0, 1fr);
+  grid-template-rows: minmax(220px, 42%) minmax(0, 1fr);
+  grid-template-areas:
+    "media body"
+    "episodes episodes";
+}
+
+.series-details-panel .movie-details-media {
+  grid-area: media;
+  min-height: 0;
+}
+
+.series-details-panel .movie-details-body {
+  grid-area: body;
+}
+
+.series-details-panel .movie-details-plot {
+  max-height: 12vh;
+  flex: 0 1 auto;
+}
+
+.series-details-episodes {
+  grid-area: episodes;
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(6, 10, 16, 0.72);
+}
+
+.series-details-episode-list {
+  padding: 10px 16px 16px;
+}
+
+.series-details-episodes .series-episode-grid {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+@media (max-width: 820px) {
+  .series-details-panel {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(160px, 28%) minmax(180px, 32%) minmax(0, 1fr);
+    grid-template-areas:
+      "media"
+      "body"
+      "episodes";
+    height: 94vh;
+  }
+
+  .series-details-panel .movie-details-media {
+    max-height: none;
+  }
 }
 
 .series-picker-list {
@@ -2784,7 +3437,7 @@ body.is-capacitor .opening-btn-quick {
 
 .series-season-title {
   margin: 0 0 8px;
-  font-size: 15px;
+  font-size: 0.9375rem;
   color: rgba(255, 255, 255, 0.86);
 }
 
@@ -2823,7 +3476,7 @@ body.is-capacitor .opening-btn-quick {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 700;
   color: #fff;
 }
@@ -2842,8 +3495,26 @@ body.is-capacitor .opening-btn-quick {
   border-color: rgba(126, 197, 255, 0.55);
 }
 
+.series-episode-btn-last {
+  border-color: rgba(90, 170, 255, 0.85);
+  background: rgba(45, 125, 255, 0.2);
+}
+
+.series-episode-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.series-episode-last-badge {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #9cc9ff;
+}
+
 .recording-meta {
-  font-size: 12px;
+  font-size: 0.75rem;
   opacity: 0.7;
 }
 
@@ -2858,7 +3529,7 @@ body.is-capacitor .opening-btn-quick {
 
 .recording-storage-summary {
   margin-bottom: 12px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   opacity: 0.8;
 }
 
@@ -2912,7 +3583,7 @@ body.is-capacitor .opening-btn-quick {
 
 .recording-setup-btn {
   min-height: 64px;
-  font-size: 18px;
+  font-size: 1.125rem;
   font-weight: 700;
 }
 
@@ -2941,7 +3612,7 @@ body.theme-light .recording-setup-btn {
   background: rgba(220, 53, 69, 0.16);
   border: 1px solid rgba(220, 53, 69, 0.45);
   color: #ffb5bd;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .playlist-save-diagnostics {
@@ -2951,7 +3622,7 @@ body.theme-light .recording-setup-btn {
   background: rgba(40, 167, 69, 0.12);
   border: 1px solid rgba(40, 167, 69, 0.45);
   color: #b8f5c5;
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.45;
 }
 
@@ -2995,7 +3666,7 @@ body.theme-light .recording-setup-btn {
   display: inline-block;
   padding: 6px 10px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 0.75rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   background: rgba(96, 181, 255, 0.2);
@@ -3012,7 +3683,7 @@ body.theme-light .recording-setup-btn {
 
 .opening-subtitle {
   margin: 10px 0 20px 0;
-  font-size: 15px;
+  font-size: 0.9375rem;
   color: rgba(222, 236, 255, 0.8);
 }
 
@@ -3029,7 +3700,7 @@ body.theme-light .recording-setup-btn {
 .opening-btn {
   border: 0;
   border-radius: 10px;
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 600;
   color: #ffffff;
   cursor: pointer;
@@ -3059,7 +3730,7 @@ body.theme-light .recording-setup-btn {
 
 .opening-hint {
   margin-top: 14px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: rgba(190, 214, 240, 0.72);
 }
 
@@ -3070,7 +3741,7 @@ body.theme-light .recording-setup-btn {
   background: rgba(255, 168, 63, 0.16);
   border: 1px solid rgba(255, 193, 102, 0.35);
   color: #ffd89b;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 @media (max-width: 640px) {
@@ -3085,7 +3756,7 @@ body.theme-light .recording-setup-btn {
   .player-preview-badge {
     right: 16px;
     top: 16px;
-    font-size: 10px;
+    font-size: 0.625rem;
     padding: 4px 8px;
   }
 

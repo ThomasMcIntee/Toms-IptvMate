@@ -35,6 +35,7 @@ import {
 } from "../core/loaders/playlistLoader";
 import { loadEPGCache } from "../core/epgStore";
 import { isCapacitorRuntime } from "../core/player/platformDetection";
+import RemoteTextComposer from "./RemoteTextComposer";
 import {
   formatXtreamAccountExpiry,
   isXtreamAccountExpired,
@@ -474,6 +475,20 @@ export default function PlaylistManager({
   }, [playlists]);
 
   useEffect(() => {
+    if (!editingPlaylistId) return;
+    const timer = window.setTimeout(() => {
+      const first = document.querySelector<HTMLElement>(".playlist-edit-form .playlist-edit-field-btn");
+      first?.focus();
+      try {
+        first?.scrollIntoView({ block: "center", inline: "nearest" });
+      } catch {
+        first?.scrollIntoView();
+      }
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [editingPlaylistId]);
+
+  useEffect(() => {
     if (!visible) return;
     // Default Adult/Child Save target, but do not replace live hide/show
     // with a role snapshot — that would wipe checkmarks on every open.
@@ -828,22 +843,26 @@ export default function PlaylistManager({
       setCurrentPlaylistId(targetPlaylistId);
       writeStorageItem(SHARED_PLAYLIST_ID_KEY, targetPlaylistId);
 
-    // Write to the protected saved-role key (never overwritten by playlist resets).
-    saveRoleVisibility(kind);
-    if (isCapacitorRuntime()) {
-      const current = getAllChannels();
-      const groupName = String(current[0]?.group || "").trim();
-      const contentType = current[0]?.contentType;
-      if (groupName && (contentType === "live" || contentType === "movie" || contentType === "series")) {
-        await persistCapacitorNamedGroupChannels(
-          groupName,
-          contentType,
-          current.filter((channel) => isChannelVisible(String(channel.id || "")))
-        );
+      // Write to the protected saved-role key (never overwritten by playlist resets).
+      saveRoleVisibility(kind);
+      if (isCapacitorRuntime()) {
+        const current = getAllChannels();
+        const groupName = String(current[0]?.group || "").trim();
+        const contentType = current[0]?.contentType;
+        if (groupName && (contentType === "live" || contentType === "movie" || contentType === "series")) {
+          await persistCapacitorNamedGroupChannels(
+            groupName,
+            contentType,
+            current.filter((channel) => isChannelVisible(String(channel.id || "")))
+          );
+        }
       }
+      await persistRoleSnapshot(kind, targetPlaylistId);
+      setStatusMessage(`✓ Saved ${kind} visibility for "${playlistName}".`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : `Failed to save ${kind} visibility for "${playlistName}".`;
+      setStatusMessage(`✗ ${message}`);
     }
-    await persistRoleSnapshot(kind, targetPlaylist.id);
-    setStatusMessage(`✓ Saved ${kind} visibility for "${targetPlaylist.name}".`);
   }
 
   async function applyActiveRoleVisibility(kind: "adult" | "child") {
@@ -1344,62 +1363,53 @@ export default function PlaylistManager({
           {editingPlaylistId === p.id && (
             <div className="playlist-edit-form playlist-actions-top-gap">
               <strong aria-live="polite">Editing: {p.name}</strong>
-              <label>Playlist name</label>
-              <input
-                type="text"
+              <PlaylistEditField
+                label="Playlist name"
                 placeholder="Playlist name"
                 value={editName}
-                onChange={(event) => setEditName(event.target.value)}
-                onKeyDown={(event) => event.stopPropagation()}
+                onChange={setEditName}
               />
 
               {p.type === "m3u" && (
                 <>
-                  <label>M3U URL</label>
-                  <input
-                    type="text"
+                  <PlaylistEditField
+                    label="M3U URL"
                     placeholder="M3U URL"
                     value={editUrl}
-                    onChange={(event) => setEditUrl(event.target.value)}
-                    onKeyDown={(event) => event.stopPropagation()}
+                    onChange={setEditUrl}
                   />
-                  <label>EPG URL (optional)</label>
-                  <input
-                    type="text"
+                  <PlaylistEditField
+                    label="EPG URL (optional)"
                     placeholder="EPG URL (optional)"
                     value={editEpg}
-                    onChange={(event) => setEditEpg(event.target.value)}
-                    onKeyDown={(event) => event.stopPropagation()}
+                    onChange={setEditEpg}
                   />
                 </>
               )}
 
               {p.type === "xtream" && (
                 <>
-                  <label>Server URL</label>
-                  <input
-                    type="text"
+                  <PlaylistEditField
+                    label="Server URL"
                     placeholder="Server URL"
                     value={editUrl}
-                    onChange={(event) => setEditUrl(event.target.value)}
-                    onKeyDown={(event) => event.stopPropagation()}
+                    onChange={setEditUrl}
                   />
-                  <label>Username</label>
-                  <input
-                    type="text"
+                  <PlaylistEditField
+                    label="Username"
                     placeholder="Username"
                     value={editUser}
-                    onChange={(event) => setEditUser(event.target.value)}
-                    onKeyDown={(event) => event.stopPropagation()}
+                    onChange={setEditUser}
                   />
                   <label>Password</label>
                   <div className="password-input-row">
-                    <input
-                      type={showEditPass ? "text" : "password"}
+                    <PlaylistEditField
+                      label="Password"
                       placeholder="Password"
                       value={editPass}
-                      onChange={(event) => setEditPass(event.target.value)}
-                      onKeyDown={(event) => event.stopPropagation()}
+                      onChange={setEditPass}
+                      hideLabel
+                      masked={!showEditPass}
                     />
                     <button
                       type="button"
@@ -1414,21 +1424,17 @@ export default function PlaylistManager({
 
               {p.type === "stalker" && (
                 <>
-                  <label>Portal URL</label>
-                  <input
-                    type="text"
+                  <PlaylistEditField
+                    label="Portal URL"
                     placeholder="Portal URL"
                     value={editPortal}
-                    onChange={(event) => setEditPortal(event.target.value)}
-                    onKeyDown={(event) => event.stopPropagation()}
+                    onChange={setEditPortal}
                   />
-                  <label>MAC Address</label>
-                  <input
-                    type="text"
+                  <PlaylistEditField
+                    label="MAC Address"
                     placeholder="MAC Address"
                     value={editMac}
-                    onChange={(event) => setEditMac(event.target.value)}
-                    onKeyDown={(event) => event.stopPropagation()}
+                    onChange={setEditMac}
                   />
                 </>
               )}
@@ -1454,6 +1460,64 @@ export default function PlaylistManager({
         </div>
       ))}
     </div>
+  );
+}
+
+function PlaylistEditField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  masked = false,
+  hideLabel = false
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  masked?: boolean;
+  hideLabel?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const hint = placeholder || label;
+  const shown = !value ? hint : masked ? "•".repeat(Math.min(Math.max(value.length, 4), 16)) : value;
+
+  return (
+    <>
+      {!hideLabel && <label>{label}</label>}
+      <button
+        ref={buttonRef}
+        type="button"
+        className="playlist-edit-field-btn"
+        onClick={() => setOpen(true)}
+        onKeyDown={(event) => {
+          const key = String(event.key || "");
+          const keyCode = Number((event as unknown as { keyCode?: number }).keyCode || 0);
+          const erase = key === "Backspace" || key === "Delete" || keyCode === 8 || keyCode === 46 || keyCode === 67;
+          if (!erase) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (value) onChange(value.slice(0, -1));
+          setOpen(true);
+        }}
+      >
+        {shown}
+      </button>
+      {open && (
+        <RemoteTextComposer
+          label={label}
+          value={value}
+          onChange={onChange}
+          onDone={() => {
+            setOpen(false);
+            window.setTimeout(() => buttonRef.current?.focus(), 40);
+          }}
+          masked={masked}
+          maxLength={512}
+        />
+      )}
+    </>
   );
 }
 

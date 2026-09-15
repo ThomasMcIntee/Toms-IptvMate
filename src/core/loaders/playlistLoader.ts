@@ -3,6 +3,7 @@ import { capCapacitorCatalogList, type CatalogCategoryEntry, type Channel, type 
 import { loadM3U } from "./m3uLoader";
 import { loadXtream, loadXtreamCategoryIndex, loadXtreamChannelsForCategory } from "./xtreamLoader";
 import { loadStalker } from "./stalkerLoader";
+import { waitForBackgroundSlot } from "../taskScheduler";
 
 export type PlaylistLoadScope = "all" | "live" | "movies" | "series";
 
@@ -51,6 +52,7 @@ export async function loadChannelsForPlaylist(
   scope: PlaylistLoadScope = "all",
   onProgress?: (status: string) => void
 ) {
+  await waitForBackgroundSlot();
   if (playlist.type === "m3u") {
     return filterChannelsForScope(await loadM3U(playlist.data.url), scope);
   }

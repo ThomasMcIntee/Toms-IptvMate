@@ -435,13 +435,33 @@ function markLunaUnavailable(reason: string): void {
   }
 }
 
+const downPcRelayOrigins = new Set<string>();
+
+export function markWebOsPcRelayOriginDown(origin: string): void {
+  const key = String(origin || "").trim().replace(/\/$/, "");
+  if (/^https?:\/\//i.test(key)) downPcRelayOrigins.add(key);
+}
+
+export function isWebOsPcRelayOriginDown(origin: string): boolean {
+  return downPcRelayOrigins.has(String(origin || "").trim().replace(/\/$/, ""));
+}
+
+function preferDevRelayOrigin(origin: string): string {
+  const value = String(origin || "").trim().replace(/\/$/, "");
+  if (/:4173$/i.test(value)) {
+    const dev = value.replace(/:4173$/i, ":5173");
+    if (!isWebOsPcRelayOriginDown(dev)) return dev;
+  }
+  return value;
+}
+
 function pcRelayOrigins(): string[] {
   if (typeof window === "undefined") return [];
   const found: string[] = [];
   const push = (value: string | null | undefined) => {
-    const origin = String(value || "").trim().replace(/\/$/, "");
+    const origin = preferDevRelayOrigin(String(value || "").trim().replace(/\/$/, ""));
     if (!/^https?:\/\//i.test(origin) || found.includes(origin)) return;
-    if (isVirtualLanOrigin(origin)) return;
+    if (isVirtualLanOrigin(origin) || isWebOsPcRelayOriginDown(origin)) return;
     found.push(origin);
   };
   try {
@@ -454,6 +474,14 @@ function pcRelayOrigins(): string[] {
   if (Array.isArray(scoped.__IPTV_RELAY_CANDIDATES__)) {
     scoped.__IPTV_RELAY_CANDIDATES__.forEach(push);
   }
+  if (isWebOsSimulator()) {
+    push("http://127.0.0.1:5173");
+    push("http://localhost:5173");
+  }
+  found.sort((left, right) => {
+    const score = (origin: string) => (/:5173$/i.test(origin) ? 0 : /:4173$/i.test(origin) ? 2 : 1);
+    return score(left) - score(right) || left.localeCompare(right);
+  });
   return found;
 }
 
@@ -536,7 +564,31 @@ async function fetchWebOsRemoteUncached(url: string): Promise<WebOsRemoteFetchRe
   const candidates = targetCandidates(url);
   debugLog(`FETCH: start ${redactUrl(candidates[0] || url)}`);
 
+  if (isWebOsSimulator()) {
+    if (/\/__stream\?url=/i.test(url)) {
+      const viaStream = await tryTextUrl(url, url, "pc stream");
+      if (viaStream) return viaStream;
+    }
+    const pageOrigin =
+      typeof window !== "undefined" && /^https?:$/.test(window.location.protocol)
+        ? preferDevRelayOrigin(window.location.origin.replace(/\/$/, ""))
+        : "";
+    const origins = [...pcRelayOrigins()];
+    if (pageOrigin && !origins.includes(pageOrigin)) origins.unshift(pageOrigin);
+    for (const pcOrigin of origins) {
+      for (const candidate of candidates) {
+        if (/\/__stream\?url=/i.test(candidate)) continue;
+        const pcUrl = `${pcOrigin}/__stream?url=${encodeURIComponent(candidate)}`;
+        const viaPc = await tryTextUrl(pcUrl, pcUrl, `pc ${pcOrigin}`);
+        if (viaPc) return viaPc;
+      }
+    }
+  }
+
   for (const candidate of candidates) {
+    if (isWebOsSimulator() && /^https:\/\//i.test(candidate) && /ip1-st|vod\d+\./i.test(candidate)) {
+      continue;
+    }
     const direct = await tryTextUrl(candidate, candidate, "direct");
     if (direct) return direct;
   }
@@ -546,14 +598,6 @@ async function fetchWebOsRemoteUncached(url: string): Promise<WebOsRemoteFetchRe
     for (const candidate of candidates) {
       const relayed = await tryTextUrl(toWebOsRelayUrl(origin, candidate), candidate, "relay");
       if (relayed) return relayed;
-    }
-  }
-
-  for (const pcOrigin of pcRelayOrigins()) {
-    for (const candidate of candidates) {
-      const pcUrl = `${pcOrigin}/__stream?url=${encodeURIComponent(candidate)}`;
-      const viaPc = await tryTextUrl(pcUrl, candidate, `pc ${pcOrigin}`);
-      if (viaPc) return viaPc;
     }
   }
 

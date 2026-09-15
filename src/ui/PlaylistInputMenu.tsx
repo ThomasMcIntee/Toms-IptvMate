@@ -300,9 +300,14 @@ export default function PlaylistInputMenu({ visible, onPlaylistSaved }: { visibl
           <label>Password</label>
           <div className="password-input-row">
             <input
-              type={showXtreamPass ? "text" : "password"}
+              type="text"
+              className={showXtreamPass ? undefined : "password-masked-input"}
               placeholder="password"
               value={xtreamPass}
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
+              inputMode="text"
               onChange={(e) => setXtreamPass(e.target.value)}
               onKeyDown={(e) => e.stopPropagation()}
             />

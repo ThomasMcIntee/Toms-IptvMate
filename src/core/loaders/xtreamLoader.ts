@@ -1,19 +1,27 @@
-import { capCapacitorCatalogList, Channel, ContentType, type CatalogCategoryEntry } from "../channelStore";
+import {
+  capCapacitorCatalogList,
+  Channel,
+  ContentType,
+  getCapacitorLiveGroupNames,
+  getCapacitorVodGroupNames,
+  saveCapacitorCategoryCatalog,
+  saveCapacitorVodScopeCache,
+  isCapacitorVodScopeCacheFresh,
+  type CatalogCategoryEntry,
+  type CapacitorVodCacheScope
+} from "../channelStore";
 import { isCapacitorRuntime } from "../player/platformDetection";
 import type { PlaylistLoadScope } from "./playlistLoader";
 import type { PlaylistCatalogTotals } from "../playlistStore";
 import { parseXtreamAccountInfo, type XtreamAccountInfo } from "../xtreamAccount";
 import { fetchWebOsRemote, fetchWebOsRemoteJson } from "../webosStreamRelay";
+import { getBackgroundConcurrency, yieldToMain } from "../taskScheduler";
 
 const CAPACITOR_PERSIST_GROUP_CAP = 8000;
 const CAPACITOR_CATEGORY_CONCURRENCY = 8;
 const CAPACITOR_XTREAM_JSON_MAX_BYTES = 3_500_000;
 const CAPACITOR_XTREAM_CATALOG_MAX_BYTES = 20_000_000;
 export type XtreamLoadProgress = (status: string) => void;
-
-function yieldToMain(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 0));
-}
 
 let capacitorNativeApiPath: "/__api" | "/__stream" | null = null;
 
@@ -212,7 +220,7 @@ function mapLiveStream(
   return {
     id: `live_${item.stream_id}`,
     name: item.name || `Stream ${item.stream_id}`,
-    logo: isCapacitorRuntime() ? undefined : item.stream_icon,
+    logo: String(item.stream_icon || "").trim() || undefined,
     url: `${baseUrl}/live/${user}/${pass}/${item.stream_id}.${liveExtension}`,
     group: `TV: ${group}`,
     contentType: "live" as ContentType,
@@ -332,8 +340,10 @@ async function persistCategoriesInPairs(
   const categories = categoryItems.filter((category) => category?.category_id != null);
   let saved = 0;
 
-  for (let index = 0; index < categories.length; index += CAPACITOR_CATEGORY_CONCURRENCY) {
-    const slice = categories.slice(index, index + CAPACITOR_CATEGORY_CONCURRENCY);
+  for (let index = 0; index < categories.length; ) {
+    const sliceSize = getBackgroundConcurrency(CAPACITOR_CATEGORY_CONCURRENCY);
+    const slice = categories.slice(index, index + sliceSize);
+    index += slice.length;
     const batches = await Promise.all(
       slice.map((category) =>
         fetchAndMapCategory(category, categoryMap, baseUrl, user, pass, useProxy, streamsAction, mapItem).catch(
@@ -355,7 +365,7 @@ async function persistCategoriesInPairs(
       for (const item of toSave) item.list.length = 0;
     }
     onProgress?.(
-      `${label} ${Math.min(index + slice.length, categories.length)}/${categories.length} categories (${saved.toLocaleString()} titles)…`
+      `${label} ${Math.min(index, categories.length)}/${categories.length} categories (${saved.toLocaleString()} titles)…`
     );
     await yieldToMain();
   }
@@ -963,18 +973,42 @@ function toCorsProxyUrl(url: string): string {
   return `https://corsproxy.io/?${encodeURIComponent(url)}`;
 }
 
-export async function loadXtreamSeriesEpisodesFromChannel(seriesChannel: Channel): Promise<Channel[]> {
-  const parsed = parseXtreamSeriesUrl(String(seriesChannel?.url || ""));
-  if (!parsed) return [];
+export type XtreamSeriesBundle = {
+  info: XtreamSeriesInfo | null;
+  episodes: Channel[];
+};
 
-  const { baseUrl, user, pass, seriesId } = parsed;
+export async function loadXtreamSeriesBundleFromChannel(seriesChannel: Channel): Promise<XtreamSeriesBundle> {
+  const parsed = parseXtreamSeriesUrl(String(seriesChannel?.url || ""));
+  if (!parsed) return { info: null, episodes: [] };
+
+  const seriesId = resolveXtreamSeriesId(seriesChannel, parsed.seriesId);
+  const parsedWithId = { ...parsed, seriesId };
+  const { baseUrl, user, pass } = parsedWithId;
   const apiUrl = `${baseUrl}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_series_info&series_id=${encodeURIComponent(seriesId)}`;
   const payload = await fetchJsonWithProxyFallback(apiUrl);
-  if (!payload || typeof payload !== "object") return [];
+  if (!payload || typeof payload !== "object") return { info: null, episodes: [] };
 
-  const episodes = extractEpisodeEntries(payload.episodes);
+  return {
+    info: parseXtreamSeriesInfoFromPayload(payload, seriesChannel),
+    episodes: mapXtreamSeriesEpisodesFromPayload(payload, seriesChannel, parsedWithId)
+  };
+}
+
+export async function loadXtreamSeriesEpisodesFromChannel(seriesChannel: Channel): Promise<Channel[]> {
+  const bundle = await loadXtreamSeriesBundleFromChannel(seriesChannel);
+  return bundle.episodes;
+}
+
+function mapXtreamSeriesEpisodesFromPayload(
+  payload: any,
+  seriesChannel: Channel,
+  parsed: { baseUrl: string; user: string; pass: string; seriesId: string }
+): Channel[] {
+  const episodes = extractEpisodeEntries(payload?.episodes);
   if (episodes.length === 0) return [];
 
+  const { baseUrl, user, pass, seriesId } = parsed;
   const group = seriesChannel.group || "Series";
   const parentGroup = seriesChannel.group || undefined;
   const fallbackLogo = seriesChannel.logo;
@@ -1049,30 +1083,42 @@ function parseXtreamSeriesUrl(url: string): {
   };
 }
 
+function resolveXtreamSeriesId(channel: Channel, urlSeriesId: string): string {
+  const id = String(channel?.id || "");
+  const episodeMatch = id.match(/^series_(\d+)_episode_\d+$/i);
+  if (episodeMatch) return episodeMatch[1];
+  const seriesMatch = id.match(/^series_(\d+)$/i);
+  if (seriesMatch) return seriesMatch[1];
+  return urlSeriesId;
+}
+
 async function fetchJsonWithProxyFallback(url: string): Promise<unknown> {
   if (isWebOsRuntime()) {
     return fetchWebOsRemoteJson(url);
   }
 
-  const direct = await fetch(url).catch(() => null);
-  if (direct?.ok) {
+  const readJson = async (target: string): Promise<unknown | null> => {
+    const response = await fetch(target).catch(() => null);
+    if (!response?.ok) return null;
     try {
-      return await direct.json();
-    } catch {
-      // Fall through to proxy retry if direct JSON parsing fails.
-    }
-  }
-
-  const proxied = await fetch(toCorsProxyUrl(url)).catch(() => null);
-  if (proxied?.ok) {
-    try {
-      return await proxied.json();
+      return await response.json();
     } catch {
       return null;
     }
+  };
+
+  const direct = await readJson(url);
+  if (direct != null) return direct;
+
+  if (typeof window !== "undefined" && /^https?:$/.test(window.location.protocol)) {
+    const host = window.location.hostname;
+    if (host === "localhost" || host === "127.0.0.1") {
+      const viaRelay = await readJson(`${window.location.origin}/__stream?url=${encodeURIComponent(url)}`);
+      if (viaRelay != null) return viaRelay;
+    }
   }
 
-  return null;
+  return readJson(toCorsProxyUrl(url));
 }
 
 async function readResponseJsonCapped(
@@ -1091,16 +1137,19 @@ async function readResponseJsonCapped(
   }
 
   if (declaredLength > 0) {
+    await yieldToMain();
     return response.json();
   }
 
   const reader = response.body?.getReader();
   if (!reader) {
+    await yieldToMain();
     return response.json();
   }
 
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let readChunks = 0;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -1112,6 +1161,10 @@ async function readResponseJsonCapped(
         return null;
       }
       chunks.push(value);
+      readChunks += 1;
+      if (readChunks % 8 === 0) {
+        await yieldToMain();
+      }
     }
   }
 
@@ -1122,6 +1175,7 @@ async function readResponseJsonCapped(
     offset += chunk.byteLength;
   }
   chunks.length = 0;
+  await yieldToMain();
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
@@ -1269,4 +1323,168 @@ function formatEpisodeLabel(params: {
   if (code) return `${params.seriesTitle} ${code}`;
   if (title) return title;
   return `${params.seriesTitle} Episode ${params.fallbackId}`;
+}
+
+export type XtreamVodInfo = {
+  title: string;
+  plot: string;
+  poster: string | null;
+  backdrop: string | null;
+  year: string | null;
+  genre: string | null;
+  duration: string | null;
+  rating: string | null;
+  director: string | null;
+  cast: string | null;
+  trailerEmbedUrl: string | null;
+  trailerVideoUrl: string | null;
+};
+
+export type XtreamSeriesInfo = XtreamVodInfo;
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) return String(value);
+  }
+  return "";
+}
+
+function firstHttpUrl(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      const nested = firstHttpUrl(...value);
+      if (nested) return nested;
+      continue;
+    }
+    const text = firstText(value);
+    if (/^https?:\/\//i.test(text)) return text;
+  }
+  return null;
+}
+
+function youtubeEmbedUrl(raw: string): string | null {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+  const fromUrl = text.match(
+    /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/i
+  );
+  const id = fromUrl?.[1] || (/^[A-Za-z0-9_-]{11}$/.test(text) ? text : "");
+  if (!id) return null;
+  return `https://www.youtube-nocookie.com/embed/${id}?rel=0&modestbranding=1&playsinline=1`;
+}
+
+function parseXtreamMovieUrl(url: string): {
+  baseUrl: string;
+  user: string;
+  pass: string;
+  vodId: string;
+} | null {
+  const match = String(url || "").match(/^(https?:\/\/[^/]+)\/movie\/([^/]+)\/([^/]+)\/(\d+)\.[^/?#]+/i);
+  if (!match) return null;
+  return {
+    baseUrl: match[1],
+    user: decodeURIComponent(match[2]),
+    pass: decodeURIComponent(match[3]),
+    vodId: match[4]
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export async function loadXtreamVodInfoFromChannel(movieChannel: Channel): Promise<XtreamVodInfo | null> {
+  const fromUrl = parseXtreamMovieUrl(String(movieChannel?.url || ""));
+  const idMatch = String(movieChannel?.id || "").match(/^movie_(\d+)$/i);
+  const vodId = fromUrl?.vodId || idMatch?.[1] || "";
+  if (!fromUrl || !vodId) return null;
+
+  const apiUrl = `${fromUrl.baseUrl}/player_api.php?username=${encodeURIComponent(fromUrl.user)}&password=${encodeURIComponent(fromUrl.pass)}&action=get_vod_info&vod_id=${encodeURIComponent(vodId)}`;
+  const payload = await fetchJsonWithProxyFallback(apiUrl);
+  const root = asRecord(payload);
+  if (!root) return null;
+
+  const info = asRecord(root.info) || {};
+  const movieData = asRecord(root.movie_data) || {};
+  const title =
+    firstText(info.name, info.o_name, movieData.name, movieChannel.name) ||
+    String(movieChannel.name || "Movie");
+  const plot = firstText(info.plot, info.description, info.movie_description, movieData.plot);
+  const poster =
+    firstHttpUrl(info.movie_image, info.cover_big, info.cover, movieData.stream_icon, movieChannel.logo) ||
+    (typeof movieChannel.logo === "string" && movieChannel.logo.trim() ? movieChannel.logo.trim() : null);
+  const backdrop = firstHttpUrl(info.backdrop_path, info.backdrop);
+  const year = firstText(info.releasedate, info.releaseDate, info.year, movieData.year).replace(
+    /^(\d{4}).*/,
+    "$1"
+  );
+  const durationSecs = Number(info.duration_secs);
+  const durationFromSecs =
+    Number.isFinite(durationSecs) && durationSecs > 0
+      ? `${Math.round(durationSecs / 60)} min`
+      : "";
+  const trailerRaw = firstText(info.youtube_trailer, info.trailer, info.youtube);
+  const trailerEmbedUrl = youtubeEmbedUrl(trailerRaw);
+  const trailerVideoUrl =
+    !trailerEmbedUrl && /^https?:\/\//i.test(trailerRaw) && /\.(mp4|mkv|webm|m3u8)(?:\?|$)/i.test(trailerRaw)
+      ? trailerRaw
+      : null;
+
+  return {
+    title,
+    plot,
+    poster,
+    backdrop,
+    year: year || null,
+    genre: firstText(info.genre, movieData.genre) || null,
+    duration: firstText(info.duration, info.episode_run_time, durationFromSecs) || null,
+    rating: firstText(info.rating, info.rating_5based) || null,
+    director: firstText(info.director) || null,
+    cast: firstText(info.cast, info.actors) || null,
+    trailerEmbedUrl,
+    trailerVideoUrl
+  };
+}
+
+function parseXtreamSeriesInfoFromPayload(payload: unknown, seriesChannel: Channel): XtreamSeriesInfo | null {
+  const root = asRecord(payload);
+  const info = asRecord(root?.info) || {};
+  const title =
+    firstText(info.name, info.title, info.o_name, seriesChannel.name) ||
+    String(seriesChannel.name || "Series");
+  const plot = firstText(info.plot, info.description, info.series_description);
+  const poster =
+    firstHttpUrl(info.cover, info.cover_big, info.movie_image, info.stream_icon, seriesChannel.logo) ||
+    (typeof seriesChannel.logo === "string" && seriesChannel.logo.trim() ? seriesChannel.logo.trim() : null);
+  const backdrop = firstHttpUrl(info.backdrop_path, info.backdrop);
+  const year = firstText(info.releaseDate, info.release_date, info.releasedate, info.year).replace(
+    /^(\d{4}).*/,
+    "$1"
+  );
+  const trailerRaw = firstText(info.youtube_trailer, info.trailer, info.youtube);
+  const trailerEmbedUrl = youtubeEmbedUrl(trailerRaw);
+  const trailerVideoUrl =
+    !trailerEmbedUrl && /^https?:\/\//i.test(trailerRaw) && /\.(mp4|mkv|webm|m3u8)(?:\?|$)/i.test(trailerRaw)
+      ? trailerRaw
+      : null;
+
+  return {
+    title,
+    plot,
+    poster,
+    backdrop,
+    year: year || null,
+    trailerEmbedUrl,
+    trailerVideoUrl
+  };
+}
+
+function formatSeriesRuntime(raw: string): string {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  if (/^\d+$/.test(text)) return `${text} min`;
+  return text;
 }

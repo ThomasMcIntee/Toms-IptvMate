@@ -9,6 +9,7 @@ import {
   loadXtreamXmltv
 } from "./xtreamEPG";
 import { loadStalkerEPG } from "./stalkerEPG";
+import { getBackgroundConcurrency, waitForBackgroundSlot, yieldToMain } from "../taskScheduler";
 
 const inFlightEPGLoads = new Map<string, Promise<void>>();
 
@@ -166,6 +167,7 @@ export async function loadEPGForPlaylist(playlist: any, options: { forceRefresh?
   }
 
   const run = async () => {
+    await waitForBackgroundSlot();
     // Try loading cache first.
     const cacheLoaded = await loadEPGCache(playlist.id);
     if (cacheLoaded && !options.forceRefresh && hasSufficientGuideForLiveChannels()) {
@@ -269,11 +271,12 @@ export async function loadEPGForPlaylist(playlist: any, options: { forceRefresh?
         });
 
         if (missingLive.length > 0) {
-          const workerCount = Math.min(capacitorRuntime ? 2 : 8, missingLive.length);
+          const workerCount = Math.min(getBackgroundConcurrency(8), missingLive.length);
           let cursor = 0;
 
           const worker = async () => {
             while (cursor < missingLive.length) {
+              await yieldToMain();
               const index = cursor;
               cursor += 1;
               const channel = missingLive[index];

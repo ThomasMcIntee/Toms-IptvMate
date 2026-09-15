@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { sortGroupNames, type GroupSortDirection } from "./groupSorting";
+import { VisibilityToggle } from "./VisibilityToggle";
 
 const SORT_DIRECTION_KEY = "iptvmate_group_sort_direction";
 
@@ -15,6 +16,10 @@ type Props = {
   onSetAllVisible?: (visible: boolean) => void;
   batchSize?: number;
   autoLoadOnScroll?: boolean;
+  showSortButton?: boolean;
+  showBulkVisibilityButtons?: boolean;
+  sortDirection?: GroupSortDirection;
+  onSortDirectionChange?: (direction: GroupSortDirection) => void;
 };
 
 export function GroupList({
@@ -28,13 +33,17 @@ export function GroupList({
   className = "",
   onSetAllVisible,
   batchSize,
-  autoLoadOnScroll = false
+  autoLoadOnScroll = false,
+  showSortButton = true,
+  showBulkVisibilityButtons = true,
+  sortDirection: sortDirectionProp,
+  onSortDirectionChange
 }: Props) {
   const effectiveBatchSize = Math.max(1, batchSize ?? 120);
   const [visibleCount, setVisibleCount] = useState(effectiveBatchSize);
   const listRef = useRef<HTMLDivElement | null>(null);
 
-  const [sortDirection, setSortDirection] = useState<GroupSortDirection>(() => {
+  const [internalSortDirection, setInternalSortDirection] = useState<GroupSortDirection>(() => {
     try {
       const saved = localStorage.getItem(SORT_DIRECTION_KEY);
       if (saved === "asc" || saved === "desc") return saved;
@@ -43,6 +52,8 @@ export function GroupList({
     }
     return null;
   });
+  const sortDirection = onSortDirectionChange ? (sortDirectionProp ?? null) : internalSortDirection;
+  const setSortDirection = onSortDirectionChange ?? setInternalSortDirection;
 
   useEffect(() => {
     try {
@@ -63,7 +74,7 @@ export function GroupList({
       }
       return [activeGroup, ...groups];
     }
-    const sorted = sortGroupNames(groups, sortDirection, ["Favorites"]);
+    const sorted = sortGroupNames(groups, sortDirection, ["Favorites", "Last Watched"]);
     if (!activeGroup || sorted.includes(activeGroup)) {
       return sorted;
     }
@@ -104,43 +115,46 @@ export function GroupList({
   };
 
   const sortButtonLabel = sortDirection === "asc" ? "Sort Z-A" : "Sort A-Z";
+  const showVisibilityBulk = showBulkVisibilityButtons && showVisibilityControls && !!onSetAllVisible;
+  const showToolbar = showVisibilityBulk || showSortButton;
 
   return (
-    <div
-      ref={listRef}
-      className={`group-list${className ? ` ${className}` : ""}`}
-      onScroll={handleScroll}
-    >
+    <div className={`group-list${className ? ` ${className}` : ""}`}>
+      {showToolbar && (
       <div className="list-header group-list-toolbar">
         <div className="group-list-bulk-actions">
-          {showVisibilityControls && onSetAllVisible && (
+          {showVisibilityBulk && (
             <>
               <button
                 type="button"
                 className="group-list-bulk-btn"
-                onClick={() => onSetAllVisible(false)}
+                onClick={() => onSetAllVisible?.(false)}
               >
                 Hide All
               </button>
               <button
                 type="button"
                 className="group-list-bulk-btn"
-                onClick={() => onSetAllVisible(true)}
+                onClick={() => onSetAllVisible?.(true)}
               >
                 Play All
               </button>
             </>
           )}
         </div>
-        <button
-          type="button"
-          className="group-list-bulk-btn"
-          onClick={() => setSortDirection((current) => (current === "asc" ? "desc" : "asc"))}
-          aria-label={sortButtonLabel}
-        >
-          {sortButtonLabel}
-        </button>
+        {showSortButton && (
+          <button
+            type="button"
+            className="group-list-bulk-btn"
+            onClick={() => setSortDirection(sortDirection === "asc" ? "desc" : "asc")}
+            aria-label={sortButtonLabel}
+          >
+            {sortButtonLabel}
+          </button>
+        )}
       </div>
+      )}
+      <div ref={listRef} className="group-list-scroll" onScroll={handleScroll}>
       {renderedGroups.map((g) => (
         <div
           key={g}
@@ -152,28 +166,27 @@ export function GroupList({
         >
           {showVisibilityControls ? (
             <div className="list-toggle-row">
-              <button
-                type="button"
-                className="list-play-hide-btn"
-                disabled={g === "Favorites"}
-                aria-label={`${isGroupVisible(g) ? "Hide" : "Play"} ${g}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleGroupVisible(g, !isGroupVisible(g));
-                }}
-              >
-                {isGroupVisible(g) ? "Hide" : "Play"}
-              </button>
+              <VisibilityToggle
+                checked={isGroupVisible(g)}
+                disabled={g === "Favorites" || g === "Last Watched"}
+                label={`Show or hide ${g}`}
+                onToggle={(visible) => onToggleGroupVisible(g, visible)}
+              />
               <button
                 type="button"
                 className="group-select-btn"
                 onClick={() => onSelect(g)}
+                aria-label={`${g}, ${groupCounts[g] ?? 0} items`}
               >
-                <span>{g}</span>
-                <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
-                  {groupCounts[g] ? groupCounts[g].toLocaleString() : ""}
-                </span>
+                <span className="group-item-name">{g}</span>
               </button>
+              <span
+                className="group-item-count"
+                aria-hidden="true"
+                onClick={() => onSelect(g)}
+              >
+                {groupCounts[g] ?? 0}
+              </span>
             </div>
           ) : (
             <button
@@ -181,7 +194,7 @@ export function GroupList({
               className="group-select-btn"
               onClick={() => onSelect(g)}
             >
-              <span>{g}</span>
+              <span className="group-item-name">{g}</span>
               <span className="group-item-count" aria-label={`${groupCounts[g] ?? 0} items`}>
                   {groupCounts[g] ? groupCounts[g].toLocaleString() : ""}
               </span>
@@ -194,6 +207,7 @@ export function GroupList({
           Load more groups ({renderedGroups.length}/{sortedGroups.length})
         </button>
       )}
+      </div>
     </div>
   );
 }

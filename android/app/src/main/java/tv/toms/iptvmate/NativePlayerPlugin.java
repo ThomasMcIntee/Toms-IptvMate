@@ -12,12 +12,14 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 public class NativePlayerPlugin extends Plugin {
 
     private ExoPlayerManager manager() {
+        if (!(getActivity() instanceof MainActivity)) return null;
         return ((MainActivity) getActivity()).getOrCreateExoPlayerManager();
     }
 
-    private ExoPlayerManager existingManager() {
-        MainActivity activity = (MainActivity) getActivity();
-        return activity != null ? activity.peekExoPlayerManager() : null;
+    private boolean requireManager(PluginCall call, ExoPlayerManager manager) {
+        if (manager != null) return true;
+        call.reject("Native player is not ready");
+        return false;
     }
 
     @PluginMethod
@@ -29,11 +31,9 @@ public class NativePlayerPlugin extends Plugin {
 
     @PluginMethod
     public void warmUp(PluginCall call) {
-        // Do not instantiate Media3 on the opening menu — that ANRs Fire TV.
-        ExoPlayerManager existing = existingManager();
-        if (existing != null) {
-            existing.warmUp();
-        }
+        ExoPlayerManager player = manager();
+        if (!requireManager(call, player)) return;
+        player.warmUp();
         call.resolve();
     }
 
@@ -45,47 +45,49 @@ public class NativePlayerPlugin extends Plugin {
             return;
         }
 
+        ExoPlayerManager player = manager();
+        if (!requireManager(call, player)) return;
+
         // "movie"/"series" play as progressive VOD; anything else is live.
         String contentType = call.getString("contentType", "live");
         boolean isLive = !"movie".equals(contentType) && !"series".equals(contentType);
         Log.i("IPTVMate_NativePlayer", "plugin play isLive=" + isLive + " url=" + url);
-        manager().play(url, isLive);
+        player.play(url, isLive);
         call.resolve();
     }
 
     @PluginMethod
     public void pause(PluginCall call) {
-        ExoPlayerManager existing = existingManager();
-        if (existing != null) {
-            existing.pause();
-        }
+        ExoPlayerManager player = manager();
+        if (!requireManager(call, player)) return;
+        player.pause();
         call.resolve();
     }
 
     @PluginMethod
     public void resume(PluginCall call) {
-        ExoPlayerManager existing = existingManager();
-        if (existing != null) {
-            existing.resume();
-        }
+        ExoPlayerManager player = manager();
+        if (!requireManager(call, player)) return;
+        player.resume();
         call.resolve();
     }
 
     @PluginMethod
     public void setMuted(PluginCall call) {
-        ExoPlayerManager existing = existingManager();
-        if (existing != null) {
-            existing.setMuted(Boolean.TRUE.equals(call.getBoolean("muted", false)));
-        }
+        ExoPlayerManager player = manager();
+        if (!requireManager(call, player)) return;
+        player.setMuted(Boolean.TRUE.equals(call.getBoolean("muted", false)));
         call.resolve();
     }
 
     @PluginMethod
     public void setGuide(PluginCall call) {
+        ExoPlayerManager player = manager();
+        if (!requireManager(call, player)) return;
         String title = call.getString("title", "");
         Double start = call.getDouble("startMs");
         Double end = call.getDouble("endMs");
-        manager().setGuide(
+        player.setGuide(
             title != null ? title : "",
             start != null ? start.longValue() : 0L,
             end != null ? end.longValue() : 0L
@@ -95,27 +97,43 @@ public class NativePlayerPlugin extends Plugin {
 
     @PluginMethod
     public void revealControls(PluginCall call) {
-        manager().revealControls();
+        ExoPlayerManager player = manager();
+        if (!requireManager(call, player)) return;
+        player.revealControls();
         call.resolve();
     }
 
     @PluginMethod
     public void stop(PluginCall call) {
-        ExoPlayerManager existing = existingManager();
-        if (existing != null) {
-            existing.stop();
+        ExoPlayerManager player = manager();
+        if (!requireManager(call, player)) return;
+        player.stop();
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void exitApp(PluginCall call) {
+        if (getActivity() == null) {
+            call.reject("Activity is not available");
+            return;
         }
+        getActivity().runOnUiThread(() -> {
+            try {
+                getActivity().finishAffinity();
+            } catch (Exception ignored) {
+                if (getActivity() != null) {
+                    getActivity().finish();
+                }
+            }
+        });
         call.resolve();
     }
 
     @PluginMethod
     public void setBounds(PluginCall call) {
-        ExoPlayerManager existing = existingManager();
-        if (existing == null) {
-            call.resolve();
-            return;
-        }
-        existing.setBounds(
+        ExoPlayerManager player = manager();
+        if (!requireManager(call, player)) return;
+        player.setBounds(
             call.getInt("left", 0),
             call.getInt("top", 0),
             call.getInt("width", 0),

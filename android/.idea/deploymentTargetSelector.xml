@@ -15,10 +15,10 @@
       </SelectionState>
       <SelectionState runConfigName="New Run Config">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2026-08-21T17:26:34.198089100Z">
+        <DropdownSelection timestamp="2026-09-08T20:22:52.572444800Z">
           <Target type="DEFAULT_BOOT">
             <handle>
-              <DeviceId pluginId="Default" identifier="serial=192.168.0.200:5555;connection=547d9f32" />
+              <DeviceId pluginId="LocalEmulator" identifier="path=C:\Users\mcint\.android\avd\Television_1080p.avd" />
             </handle>
           </Target>
         </DropdownSelection>
