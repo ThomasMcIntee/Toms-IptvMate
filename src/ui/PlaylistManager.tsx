@@ -843,22 +843,26 @@ export default function PlaylistManager({
       setCurrentPlaylistId(targetPlaylistId);
       writeStorageItem(SHARED_PLAYLIST_ID_KEY, targetPlaylistId);
 
-    // Write to the protected saved-role key (never overwritten by playlist resets).
-    saveRoleVisibility(kind);
-    if (isCapacitorRuntime()) {
-      const current = getAllChannels();
-      const groupName = String(current[0]?.group || "").trim();
-      const contentType = current[0]?.contentType;
-      if (groupName && (contentType === "live" || contentType === "movie" || contentType === "series")) {
-        await persistCapacitorNamedGroupChannels(
-          groupName,
-          contentType,
-          current.filter((channel) => isChannelVisible(String(channel.id || "")))
-        );
+      // Write to the protected saved-role key (never overwritten by playlist resets).
+      saveRoleVisibility(kind);
+      if (isCapacitorRuntime()) {
+        const current = getAllChannels();
+        const groupName = String(current[0]?.group || "").trim();
+        const contentType = current[0]?.contentType;
+        if (groupName && (contentType === "live" || contentType === "movie" || contentType === "series")) {
+          await persistCapacitorNamedGroupChannels(
+            groupName,
+            contentType,
+            current.filter((channel) => isChannelVisible(String(channel.id || "")))
+          );
+        }
       }
+      await persistRoleSnapshot(kind, targetPlaylistId);
+      setStatusMessage(`✓ Saved ${kind} visibility for "${playlistName}".`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : `Failed to save ${kind} visibility for "${playlistName}".`;
+      setStatusMessage(`✗ ${message}`);
     }
-    await persistRoleSnapshot(kind, targetPlaylist.id);
-    setStatusMessage(`✓ Saved ${kind} visibility for "${targetPlaylist.name}".`);
   }
 
   async function applyActiveRoleVisibility(kind: "adult" | "child") {

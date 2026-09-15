@@ -1425,7 +1425,7 @@ export default defineConfig({
     {
       name: "iptvmate-verify-index-assets",
       apply: "build",
-      closeBundle: {
+      writeBundle: {
         sequential: true,
         order: "post",
         handler() {

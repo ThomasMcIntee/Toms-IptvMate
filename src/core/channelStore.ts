@@ -100,6 +100,7 @@ let restoreChannelsCacheInFlight: Promise<Channel[]> | null = null;
 const CHANNELS_CACHE_DB_TIMEOUT_MS = 10000;
 
 export type ChannelCacheScope = "live" | "movies" | "series";
+export type CapacitorVodCacheScope = "movies" | "series";
 
 export type ChannelCacheMeta = {
   playlistId: string;
@@ -1357,6 +1358,18 @@ export function getCapacitorCatalogCounts(contentType: ContentType): Record<stri
   return counts;
 }
 
+function capacitorVodScopeToContentType(scope: CapacitorVodCacheScope): ContentType {
+  return scope === "movies" ? "movie" : "series";
+}
+
+export function getCapacitorVodGroupNames(scope: CapacitorVodCacheScope): string[] {
+  return getCapacitorCatalogGroupNames(capacitorVodScopeToContentType(scope));
+}
+
+export function getCapacitorVodGroupCounts(scope: CapacitorVodCacheScope): Record<string, number> {
+  return getCapacitorCatalogCounts(capacitorVodScopeToContentType(scope));
+}
+
 export function updateCapacitorCatalogCount(groupName: string, contentType: ContentType, count: number): void {
   if (!Number.isFinite(count) || count <= 0) return;
   const catalog = getCapacitorCategoryCatalog();
@@ -1491,6 +1504,13 @@ export async function loadCapacitorNamedGroupChannels(
     setChannelsWithoutSideEffects(loaded, source);
   }
   return loaded.length > 0 ? loaded : [];
+}
+
+export async function loadCapacitorVodGroupChannels(
+  scope: CapacitorVodCacheScope,
+  groupName: string
+): Promise<Channel[]> {
+  return loadCapacitorNamedGroupChannels(groupName, capacitorVodScopeToContentType(scope));
 }
 
 const CAPACITOR_VOD_SEARCH_MAX = 200;

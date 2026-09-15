@@ -1,4 +1,15 @@
-import { capCapacitorCatalogList, Channel, ContentType, type CatalogCategoryEntry } from "../channelStore";
+import {
+  capCapacitorCatalogList,
+  Channel,
+  ContentType,
+  getCapacitorLiveGroupNames,
+  getCapacitorVodGroupNames,
+  saveCapacitorCategoryCatalog,
+  saveCapacitorVodScopeCache,
+  isCapacitorVodScopeCacheFresh,
+  type CatalogCategoryEntry,
+  type CapacitorVodCacheScope
+} from "../channelStore";
 import { isCapacitorRuntime } from "../player/platformDetection";
 import type { PlaylistLoadScope } from "./playlistLoader";
 import type { PlaylistCatalogTotals } from "../playlistStore";
