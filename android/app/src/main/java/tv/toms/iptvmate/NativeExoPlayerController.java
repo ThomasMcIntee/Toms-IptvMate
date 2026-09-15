@@ -1,6 +1,7 @@
 package tv.toms.iptvmate;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
@@ -14,10 +15,13 @@ import androidx.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 import androidx.media3.common.C;
+import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
+import androidx.media3.common.TrackSelectionOverride;
+import androidx.media3.common.Tracks;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
@@ -30,6 +34,11 @@ import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
 import androidx.media3.extractor.ts.TsExtractor;
 import androidx.media3.ui.PlayerView;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+
 /**
  * ExoPlayer owned by {@link MainActivity}. Uses {@link PlayerView} so Fire TV routes HDMI audio.
  */
@@ -39,10 +48,27 @@ public class NativeExoPlayerController {
         void onError(String message);
         void onStopped();
         void onEnded();
+        void onAudioTracksChanged();
+    }
+
+    public static final class AudioTrackOption {
+        public final String id;
+        public final String language;
+        public final String label;
+        public final boolean selected;
+
+        AudioTrackOption(String id, String language, String label, boolean selected) {
+            this.id = id;
+            this.language = language;
+            this.label = label;
+            this.selected = selected;
+        }
     }
 
     private static final String TAG = "IPTVMate_NativeExo";
     private static final String USER_AGENT = "TiviMate/4.7.0 (Linux; Android 9; AFTKM Build/PS7279)";
+    private static final String AUDIO_PREF_NAME = "iptvmate_player";
+    private static final String AUDIO_PREF_KEY = "iptvmate_audio_language";
 
     private final Context playbackContext;
     private final Handler mainHandler;
@@ -61,6 +87,7 @@ public class NativeExoPlayerController {
     private boolean muted = false;
     private final List<String> vodFallbackUrls = new ArrayList<>();
     private int vodFallbackIndex = 0;
+    private boolean userSelectedAudio = false;
 
     private final AudioManager.OnAudioFocusChangeListener audioFocusListener = focusChange ->
         Log.i(TAG, "audioFocusChange=" + focusChange + " (ignored — no duck/pause on Fire TV)");
@@ -96,6 +123,7 @@ public class NativeExoPlayerController {
         runOnMain(() -> {
             isLiveContent = isLive;
             muted = false;
+            userSelectedAudio = false;
             originalStreamUrl = trimmed;
             triedTsFallback = false;
             // Only live streams get the .ts -> .m3u8 HLS preference. Rewriting a VOD
@@ -160,6 +188,28 @@ public class NativeExoPlayerController {
 
     public boolean isMuted() {
         return muted;
+    }
+
+    public List<AudioTrackOption> getAudioTracks() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            return Collections.emptyList();
+        }
+        return listAudioTracksOnMain();
+    }
+
+    public boolean setAudioTrack(String id) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            return false;
+        }
+        boolean selected = selectAudioTrackOnMain(id);
+        if (selected) {
+            userSelectedAudio = true;
+            AudioTrackOption chosen = findTrack(id);
+            if (chosen != null) {
+                savePreferredAudioLanguage(chosen.language);
+            }
+        }
+        return selected;
     }
 
     public void stop() {
@@ -296,6 +346,12 @@ public class NativeExoPlayerController {
                     Log.i(TAG, "Playback ended");
                     callback.onEnded();
                 }
+            }
+
+            @Override
+            public void onTracksChanged(Tracks tracks) {
+                applyPreferredAudioIfNeeded();
+                callback.onAudioTracksChanged();
             }
 
             @Override
@@ -537,5 +593,203 @@ public class NativeExoPlayerController {
         if (url == null) return false;
         String lower = url.toLowerCase();
         return lower.contains(".ts") && !lower.contains(".m3u8");
+    }
+
+    private List<AudioTrackOption> listAudioTracksOnMain() {
+        List<AudioTrackOption> out = new ArrayList<>();
+        if (exoPlayer == null) return out;
+
+        Tracks tracks = exoPlayer.getCurrentTracks();
+        List<Tracks.Group> groups = tracks.getGroups();
+        int audioOrdinal = 0;
+        for (int groupIndex = 0; groupIndex < groups.size(); groupIndex++) {
+            Tracks.Group group = groups.get(groupIndex);
+            if (group.getType() != C.TRACK_TYPE_AUDIO) continue;
+            for (int trackIndex = 0; trackIndex < group.length; trackIndex++) {
+                Format format = group.getTrackFormat(trackIndex);
+                String language = format.language != null ? format.language : "";
+                String label = displayLabel(format, language, audioOrdinal);
+                String id = groupIndex + ":" + trackIndex;
+                out.add(new AudioTrackOption(id, language, label, group.isTrackSelected(trackIndex)));
+                audioOrdinal += 1;
+            }
+        }
+        return out;
+    }
+
+    private boolean selectAudioTrackOnMain(String id) {
+        if (exoPlayer == null || id == null || id.isEmpty()) return false;
+
+        String[] parts = id.split(":");
+        if (parts.length != 2) return false;
+        int groupIndex;
+        int trackIndex;
+        try {
+            groupIndex = Integer.parseInt(parts[0]);
+            trackIndex = Integer.parseInt(parts[1]);
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+
+        Tracks tracks = exoPlayer.getCurrentTracks();
+        List<Tracks.Group> groups = tracks.getGroups();
+        if (groupIndex < 0 || groupIndex >= groups.size()) return false;
+
+        Tracks.Group group = groups.get(groupIndex);
+        if (group.getType() != C.TRACK_TYPE_AUDIO) return false;
+        if (trackIndex < 0 || trackIndex >= group.length) return false;
+
+        try {
+            TrackSelectionOverride override = new TrackSelectionOverride(
+                group.getMediaTrackGroup(),
+                trackIndex
+            );
+            exoPlayer.setTrackSelectionParameters(
+                exoPlayer.getTrackSelectionParameters()
+                    .buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                    .setOverrideForType(override)
+                    .build()
+            );
+            Log.i(TAG, "selected audio track " + id);
+            return true;
+        } catch (RuntimeException e) {
+            Log.e(TAG, "setAudioTrack failed id=" + id, e);
+            return false;
+        }
+    }
+
+    private void applyPreferredAudioIfNeeded() {
+        if (userSelectedAudio || isLiveContent || exoPlayer == null) return;
+
+        List<AudioTrackOption> tracks = listAudioTracksOnMain();
+        if (tracks.size() < 2) return;
+
+        String preferred = readPreferredAudioLanguage();
+        if (preferred.isEmpty()) return;
+
+        AudioTrackOption alreadySelected = null;
+        AudioTrackOption match = null;
+        for (AudioTrackOption track : tracks) {
+            if (track.selected) alreadySelected = track;
+            if (match == null && languagesMatch(track.language, preferred)) {
+                match = track;
+            }
+        }
+        if (match == null) return;
+        if (alreadySelected != null && languagesMatch(alreadySelected.language, preferred)) return;
+
+        selectAudioTrackOnMain(match.id);
+    }
+
+    @Nullable
+    private AudioTrackOption findTrack(String id) {
+        for (AudioTrackOption track : listAudioTracksOnMain()) {
+            if (track.id.equals(id)) return track;
+        }
+        return null;
+    }
+
+    private String readPreferredAudioLanguage() {
+        try {
+            SharedPreferences prefs = playbackContext.getSharedPreferences(AUDIO_PREF_NAME, Context.MODE_PRIVATE);
+            String stored = prefs.getString(AUDIO_PREF_KEY, "");
+            return stored != null ? stored.trim() : "";
+        } catch (RuntimeException ignored) {
+            return "";
+        }
+    }
+
+    private void savePreferredAudioLanguage(String language) {
+        String normalized = language != null ? language.trim() : "";
+        if (normalized.isEmpty()) return;
+        try {
+            playbackContext.getSharedPreferences(AUDIO_PREF_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(AUDIO_PREF_KEY, normalized)
+                .apply();
+        } catch (RuntimeException ignored) {
+            // Keep the in-memory selection when storage is unavailable.
+        }
+    }
+
+    private static String displayLabel(Format format, String language, int ordinal) {
+        String named = format.label != null ? format.label.trim() : "";
+        String fromLanguage = languageDisplayName(language);
+        if (!fromLanguage.isEmpty() && (named.isEmpty() || named.matches("(?i)stream[_-]?\\d+"))) {
+            return fromLanguage;
+        }
+        if (!named.isEmpty()) return named;
+        if (!fromLanguage.isEmpty()) return fromLanguage;
+        return "Audio " + (ordinal + 1);
+    }
+
+    static String languageDisplayName(String language) {
+        String code = normalizeLanguage(language);
+        if (code.isEmpty()) return "";
+        switch (code) {
+            case "en": return "English";
+            case "es": return "Español";
+            case "fr": return "Français";
+            case "de": return "Deutsch";
+            case "it": return "Italiano";
+            case "pt": return "Português";
+            case "ar": return "العربية";
+            case "hi": return "हिन्दी";
+            case "ru": return "Русский";
+            case "tr": return "Türkçe";
+            case "pl": return "Polski";
+            case "nl": return "Nederlands";
+            case "ja": return "日本語";
+            case "ko": return "한국어";
+            case "zh": return "中文";
+            default:
+                try {
+                    String display = new Locale(code).getDisplayLanguage(Locale.ENGLISH);
+                    if (display != null && !display.isEmpty() && !display.equalsIgnoreCase(code)) {
+                        return display.substring(0, 1).toUpperCase(Locale.ENGLISH) + display.substring(1);
+                    }
+                } catch (RuntimeException ignored) {
+                    // Fall through to the raw code.
+                }
+                return code.toUpperCase(Locale.ENGLISH);
+        }
+    }
+
+    static boolean languagesMatch(String left, String right) {
+        String a = normalizeLanguage(left);
+        String b = normalizeLanguage(right);
+        return !a.isEmpty() && a.equals(b);
+    }
+
+    static String normalizeLanguage(String language) {
+        if (language == null) return "";
+        String raw = language.trim().toLowerCase(Locale.ROOT);
+        if (raw.isEmpty()) return "";
+        if (raw.contains("-")) raw = raw.substring(0, raw.indexOf('-'));
+        if (raw.contains("_")) raw = raw.substring(0, raw.indexOf('_'));
+        switch (raw) {
+            case "eng": return "en";
+            case "spa":
+            case "esp": return "es";
+            case "fra":
+            case "fre": return "fr";
+            case "deu":
+            case "ger": return "de";
+            case "ita": return "it";
+            case "por": return "pt";
+            case "ara": return "ar";
+            case "hin": return "hi";
+            case "rus": return "ru";
+            case "tur": return "tr";
+            case "pol": return "pl";
+            case "nld":
+            case "dut": return "nl";
+            case "jpn": return "ja";
+            case "kor": return "ko";
+            case "zho":
+            case "chi": return "zh";
+            default: return raw;
+        }
     }
 }

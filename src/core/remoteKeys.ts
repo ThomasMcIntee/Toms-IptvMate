@@ -8,13 +8,17 @@
 // this is the shared equivalent for the other screens.
 
 const KEYCODE_MAP: Record<number, string> = {
+  8: "Backspace",
   13: "Enter",
   23: "Enter",
+  27: "Escape",
   66: "Enter",
   37: "ArrowLeft",
   38: "ArrowUp",
   39: "ArrowRight",
   40: "ArrowDown",
+  461: "Backspace",
+  10009: "Backspace",
   29443: "Enter",
   29460: "ArrowLeft",
   29461: "ArrowRight",
@@ -29,7 +33,12 @@ const KEY_ALIASES: Record<string, string> = {
   Right: "ArrowRight",
   OK: "Enter",
   Select: "Enter",
-  NumpadEnter: "Enter"
+  NumpadEnter: "Enter",
+  Back: "Backspace",
+  BrowserBack: "Backspace",
+  GoBack: "Backspace",
+  Return: "Backspace",
+  XF86Back: "Backspace"
 };
 
 export function normalizeRemoteNavKey(event: KeyboardEvent): string {

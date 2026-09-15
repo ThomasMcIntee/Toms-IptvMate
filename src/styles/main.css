@@ -661,6 +661,12 @@ body.theme-light .vod-resume-copy {
   pointer-events: none;
 }
 
+.player-control-bar:has(.is-remote-focused) {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
 body.is-capacitor.native-exo-active .player-control-bar {
   visibility: hidden;
   pointer-events: none;
@@ -688,10 +694,12 @@ body.is-capacitor.native-exo-active .player-control-bar {
   align-items: center;
   gap: 8px;
   min-height: 36px;
+  overflow: visible;
 }
 
 .player-control-bar-btn {
   flex: 0 0 auto;
+  flex-shrink: 0;
   width: 36px;
   height: 36px;
   padding: 6px;
@@ -708,7 +716,8 @@ body.is-capacitor.native-exo-active .player-control-bar {
 }
 
 .player-control-bar-btn:focus,
-.player-control-bar-btn:focus-visible {
+.player-control-bar-btn:focus-visible,
+.player-control-bar-btn.is-remote-focused {
   outline: none;
   background: #b5e61d;
   color: #111;
@@ -717,7 +726,8 @@ body.is-capacitor.native-exo-active .player-control-bar {
 }
 
 .player-control-bar-btn.is-favorite:focus,
-.player-control-bar-btn.is-favorite:focus-visible {
+.player-control-bar-btn.is-favorite:focus-visible,
+.player-control-bar-btn.is-favorite.is-remote-focused {
   background: #ffd45c;
   color: #111;
   box-shadow: 0 0 0 2px rgba(255, 212, 92, 0.55);
@@ -828,6 +838,147 @@ body.is-capacitor.native-exo-active .player-control-bar {
   background: #b5e61d;
   color: #111;
   border-color: #b5e61d;
+  box-shadow: 0 0 0 2px rgba(181, 230, 29, 0.55);
+}
+
+.play-bar-language {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.player-control-bar .play-bar-language .vod-language-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  min-width: 36px;
+  height: 36px;
+  padding: 6px 10px;
+  color: #fff;
+}
+
+.player-control-bar .play-bar-language .vod-language-btn svg {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+}
+
+.play-bar-language-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: inherit;
+}
+
+body.theme-light .player-control-bar,
+body.theme-light .player-control-bar .player-control-bar-btn,
+body.theme-light .player-control-bar .play-bar-language-label,
+body.theme-light .vod-language-select .vod-language-btn {
+  color: #fff;
+}
+
+body.theme-light .player-control-bar-btn:focus,
+body.theme-light .player-control-bar-btn:focus-visible,
+body.theme-light .player-control-bar-btn.is-remote-focused,
+body.theme-light .vod-language-select .vod-language-btn:focus,
+body.theme-light .vod-language-select .vod-language-btn.is-remote-focused {
+  color: #111;
+}
+
+.play-bar-language-panel {
+  right: 0;
+  bottom: 44px;
+  top: auto;
+}
+
+.vod-language-select {
+  position: absolute;
+  top: 20px;
+  right: 112px;
+  z-index: 140;
+}
+
+.vod-playback-shell .vod-language-select {
+  top: 20px;
+  right: 20px;
+  z-index: 20;
+}
+
+.vod-language-empty {
+  padding: 10px 14px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.vod-language-select.vod-language-select-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.vod-language-select .vod-language-btn,
+.vod-language-option {
+  width: auto;
+  min-width: 96px;
+  height: auto;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.vod-language-select .vod-language-btn:focus,
+.vod-language-select .vod-language-btn:focus-visible,
+.vod-language-select .vod-language-btn.is-remote-focused,
+.vod-language-option:focus,
+.vod-language-option:focus-visible,
+.vod-language-option.is-remote-focused {
+  outline: none;
+  background: #b5e61d;
+  color: #111;
+  box-shadow: 0 0 0 2px rgba(181, 230, 29, 0.55);
+}
+
+.vod-language-panel {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  min-width: 220px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vod-language-option {
+  border-radius: 8px;
+  text-align: left;
+}
+
+.vod-language-option.is-selected {
+  background: rgba(30, 144, 255, 0.28);
+}
+
+body.is-capacitor.native-exo-active .vod-language-select {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+body.is-webos .vod-language-btn:focus,
+body.is-webos .vod-language-btn.is-remote-focused,
+body.is-webos .vod-language-option:focus,
+body.is-webos .vod-language-option.is-remote-focused {
+  outline: none !important;
+  background: #b5e61d !important;
+  color: #111 !important;
   box-shadow: 0 0 0 2px rgba(181, 230, 29, 0.55);
 }
 
@@ -1441,7 +1592,8 @@ body.is-webos .channel-icon-btn:focus {
   box-shadow: 0 0 0 2px rgba(77, 163, 255, 0.35);
 }
 
-body.is-webos .player-control-bar-btn:focus {
+body.is-webos .player-control-bar-btn:focus,
+body.is-webos .player-control-bar-btn.is-remote-focused {
   outline: none !important;
   background: #b5e61d !important;
   color: #111 !important;

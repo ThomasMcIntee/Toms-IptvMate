@@ -2,6 +2,7 @@ package tv.toms.iptvmate;
 
 import android.util.Log;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -104,6 +105,30 @@ public class NativePlayerPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void focusControls(PluginCall call) {
+        ExoPlayerManager player = manager();
+        if (!requireManager(call, player)) return;
+        player.focusControls();
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void moveControlFocus(PluginCall call) {
+        ExoPlayerManager player = manager();
+        if (!requireManager(call, player)) return;
+        player.moveControlFocus(call.getInt("delta", 0));
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void activateSelectedControl(PluginCall call) {
+        ExoPlayerManager player = manager();
+        if (!requireManager(call, player)) return;
+        player.activateSelectedControl();
+        call.resolve();
+    }
+
+    @PluginMethod
     public void stop(PluginCall call) {
         ExoPlayerManager player = manager();
         if (!requireManager(call, player)) return;
@@ -127,6 +152,53 @@ public class NativePlayerPlugin extends Plugin {
             }
         });
         call.resolve();
+    }
+
+    @PluginMethod
+    public void getAudioTracks(PluginCall call) {
+        MainActivity activity = (MainActivity) getActivity();
+        if (activity == null) {
+            call.reject("Activity unavailable");
+            return;
+        }
+        activity.runOnUiThread(() -> {
+            JSArray tracks = new JSArray();
+            for (NativeExoPlayerController.AudioTrackOption track : manager().getAudioTracks()) {
+                JSObject item = new JSObject();
+                item.put("id", track.id);
+                item.put("language", track.language);
+                item.put("label", track.label);
+                item.put("selected", track.selected);
+                tracks.put(item);
+            }
+            JSObject ret = new JSObject();
+            ret.put("tracks", tracks);
+            call.resolve(ret);
+        });
+    }
+
+    @PluginMethod
+    public void setAudioTrack(PluginCall call) {
+        String id = call.getString("id");
+        if (id == null || id.trim().isEmpty()) {
+            call.reject("Missing audio track id");
+            return;
+        }
+        MainActivity activity = (MainActivity) getActivity();
+        if (activity == null) {
+            call.reject("Activity unavailable");
+            return;
+        }
+        activity.runOnUiThread(() -> {
+            boolean ok = manager().setAudioTrack(id.trim());
+            JSObject ret = new JSObject();
+            ret.put("ok", ok);
+            if (ok) {
+                call.resolve(ret);
+            } else {
+                call.reject("Audio track was not available");
+            }
+        });
     }
 
     @PluginMethod
