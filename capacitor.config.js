@@ -1,6 +1,6 @@
 const config = {
   appId: "tv.toms.iptvmate",
-  appName: "Toms IPTVmate",
+  appName: "Tom's IPTVmate",
   webDir: "dist",
   bundledWebRuntime: false,
   server: {

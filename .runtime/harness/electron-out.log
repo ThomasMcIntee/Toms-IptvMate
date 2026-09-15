@@ -20,21 +20,51 @@ once the app is packaged.
 [page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
 [page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
 [page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] cache-load: purged legacy monolithic idb on Capacitor
 [page-console] [webos-debug] click: button.opening-btn
-[page-console] [webos-debug] cache-load: raw=null
-[page-console] [webos-debug] cache-load: Capacitor skip monolithic idb (no split groups yet)
-[page-console] [webos-debug] capacitor-ingest: 57092 total -> 46 in memory (TV: 4K| 24/7 ᵁᴴᴰ ³⁸⁴⁰ᴾ), 914 groups
-[page-console] [webos-debug] capacitor-ingest: persisted 914 live groups to idb
 [page-console] [webos-debug] startup-check: show=false completed=true login=false access=null inflight=false
 [page-console] [webos-debug] startup: SKIP - not on opening screen
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
+[page-console] [vite] connecting...
+[harness] did-finish-load http://127.0.0.1:4000/
+[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+[page-console] [vite] connected.
+[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+[page-console] [webos-debug] React App mounted!
+[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
+[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
+[page-console] [webos-debug] React App mounted!
+[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
+[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
+[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
+[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
+[page-console] [webos-debug] click: button.opening-btn
+[page-console] [webos-debug] startup-check: show=false completed=true login=false access=null inflight=false
+[page-console] [webos-debug] startup: SKIP - not on opening screen
+[page-console] [webos-debug] click: button.btn-primary
+[page-console] [webos-debug] capacitor-ingest: 57019 total -> 674 in memory (TV: US| PRIME ᴿᴬᵂ ⁶⁰ᶠᵖˢ), 912 groups
+[page-console] [webos-debug] capacitor-ingest: persisted 912 live groups to idb
+[page-console] [webos-debug] click: button.btn-secondary
+[page-console] [webos-debug] cache-save: Capacitor skip idb full persist (180400 channels)
+[page-console] [webos-debug] click: button.btn-secondary
+[page-console] [webos-debug] cache-save: Capacitor skip idb full persist (47648 channels)
+[page-console] [webos-debug] click: button.btn-primary
+[page-console] [webos-debug] capacitor-ingest: 57019 total -> 46 in memory (TV: 4K| 24/7 ᵁᴴᴰ ³⁸⁴⁰ᴾ), 912 groups
+[page-console] [webos-debug] capacitor-ingest: persisted 912 live groups to idb
+[page-console] Capacitor plugin "NativePlayer" already registered. Cannot register plugins twice.
 [page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
 [page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
+[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[page-console] [vite] hot updated: /src/AppBootstrap.tsx
+[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
+[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
+[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
 [page-console] [vite] connecting...
 [harness] did-finish-load http://127.0.0.1:4000/
 [page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
@@ -50,305 +80,34 @@ once the app is packaged.
 [page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 [page-console] [webos-debug] React App mounted!
 [page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=true
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
+[page-console] [webos-debug] cache-load: raw=null
 [page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] ReferenceError: loadCapacitorFavoriteIndex is not defined
-[page-console] [vite] Failed to reload /src/ui/RecordingLibrary.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] ReferenceError: loadCapacitorFavoriteIndex is not defined
-[page-console] [vite] Failed to reload /src/App.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] ReferenceError: loadCapacitorFavoriteIndex is not defined
-[page-console] [vite] Failed to reload /src/ui/PlaylistManager.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] ReferenceError: loadCapacitorFavoriteIndex is not defined
-[page-console] [vite] Failed to reload /src/ui/EPGSearch.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] ReferenceError: loadCapacitorFavoriteIndex is not defined
-[page-console] [vite] Failed to reload /src/ui/EPGTimelinePanel.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
+[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=true
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
+[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=true
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
+[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=false
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: no cache found, staying on menu
 [page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
 [page-console] [vite] hot updated: /src/AppBootstrap.tsx
 [page-console] [vite] hot updated: /src/App.tsx
 [page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
 [page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] %o
-
-%s
-
-%s
- ReferenceError: loadCapacitorFavoriteIndex is not defined The above error occurred in one of your React components. React will try to recreate this component tree from scratch using the error boundary you provided, RootErrorBoundary.
-[page-console] [root-error-boundary] ReferenceError: loadCapacitorFavoriteIndex is not defined [object Object]
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
 [page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared
-[page-console] [vite] Failed to reload /src/ui/EPGTimelinePanel.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared
-[page-console] [vite] Failed to reload /src/ui/RecordingLibrary.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared
-[page-console] [vite] Failed to reload /src/ui/EPGSearch.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared
-[page-console] [vite] Failed to reload /src/ui/PlaylistManager.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared
-[page-console] [vite] Failed to reload /src/App.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[page-console] [vite] connected.
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] %o
-
-%s
-
-%s
- SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared The above error occurred in one of your React components. React will try to recreate this component tree from scratch using the error boundary you provided, RootErrorBoundary.
-[page-console] [root-error-boundary] SyntaxError: Identifier 'saveCapacitorLiveGroupCatalog' has already been declared [object Object]
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared
-[page-console] [vite] Failed to reload /src/App.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared
-[page-console] [vite] Failed to reload /src/ui/PlaylistManager.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared
-[page-console] [vite] Failed to reload /src/ui/EPGSearch.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared
-[page-console] [vite] Failed to reload /src/ui/RecordingLibrary.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared
-[page-console] [vite] Failed to reload /src/ui/EPGTimelinePanel.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[page-console] [vite] connected.
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] %o
-
-%s
-
-%s
- SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared The above error occurred in one of your React components. React will try to recreate this component tree from scratch using the error boundary you provided, RootErrorBoundary.
-[page-console] [root-error-boundary] SyntaxError: Identifier 'hasFavoriteEntryWithUrl' has already been declared [object Object]
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] [vite] connected.
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] server connection lost. Polling for restart...
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
 [page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
 [page-console] [vite] connecting...
 [page-console] [vite] connected.
@@ -365,292 +124,201 @@ once the app is packaged.
 [page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 [page-console] [webos-debug] React App mounted!
 [page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=true
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
+[page-console] [webos-debug] cache-load: raw=null
 [page-console] [webos-debug] React App mounted!
 [page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=true
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
 [page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[page-console] [vite] connected.
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[page-console] [vite] connected.
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
-[page-console] [vite] hot updated: /src/AppBootstrap.tsx
-[page-console] [vite] hot updated: /src/App.tsx
-[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
-[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
-[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
-[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
-[page-console] [vite] connecting...
-[harness] did-finish-load http://127.0.0.1:4000/
-[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
-  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
-  this app to unnecessary security risks.
-
-For more information and help, consult
-https://electronjs.org/docs/tutorial/security.
-This warning will not show up
-once the app is packaged.
-[page-console] [vite] connected.
-[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
-[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
-[page-console] [webos-debug] React App mounted!
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
-[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
-[page-console] [vite] hot updated: /src/App.tsx
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=false
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: no cache found, staying on menu
 [page-console] [vite] hot updated: /src/App.tsx
 [page-console] The final argument passed to %s changed size between renders. The order and size of this array must remain constant.
 
 Previous: %s
-Incoming: %s useEffect [Favorites, live] [Favorites, live, true, false]
+Incoming: %s useEffect [Favorites, live, true, false] [Favorites, live, tv, true, false]
+[page-console] [vite] hot updated: /src/App.tsx
+[page-console] [vite] hot updated: /src/App.tsx
+[page-console] [vite] hot updated: /src/App.tsx
+[page-console] [vite] hot updated: /src/App.tsx
+[page-console] [vite] hot updated: /src/App.tsx
+[page-console] Capacitor plugin "NativePlayer" already registered. Cannot register plugins twice.
+[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[page-console] [vite] hot updated: /src/AppBootstrap.tsx
+[page-console] [vite] hot updated: /src/App.tsx
+[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
+[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
+[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
+[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
+[page-console] The final argument passed to %s changed size between renders. The order and size of this array must remain constant.
+
+Previous: %s
+Incoming: %s useEffect [Favorites, live, tv, true, false] [Favorites, live, true, false]
+[page-console] [vite] hot updated: /src/App.tsx
+[page-console] [vite] hot updated: /src/App.tsx
+[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
+[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[page-console] [vite] hot updated: /src/AppBootstrap.tsx
+[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
+[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
+[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
+[page-console] [vite] connecting...
+[page-console] [vite] connected.
+[harness] did-finish-load http://127.0.0.1:4000/
+[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+[page-console] [webos-debug] React App mounted!
+[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
+[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
+[page-console] [webos-debug] React App mounted!
+[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
+[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
+[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
+[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
+[page-console] Capacitor plugin "NativePlayer" already registered. Cannot register plugins twice.
+[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[page-console] [vite] hot updated: /src/AppBootstrap.tsx
+[page-console] [vite] hot updated: /src/App.tsx
+[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
+[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
+[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
+[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
+[page-console] [vite] hot updated: /src/App.tsx
+[page-console] [vite] hot updated: /src/ui/RecordingLibrary.tsx
+[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[page-console] [vite] invalidate /src/AppBootstrap.tsx: Could not Fast Refresh ("mountApp" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[page-console] [vite] hot updated: /src/AppBootstrap.tsx
+[page-console] [vite] hot updated: /src/ui/PlaylistManager.tsx
+[page-console] [vite] hot updated: /src/ui/EPGSearch.tsx
+[page-console] [vite] hot updated: /src/ui/EPGTimelinePanel.tsx
+[page-console] [vite] hot updated: /src/App.tsx
+[page-console] [vite] connecting...
+[page-console] [vite] connected.
+[harness] did-finish-load http://127.0.0.1:4000/
+[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+[page-console] [webos-debug] React App mounted!
+[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=true
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
+[page-console] [webos-debug] cache-load: raw=null
+[page-console] [webos-debug] React App mounted!
+[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=true
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
+[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=false
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
+[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=false
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: no cache found, staying on menu
+[page-console] [vite] connecting...
+[harness] did-finish-load http://127.0.0.1:4000/
+[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+[page-console] [vite] connected.
+[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+[page-console] [webos-debug] React App mounted!
+[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=true
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
+[page-console] [webos-debug] cache-load: raw=null
+[page-console] [webos-debug] React App mounted!
+[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=true
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
+[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
+[page-console] [webos-debug] startup: playlists=1 hydrationPending=false
+[page-console] [webos-debug] startup: PROCEEDING with cache load
+[page-console] [webos-debug] startup: restoring cache...
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: restored 0 channels
+[page-console] [webos-debug] startup: no cache found, staying on menu
+[page-console] [webos-debug] click: button.opening-btn
+[page-console] [webos-debug] startup-check: show=false completed=true login=false access=null inflight=false
+[page-console] [webos-debug] startup: SKIP - not on opening screen
+[page-console] [webos-debug] click: button.btn-primary
+[page-console] [webos-debug] cache-save: idb persisted 285067 channels (latest)
+[page-console] [webos-debug] click: button.btn-secondary
+[page-console] [webos-debug] click: button.btn-secondary
+[page-console] [webos-debug] click: button.btn-primary
+[page-console] [webos-debug] click: button.btn-secondary
+[page-console] [webos-debug] click: input
+[page-console] [webos-debug] click: input
+[page-console] [webos-debug] click: button.btn-secondary
+[page-console] [webos-debug] click: button.btn-primary
+[page-console] [vite] connecting...
+[harness] did-finish-load http://127.0.0.1:4000/
+[page-console] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+[page-console] [vite] connected.
+[page-console] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[page-console] [webos-debug] boot v1.4.5 UA:Mozilla/5.0 (Linux; Android 11; AFTMM Build/RS8101.2334N) Ap
+[page-console] [webos-debug] React App mounted!
+[page-console] [webos-debug] startup-check: show=true completed=false login=false access=null inflight=false
+[page-console] [webos-debug] startup: Capacitor fast-boot — deferring channel cache until Live TV
+[page-console] [webos-debug] React App mounted!
+[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
+[page-console] [webos-debug] startup: Capacitor deferred playlists=1 adultId=1784044255278
+[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
+[page-console] [webos-debug] startup-check: show=true completed=true login=false access=null inflight=false
+[page-console] [webos-debug] click: button.opening-btn
+[page-console] [webos-debug] startup-check: show=false completed=true login=false access=null inflight=false
+[page-console] [webos-debug] startup: SKIP - not on opening screen
+[page-console] [webos-debug] click: button.btn-primary
+[page-console] [webos-debug] capacitor-ingest: 57019 total -> 674 in memory (TV: US| PRIME ᴿᴬᵂ ⁶⁰ᶠᵖˢ), 912 groups
+[page-console] [webos-debug] capacitor-ingest: persisted 912 live groups to idb
+[page-console] [webos-debug] click: button.btn-secondary
+[page-console] [webos-debug] click: button.btn-secondary
+[page-console] [webos-debug] click: button.btn-primary
+[page-console] [webos-debug] click: button.group-select-btn

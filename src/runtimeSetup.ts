@@ -1,3 +1,5 @@
+import { consumeRemoteActivate, normalizeRemoteNavKey, noteRemoteActivate, resolveRemoteActivateTarget } from "./core/remoteKeys";
+
 declare const __APP_VERSION__: string;
 
 const REMOTE_KEYCODE_MAP: Record<number, string> = {
@@ -50,18 +52,21 @@ const REMOTE_KEY_ALIASES: Record<string, string> = {
 };
 
 function isInteractiveRemoteTarget(target: EventTarget | null): HTMLElement | null {
-  const el = target as HTMLElement | null;
-  if (!el || !el.closest) return null;
-  return el.closest("button, [role='button'], a, input, select, textarea");
+  return resolveRemoteActivateTarget(target);
+}
+
+function isCheckboxOrRadio(el: HTMLElement | null): boolean {
+  return el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio");
 }
 
 function enableMagicRemotePointerClicks() {
-  // LG Magic Remote pointer often delivers mousedown/mouseup without a click.
-  let lastClickAt = 0;
+  // LG Magic Remote pointer often delivers mousedown/mouseup without a click
+  // on buttons. Checkboxes already get a real click; synthesizing another one
+  // toggles them back to the previous state.
   window.addEventListener(
     "click",
-    () => {
-      lastClickAt = Date.now();
+    (event) => {
+      noteRemoteActivate(event.target);
     },
     true
   );
@@ -70,10 +75,12 @@ function enableMagicRemotePointerClicks() {
     if (!control) return;
     if (control instanceof HTMLButtonElement && control.disabled) return;
     if (control instanceof HTMLInputElement && control.disabled) return;
+    if (isCheckboxOrRadio(control)) return;
+    if (control.closest(".series-search-composer, .remote-text-composer")) return;
     window.setTimeout(() => {
-      if (Date.now() - lastClickAt <= 250) return;
+      if (!consumeRemoteActivate(control)) return;
       control.click();
-    }, 260);
+    }, 280);
   });
 }
 
@@ -141,7 +148,11 @@ function normalizeRemoteKeyEvents() {
   }, true);
 
   window.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
+    if (normalizeRemoteNavKey(event) !== "Enter") return;
+    if (event.repeat) {
+      event.preventDefault();
+      return;
+    }
 
     const active = document.activeElement as HTMLElement | null;
     if (!active) return;
@@ -153,9 +164,19 @@ function normalizeRemoteKeyEvents() {
       return;
     }
 
-    if (active.tagName === "BUTTON" || active.getAttribute("role") === "button") {
-      active.click();
+    if (isCheckboxOrRadio(active)) {
       event.preventDefault();
+      if (consumeRemoteActivate(active)) active.click();
+      return;
+    }
+
+    if (active.tagName === "BUTTON" || active.getAttribute("role") === "button") {
+      if (active.closest(".series-search-composer, .remote-text-composer")) {
+        event.preventDefault();
+        return;
+      }
+      event.preventDefault();
+      if (consumeRemoteActivate(active)) active.click();
     }
   });
 

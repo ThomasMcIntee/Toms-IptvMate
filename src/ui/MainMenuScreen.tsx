@@ -214,7 +214,7 @@ export default function MainMenuScreen({
       <div className="opening-glow" />
       <div className="opening-card">
         <div className="opening-badge">{t("welcome")}</div>
-        <h1 className="opening-title">Toms IPTVmate</h1>
+        <h1 className="opening-title">Tom's IPTVmate</h1>
         <p className="opening-subtitle">{t("chooseAction")}</p>
 
         <div className="opening-actions">

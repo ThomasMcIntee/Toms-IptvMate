@@ -20,6 +20,7 @@ import android.widget.TextView;
 import androidx.coordinatorlayout.widget.CoordinatorLayout;
 import androidx.media3.ui.PlayerView;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -58,6 +59,7 @@ public class ExoPlayerManager {
     private LinearLayout languageList;
     private TextView timeView;
     private TextView titleView;
+    private View liveBadge;
     private Runnable controlsTicker;
     private Runnable hideControlsRunnable;
     private boolean controlsRevealed = true;
@@ -67,6 +69,7 @@ public class ExoPlayerManager {
     private long guideEndMs;
     private boolean overlayLooksFullscreen;
     private boolean languagePickerOpen;
+    private int selectedControlIndex = -1;
 
     private int boundLeft;
     private int boundTop;
@@ -277,6 +280,7 @@ public class ExoPlayerManager {
             closeLanguagePickerOnMain();
             stopControlsTicker();
             cancelHideControls();
+            clearControlSelection();
             jsNotifier.evaluateJs(
                 "document.body.classList.remove('native-exo-active');" +
                 "document.body.classList.remove('native-exo-vod');"
@@ -294,6 +298,7 @@ public class ExoPlayerManager {
             cancelHideOverlay();
             stopControlsTicker();
             cancelHideControls();
+            clearControlSelection();
             hideNativeSurface();
             setWebViewOpaque(true);
             jsNotifier.evaluateJs(
@@ -316,6 +321,192 @@ public class ExoPlayerManager {
         return isPlayingNative;
     }
 
+    public void focusControls() {
+        runOnMain(() -> {
+            if (!isPlayingNative) return;
+            revealControlsOnMain();
+            focusDefaultControlOnMain();
+        });
+    }
+
+    public void moveControlFocus(int delta) {
+        runOnMain(() -> {
+            if (!isPlayingNative) return;
+            revealControlsOnMain();
+            if (delta == 0) {
+                focusDefaultControlOnMain();
+                return;
+            }
+            moveControlSelection(delta);
+        });
+    }
+
+    public void activateSelectedControl() {
+        runOnMain(() -> {
+            if (!isPlayingNative) return;
+            revealControlsOnMain();
+            ImageButton current = selectedControl();
+            if (current == null) {
+                focusDefaultControlOnMain();
+                return;
+            }
+            current.performClick();
+        });
+    }
+
+    /**
+     * Movies and fullscreen live use the native overlay. D-pad must stay on those
+     * ImageButtons so lime {@code state_focused} paints. Live preview leaves keys
+     * with the WebView channel list.
+     */
+    public boolean offerRemoteKey(KeyEvent event) {
+        if (!isPlayingNative) return false;
+        if (playIsLive && !overlayLooksFullscreen) return false;
+        int code = event.getKeyCode();
+        if (!isRemoteControlKey(code)) return false;
+        if (event.getAction() != KeyEvent.ACTION_DOWN) return true;
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return handleRemoteKeyOnMain(code);
+        }
+        mainHandler.post(() -> handleRemoteKeyOnMain(code));
+        return true;
+    }
+
+    private boolean handleRemoteKeyOnMain(int code) {
+        if (!isPlayingNative) return false;
+        revealControlsOnMain();
+
+        if (languagePickerOpen) {
+            return handleLanguagePickerKeyOnMain(code);
+        }
+
+        if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
+            ImageButton current = selectedControl();
+            if (current == null) {
+                focusDefaultControlOnMain();
+                return true;
+            }
+            current.performClick();
+            return true;
+        }
+
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT) {
+            moveControlSelection(-1);
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            moveControlSelection(1);
+            return true;
+        }
+
+        if (selectedControl() == null) {
+            focusDefaultControlOnMain();
+        }
+        return true;
+    }
+
+    private boolean handleLanguagePickerKeyOnMain(int code) {
+        View focused = activity.getCurrentFocus();
+        if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
+            if (focused != null && isUnderLanguagePanel(focused)) {
+                focused.performClick();
+            }
+            return true;
+        }
+        if (focused == null || !isUnderLanguagePanel(focused)) {
+            focusSelectedLanguageOption();
+            return true;
+        }
+        int direction = remoteFocusDirection(code);
+        if (direction == 0) return true;
+        View next = focused.focusSearch(direction);
+        if (next != null && isUnderLanguagePanel(next)) {
+            next.requestFocus();
+        }
+        return true;
+    }
+
+    private void focusDefaultControlOnMain() {
+        List<ImageButton> controls = visibleControls();
+        paintControlSelection(controls.isEmpty() ? playButton : controls.get(0));
+    }
+
+    private void moveControlSelection(int delta) {
+        List<ImageButton> controls = visibleControls();
+        if (controls.isEmpty()) return;
+        if (selectedControl() == null) {
+            paintControlSelection(controls.get(0));
+            return;
+        }
+        int next = Math.max(0, Math.min(controls.size() - 1, selectedControlIndex + delta));
+        paintControlSelection(controls.get(next));
+    }
+
+    private ImageButton selectedControl() {
+        List<ImageButton> controls = visibleControls();
+        if (selectedControlIndex < 0 || selectedControlIndex >= controls.size()) return null;
+        return controls.get(selectedControlIndex);
+    }
+
+    private List<ImageButton> visibleControls() {
+        List<ImageButton> out = new ArrayList<>();
+        ImageButton[] order = new ImageButton[] { playButton, languageButton, muteButton, fullscreenButton };
+        for (ImageButton button : order) {
+            if (button != null && button.getVisibility() == View.VISIBLE) {
+                makeControlFocusable(button);
+                out.add(button);
+            }
+        }
+        return out;
+    }
+
+    private void paintControlSelection(ImageButton target) {
+        List<ImageButton> controls = visibleControls();
+        selectedControlIndex = -1;
+        for (int i = 0; i < controls.size(); i++) {
+            ImageButton button = controls.get(i);
+            boolean on = button == target;
+            button.setSelected(on);
+            if (on) {
+                selectedControlIndex = i;
+                button.requestFocus();
+            }
+        }
+    }
+
+    private void clearControlSelection() {
+        selectedControlIndex = -1;
+        ImageButton[] order = new ImageButton[] { playButton, languageButton, muteButton, fullscreenButton };
+        for (ImageButton button : order) {
+            if (button != null) button.setSelected(false);
+        }
+    }
+
+    private static boolean isRemoteControlKey(int code) {
+        return code == KeyEvent.KEYCODE_DPAD_UP
+            || code == KeyEvent.KEYCODE_DPAD_DOWN
+            || code == KeyEvent.KEYCODE_DPAD_LEFT
+            || code == KeyEvent.KEYCODE_DPAD_RIGHT
+            || code == KeyEvent.KEYCODE_DPAD_CENTER
+            || code == KeyEvent.KEYCODE_ENTER;
+    }
+
+    private static int remoteFocusDirection(int code) {
+        if (code == KeyEvent.KEYCODE_DPAD_UP) return View.FOCUS_UP;
+        if (code == KeyEvent.KEYCODE_DPAD_DOWN) return View.FOCUS_DOWN;
+        if (code == KeyEvent.KEYCODE_DPAD_LEFT) return View.FOCUS_LEFT;
+        if (code == KeyEvent.KEYCODE_DPAD_RIGHT) return View.FOCUS_RIGHT;
+        return 0;
+    }
+
+    private static void makeControlFocusable(ImageButton button) {
+        if (button == null) return;
+        button.setEnabled(true);
+        button.setClickable(true);
+        button.setFocusable(true);
+        button.setFocusableInTouchMode(true);
+    }
+
     void handleNativePlaybackReady() {
         refreshLanguageControlsOnMain();
         jsNotifier.evaluateJs(
@@ -331,6 +522,7 @@ public class ExoPlayerManager {
             ? message.replace("\\", "\\\\").replace("'", "\\'")
             : "Native playback failed";
         mainHandler.post(() -> {
+            clearControlSelection();
             hideNativeSurface();
             setWebViewOpaque(true);
         });
@@ -516,6 +708,12 @@ public class ExoPlayerManager {
         languageList = overlay.findViewById(R.id.native_exo_language_list);
         timeView = overlay.findViewById(R.id.native_exo_time);
         titleView = overlay.findViewById(R.id.native_exo_title);
+        liveBadge = overlay.findViewById(R.id.native_exo_live);
+
+        makeControlFocusable(playButton);
+        makeControlFocusable(languageButton);
+        makeControlFocusable(muteButton);
+        makeControlFocusable(fullscreenButton);
 
         if (playButton != null) {
             playButton.setOnClickListener(v -> {
@@ -601,13 +799,16 @@ public class ExoPlayerManager {
         if (titleView != null) {
             titleView.setText(guideTitle);
         }
+        if (liveBadge != null) {
+            liveBadge.setVisibility(playIsLive ? View.VISIBLE : View.GONE);
+        }
         refreshLanguageControlsOnMain();
     }
 
     private void revealControlsOnMain() {
         controlsRevealed = true;
         applyControlsVisibilityOnMain();
-        if (controlsHaveFocus()) {
+        if (languagePickerOpen) {
             cancelHideControls();
             return;
         }
@@ -622,9 +823,10 @@ public class ExoPlayerManager {
         cancelHideControls();
         hideControlsRunnable = () -> {
             hideControlsRunnable = null;
-            if (controlsHaveFocus()) {
+            if (languagePickerOpen) {
                 return;
             }
+            clearControlSelection();
             controlsRevealed = false;
             applyControlsVisibilityOnMain();
         };
@@ -697,120 +899,6 @@ public class ExoPlayerManager {
     private String formatGuideRange(long startMs, long endMs) {
         java.text.DateFormat format = android.text.format.DateFormat.getTimeFormat(activity);
         return format.format(new java.util.Date(startMs)) + " – " + format.format(new java.util.Date(endMs));
-    }
-
-    public boolean dispatchPlayerKey(KeyEvent event) {
-        if (!isPlayingNative || playIsLive || event == null) return false;
-
-        int keyCode = event.getKeyCode();
-        if (!isPlayerNavKey(keyCode)) return false;
-
-        if (event.getAction() != KeyEvent.ACTION_DOWN) {
-            return languagePickerOpen || controlsHaveFocus();
-        }
-
-        if (languagePickerOpen) {
-            return handleLanguagePickerKeyOnMain(keyCode);
-        }
-
-        if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN || keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-            revealControlsOnMain();
-            focusLanguageButtonOnMain();
-            return true;
-        }
-
-        if (!controlsHaveFocus()) return false;
-
-        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-            focusControlInDirection(1);
-            return true;
-        }
-        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-            focusControlInDirection(-1);
-            return true;
-        }
-        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-            View focused = activity.getCurrentFocus();
-            if (focused != null && (isUnderControls(focused) || isUnderLanguagePanel(focused))) {
-                focused.performClick();
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean isPlayerNavKey(int keyCode) {
-        return keyCode == KeyEvent.KEYCODE_DPAD_LEFT
-            || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
-            || keyCode == KeyEvent.KEYCODE_DPAD_UP
-            || keyCode == KeyEvent.KEYCODE_DPAD_DOWN
-            || keyCode == KeyEvent.KEYCODE_DPAD_CENTER
-            || keyCode == KeyEvent.KEYCODE_ENTER;
-    }
-
-    private boolean handleLanguagePickerKeyOnMain(int keyCode) {
-        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-            View focused = activity.getCurrentFocus();
-            if (focused != null) focused.performClick();
-            return true;
-        }
-        if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-            moveLanguagePickerFocus(-1);
-            return true;
-        }
-        if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-            moveLanguagePickerFocus(1);
-            return true;
-        }
-        return true;
-    }
-
-    private void moveLanguagePickerFocus(int delta) {
-        if (languageList == null) return;
-        int count = languageList.getChildCount();
-        if (count == 0) return;
-        View focused = activity.getCurrentFocus();
-        int index = -1;
-        for (int i = 0; i < count; i++) {
-            if (languageList.getChildAt(i) == focused) {
-                index = i;
-                break;
-            }
-        }
-        if (index < 0) index = 0;
-        int next = Math.max(0, Math.min(count - 1, index + delta));
-        languageList.getChildAt(next).requestFocus();
-    }
-
-    private void focusLanguageButtonOnMain() {
-        if (languageButton != null && languageButton.getVisibility() == View.VISIBLE) {
-            languageButton.setEnabled(true);
-            languageButton.setFocusable(true);
-            languageButton.setFocusableInTouchMode(true);
-            languageButton.requestFocus();
-            return;
-        }
-        if (playButton != null) playButton.requestFocus();
-    }
-
-    private void focusControlInDirection(int delta) {
-        java.util.ArrayList<ImageButton> buttons = new java.util.ArrayList<>();
-        if (playButton != null) buttons.add(playButton);
-        if (languageButton != null && languageButton.getVisibility() == View.VISIBLE) {
-            buttons.add(languageButton);
-        }
-        if (muteButton != null) buttons.add(muteButton);
-        if (fullscreenButton != null) buttons.add(fullscreenButton);
-        if (buttons.isEmpty()) return;
-
-        View focused = activity.getCurrentFocus();
-        int index = buttons.indexOf(focused);
-        if (index < 0) {
-            focusLanguageButtonOnMain();
-            return;
-        }
-        int next = Math.max(0, Math.min(buttons.size() - 1, index + delta));
-        buttons.get(next).requestFocus();
     }
 
     public boolean consumeBackPress() {
@@ -914,13 +1002,12 @@ public class ExoPlayerManager {
         List<NativeExoPlayerController.AudioTrackOption> tracks =
             isPlayingNative ? playerController.getAudioTracks() : java.util.Collections.emptyList();
         boolean show = isPlayingNative && !playIsLive;
-        boolean canSelect = show && tracks.size() >= 2;
         languageButton.setVisibility(show ? View.VISIBLE : View.GONE);
-        languageButton.setEnabled(show);
+        languageButton.setEnabled(true);
+        languageButton.setClickable(true);
         languageButton.setFocusable(show);
         languageButton.setFocusableInTouchMode(show);
-        languageButton.setClickable(show);
-        languageButton.setContentDescription(canSelect
+        languageButton.setContentDescription(show && tracks.size() >= 2
             ? selectedLanguageLabel(tracks)
             : activity.getString(R.string.native_exo_language));
         wireLanguageFocusStops(show);

@@ -17,6 +17,7 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import androidx.activity.OnBackPressedCallback;
+import androidx.core.content.ContextCompat;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebViewClient;
 
@@ -167,8 +168,21 @@ public class MainActivity extends BridgeActivity {
         filter.addAction(NativePlayerEvents.ACTION_READY);
         filter.addAction(NativePlayerEvents.ACTION_ERROR);
         filter.addAction(NativePlayerEvents.ACTION_STOPPED);
-        registerReceiver(nativePlayerReceiver, filter);
-        nativePlayerReceiverRegistered = true;
+        try {
+            // Android 13+ / targetSdk 33+ requires RECEIVER_NOT_EXPORTED.
+            // Fire OS still accepts the old 2-arg call; Google TV does not.
+            ContextCompat.registerReceiver(
+                this,
+                nativePlayerReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            );
+            nativePlayerReceiverRegistered = true;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to register native player receiver", e);
+            nativePlayerReceiver = null;
+            nativePlayerReceiverRegistered = false;
+        }
     }
 
     private void unregisterNativePlayerReceiver() {
@@ -183,6 +197,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void setupWebViewFocus() {
+        if (getBridge() == null) return;
         WebView webView = getBridge().getWebView();
         if (webView == null) return;
 
@@ -380,9 +395,13 @@ public class MainActivity extends BridgeActivity {
             });
     }
 
+    public ExoPlayerManager peekExoPlayerManager() {
+        return exoPlayerManager;
+    }
+
     public ExoPlayerManager getOrCreateExoPlayerManager() {
         if (exoPlayerManager == null) {
-            WebView webView = getBridge().getWebView();
+            WebView webView = getBridge() != null ? getBridge().getWebView() : null;
             exoPlayerManager = new ExoPlayerManager(
                 this,
                 APP_USER_AGENT,
@@ -429,11 +448,13 @@ public class MainActivity extends BridgeActivity {
             target.evaluateJavascript(
                 "(function(){" +
                 "try{window.dispatchEvent(new CustomEvent('nativeBackKey'));}catch(e){}" +
+                "try{window.dispatchEvent(new CustomEvent('capacitorBackKey',{bubbles:false}));}catch(e){}" +
                 "try{" +
                 "var ev=new KeyboardEvent('keydown',{" +
                 "key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true,cancelable:true" +
                 "});" +
                 "window.dispatchEvent(ev);" +
+                "document.dispatchEvent(ev);" +
                 "}catch(e2){}" +
                 "})();",
                 null
@@ -451,9 +472,26 @@ public class MainActivity extends BridgeActivity {
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
             return handleNativeBack();
         }
-        if (exoPlayerManager != null && exoPlayerManager.dispatchPlayerKey(event)) {
+        if (exoPlayerManager != null && exoPlayerManager.offerRemoteKey(event)) {
             return true;
         }
+        if (exoPlayerManager != null && exoPlayerManager.isPlayingNative() && isMediaKey(event.getKeyCode())) {
+            WebView webView = getActivityWebView();
+            if (webView != null) {
+                return webView.dispatchKeyEvent(event);
+            }
+        }
         return super.dispatchKeyEvent(event);
+    }
+
+    private static boolean isMediaKey(int code) {
+        return code == KeyEvent.KEYCODE_MEDIA_PLAY
+            || code == KeyEvent.KEYCODE_MEDIA_PAUSE
+            || code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+            || code == KeyEvent.KEYCODE_MEDIA_STOP
+            || code == KeyEvent.KEYCODE_MEDIA_REWIND
+            || code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+            || code == KeyEvent.KEYCODE_MEDIA_NEXT
+            || code == KeyEvent.KEYCODE_MEDIA_PREVIOUS;
     }
 }

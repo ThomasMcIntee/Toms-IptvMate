@@ -1,6 +1,7 @@
 export function initNavigation(setPanel: (p: string | null) => void) {
   window.addEventListener("keydown", (e) => {
     if (isTextEntryActive(e.target) || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (document.querySelector(".series-search-composer")) return;
 
     if (e.key === "v" || e.key === "V") setPanel("vod");
     if (e.key === "a" || e.key === "A") setPanel("audio");

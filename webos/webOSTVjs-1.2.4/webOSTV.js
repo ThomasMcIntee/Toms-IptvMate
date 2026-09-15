@@ -9,8 +9,39 @@
   // Create webOS namespace
   window.webOS = window.webOS || {};
   window.webOS.platform = { tv: true };
-  window.webOS.platformBack = false;
   window.webOS.libVersion = '1.2.5';
+
+  // Official webOSTV.js exposes platformBack() as a function. The previous
+  // boolean `false` made main-menu Back a no-op on the SDK simulator/TV.
+  window.webOS.platformBack = function platformBack() {
+    try {
+      var palm = window.PalmSystem;
+      if (palm && typeof palm.platformBack === 'function') {
+        palm.platformBack();
+        return true;
+      }
+    } catch (e) {}
+
+    function lunaClose(method) {
+      if (!window.webOS.service || typeof window.webOS.service.request !== 'function') return false;
+      window.webOS.service.request('luna://com.webos.applicationManager', {
+        method: method,
+        parameters: { id: 'tv.toms.iptvmate' },
+        onFailure: function () {}
+      });
+      return true;
+    }
+
+    if (lunaClose('close') || lunaClose('closeByAppId')) {
+      return true;
+    }
+
+    try {
+      window.close();
+      return true;
+    } catch (e2) {}
+    return false;
+  };
 
   // This file is a local Back-key stub, not LG's full SDK. Packaged apps still
   // get PalmServiceBridge; wrap it so luna:// calls (DB8, JS services) work.

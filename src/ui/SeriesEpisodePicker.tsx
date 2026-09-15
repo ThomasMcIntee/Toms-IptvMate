@@ -11,6 +11,7 @@ type EpisodePickerProps = {
   loading: boolean;
   error: string | null;
   favoriteLabel?: string;
+  focusEpisodeId?: string | null;
   onToggleFavorite?: () => void;
   onClose: () => void;
   onSelectEpisode: (episode: any) => void;
@@ -23,6 +24,7 @@ export default function SeriesEpisodePicker({
   loading,
   error,
   favoriteLabel,
+  focusEpisodeId = null,
   onToggleFavorite,
   onClose,
   onSelectEpisode
@@ -37,6 +39,19 @@ export default function SeriesEpisodePicker({
 
   useEffect(() => {
     if (!visible) return;
+    const focusEpisode = focusEpisodeId
+      ? episodes.find((episode) => String(episode?.id || "") === String(focusEpisodeId))
+      : null;
+    if (focusEpisode) {
+      const key = seasonKeyForEpisode(focusEpisode);
+      setSelectedSeasonKey(key);
+      const group = bySeason.find((entry) => entry.key === key);
+      const index = group
+        ? group.items.findIndex((episode) => String(episode?.id || "") === String(focusEpisodeId))
+        : -1;
+      setRenderedCount(Math.max(INITIAL_RENDER_COUNT, index + 1));
+      return;
+    }
     setRenderedCount(INITIAL_RENDER_COUNT);
     setSelectedSeasonKey((current) => {
       if (current && bySeason.some((group) => group.key === current)) {
@@ -44,7 +59,7 @@ export default function SeriesEpisodePicker({
       }
       return bySeason[0]?.key ?? null;
     });
-  }, [visible, bySeason]);
+  }, [visible, bySeason, episodes, focusEpisodeId]);
 
   const activeSeason = useMemo(() => {
     if (bySeason.length === 0) return null;
@@ -64,6 +79,20 @@ export default function SeriesEpisodePicker({
       const overlay = overlayRef.current;
       if (!overlay) return;
       const active = document.activeElement as HTMLElement | null;
+      if (focusEpisodeId) {
+        const episodeButtons = overlay.querySelectorAll<HTMLButtonElement>(".series-episode-btn[data-episode-id]");
+        for (const button of episodeButtons) {
+          if (button.getAttribute("data-episode-id") !== String(focusEpisodeId)) continue;
+          button.focus();
+          try {
+            button.scrollIntoView({ block: "center", inline: "nearest" });
+          } catch {
+            // Older WebViews may not support scrollIntoView options.
+          }
+          return;
+        }
+        return;
+      }
       const episodesReady = overlay.querySelector(".series-episode-btn, .series-season-tab");
       if (episodesReady) {
         const activeTab = overlay.querySelector<HTMLButtonElement>(".series-season-tab-active");
@@ -79,6 +108,7 @@ export default function SeriesEpisodePicker({
     const timer = window.setTimeout(focusInitial, 50);
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if (document.querySelector(".vod-resume-overlay")) return;
       const overlay = overlayRef.current;
       if (!overlay) return;
 
@@ -194,7 +224,7 @@ export default function SeriesEpisodePicker({
       window.clearTimeout(timer);
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [visible, loading, displayedEpisodes.length, selectedSeasonKey]);
+  }, [visible, loading, displayedEpisodes.length, selectedSeasonKey, focusEpisodeId]);
 
   if (!visible) return null;
 
@@ -257,6 +287,7 @@ export default function SeriesEpisodePicker({
                       key={episode.id}
                       type="button"
                       className="series-episode-btn"
+                      data-episode-id={String(episode.id || "")}
                       onClick={() => onSelectEpisode(episode)}
                     >
                       <span className="series-episode-content">
@@ -297,6 +328,12 @@ export default function SeriesEpisodePicker({
       </div>
     </div>
   );
+}
+
+function seasonKeyForEpisode(episode: any): string {
+  const seasonNumber =
+    typeof episode?.episodeInfo?.season === "number" ? episode.episodeInfo.season : Number.MAX_SAFE_INTEGER;
+  return Number.isFinite(seasonNumber) ? `season-${seasonNumber}` : "season-unknown";
 }
 
 function groupEpisodesBySeason(episodes: any[]): Array<{ key: string; label: string; items: any[] }> {

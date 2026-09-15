@@ -49,7 +49,6 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:descendantFocusability="afterDescendants"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -61,10 +60,30 @@
                 android:contentDescription="@string/native_exo_play"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
+                android:nextFocusDown="@id/native_exo_play"
                 android:nextFocusRight="@id/native_exo_language"
+                android:nextFocusUp="@id/native_exo_play"
                 android:padding="6dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_player_pause"
+                android:tint="@color/native_exo_control_icon" />
+
+            <ImageButton
+                android:id="@+id/native_exo_language"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginLeft="4dp"
+                android:background="@drawable/native_exo_control_btn"
+                android:contentDescription="@string/native_exo_language"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:nextFocusDown="@id/native_exo_language"
+                android:nextFocusLeft="@id/native_exo_play"
+                android:nextFocusRight="@id/native_exo_mute"
+                android:nextFocusUp="@id/native_exo_language"
+                android:padding="6dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_player_language"
                 android:tint="@color/native_exo_control_icon" />
 
             <TextView
@@ -105,21 +124,6 @@
                 android:textStyle="bold" />
 
             <ImageButton
-                android:id="@+id/native_exo_language"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:background="@drawable/native_exo_control_btn"
-                android:contentDescription="@string/native_exo_language"
-                android:focusable="true"
-                android:focusableInTouchMode="true"
-                android:nextFocusLeft="@id/native_exo_play"
-                android:nextFocusRight="@id/native_exo_mute"
-                android:padding="6dp"
-                android:scaleType="fitCenter"
-                android:src="@drawable/ic_player_language"
-                android:tint="@color/native_exo_control_icon" />
-
-            <ImageButton
                 android:id="@+id/native_exo_mute"
                 android:layout_width="40dp"
                 android:layout_height="40dp"
@@ -127,8 +131,10 @@
                 android:contentDescription="@string/native_exo_mute"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
+                android:nextFocusDown="@id/native_exo_mute"
                 android:nextFocusLeft="@id/native_exo_language"
                 android:nextFocusRight="@id/native_exo_fullscreen"
+                android:nextFocusUp="@id/native_exo_mute"
                 android:padding="6dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_player_volume_on"
@@ -142,7 +148,9 @@
                 android:contentDescription="@string/native_exo_fullscreen"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
+                android:nextFocusDown="@id/native_exo_fullscreen"
                 android:nextFocusLeft="@id/native_exo_mute"
+                android:nextFocusUp="@id/native_exo_fullscreen"
                 android:padding="6dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_player_fullscreen"

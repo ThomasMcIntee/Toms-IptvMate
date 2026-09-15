@@ -1,4 +1,5 @@
 import { EPGEvent } from "../epgStore";
+import { yieldToMain } from "../taskScheduler";
 
 function normalizeXmltvKey(value: string): string {
   return String(value || "")
@@ -11,6 +12,7 @@ export async function parseXMLTV(url: string): Promise<Record<string, EPGEvent[]
   const { requestUrl, response } = await resolveReachableUrl(url, "XMLTV");
   const xml = await fetchXmltvText(requestUrl, response);
 
+  await yieldToMain();
   const parser = new DOMParser();
   const doc = parser.parseFromString(xml, "text/xml");
 
@@ -18,7 +20,11 @@ export async function parseXMLTV(url: string): Promise<Record<string, EPGEvent[]
   const channelAliasMap = new Map<string, Set<string>>();
 
   const xmltvChannels = doc.getElementsByTagName("channel");
-  for (const channelNode of Array.from(xmltvChannels)) {
+  for (let channelIndex = 0; channelIndex < xmltvChannels.length; channelIndex += 1) {
+    if (channelIndex > 0 && channelIndex % 200 === 0) {
+      await yieldToMain();
+    }
+    const channelNode = xmltvChannels[channelIndex];
     const channelId = String(channelNode.getAttribute("id") || "").trim();
     if (!channelId) continue;
 
@@ -37,7 +43,11 @@ export async function parseXMLTV(url: string): Promise<Record<string, EPGEvent[]
 
   const programmes = doc.getElementsByTagName("programme");
 
-  for (const p of Array.from(programmes)) {
+  for (let programmeIndex = 0; programmeIndex < programmes.length; programmeIndex += 1) {
+    if (programmeIndex > 0 && programmeIndex % 400 === 0) {
+      await yieldToMain();
+    }
+    const p = programmes[programmeIndex];
     const channelId = p.getAttribute("channel") || "";
     const start = parseXMLTVDate(p.getAttribute("start") || "");
     const end = parseXMLTVDate(p.getAttribute("stop") || "");

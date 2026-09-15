@@ -1,5 +1,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { VisibilityToggle } from "./VisibilityToggle";
 
 function isHeaderChannel(channel: any) {
   return String(channel?.name || "").includes("##");
@@ -72,11 +73,10 @@ function ChannelItem({
         <div className="channel-icon-wrap">
           {showVisibilityControls && (
             <label className="channel-icon-toggle" onClick={(e) => e.stopPropagation()}>
-              <input
-                type="checkbox"
+              <VisibilityToggle
                 checked={visible}
-                aria-label={`Show or hide ${ch.name}`}
-                onChange={(e) => onToggleChannelVisible(ch.id, e.target.checked)}
+                label={`Show or hide ${ch.name}`}
+                onToggle={(next) => onToggleChannelVisible(ch.id, next)}
               />
             </label>
           )}
@@ -110,6 +110,7 @@ function ChannelItem({
           <button
             type="button"
             className="channel-icon-btn"
+            data-channel-id={String(ch.id || "")}
             aria-label={`Play ${ch.name}`}
             disabled={!visible}
             onClick={(e) => {
@@ -129,25 +130,36 @@ function ChannelItem({
     );
   }
 
-  const channelLabel = ch.number != null && String(ch.number).trim() !== "" ? `${ch.number} • ${ch.name}` : ch.name;
-  const showListFavorite = showFavoriteControls && !!onToggleFavorite;
+  const favoriteButton =
+    showFavoriteControls && onToggleFavorite ? (
+      <button
+        type="button"
+        className={`channel-row-favorite${isFavoriteChannel(ch) ? " active" : ""}`}
+        aria-label={`${isFavoriteChannel(ch) ? "Remove" : "Add"} ${ch.name} to favorites`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleFavorite(ch);
+        }}
+      >
+        {isFavoriteChannel(ch) ? "★" : "☆"}
+      </button>
+    ) : null;
 
-  if (showVisibilityControls || showListFavorite) {
+  if (showVisibilityControls) {
     return (
       <div className={itemClass} onClick={handleClick}>
         <div className="list-toggle-row">
           {showVisibilityControls && (
-            <input
-              type="checkbox"
+            <VisibilityToggle
               checked={visible}
-              aria-label={`Show or hide ${ch.name}`}
-              onClick={(e) => e.stopPropagation()}
-              onChange={(e) => onToggleChannelVisible(ch.id, e.target.checked)}
+              label={`Show or hide ${ch.name}`}
+              onToggle={(next) => onToggleChannelVisible(ch.id, next)}
             />
           )}
           <button
             type="button"
             className="channel-select-btn"
+            data-channel-id={String(ch.id || "")}
             onClick={(e) => {
               e.stopPropagation();
               if (visible) onSelect(ch);
@@ -179,8 +191,33 @@ function ChannelItem({
     );
   }
 
+  if (favoriteButton) {
+    return (
+      <div className={itemClass}>
+        <div className="list-toggle-row">
+          {favoriteButton}
+          <button
+            type="button"
+            className="channel-select-btn"
+            disabled={!visible}
+            onClick={() => {
+              if (visible) onSelect(ch);
+            }}
+          >
+            {ch.number} • {ch.name}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <button type="button" className={`${itemClass} channel-row-btn`} onClick={handleClick}>
+    <button
+      type="button"
+      className={`${itemClass} channel-row-btn`}
+      data-channel-id={String(ch.id || "")}
+      onClick={handleClick}
+    >
       <span>{channelLabel}</span>
     </button>
   );
@@ -201,6 +238,7 @@ type Props = {
   suppressLogos?: boolean;
   autoLoadOnScroll?: boolean;
   listClassName?: string;
+  restoreChannelId?: string | null;
 };
 
 export function ChannelList({
@@ -217,11 +255,13 @@ export function ChannelList({
   batchSize,
   suppressLogos = false,
   autoLoadOnScroll = false,
-  listClassName = ""
+  listClassName = "",
+  restoreChannelId = null
 }: Props) {
   const effectiveBatchSize = Math.max(1, batchSize ?? (showAsIcons ? 180 : 250));
   const [visibleCount, setVisibleCount] = useState(effectiveBatchSize);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const restoredForIdRef = useRef<string | null>(null);
 
   const safeChannels = useMemo(() => {
     return channels.filter((channel) => !!channel && typeof channel === "object");
@@ -232,17 +272,67 @@ export function ChannelList({
     [safeChannels]
   );
 
+  const visibleChannels = useMemo(() => {
+    return safeChannels.slice(0, visibleCount);
+  }, [safeChannels, visibleCount]);
+
   useEffect(() => {
+    if (restoreChannelId) return;
     setVisibleCount(effectiveBatchSize);
     const listEl = listRef.current;
     if (listEl) {
       listEl.scrollTop = 0;
     }
-  }, [channelIdentity, showAsIcons, effectiveBatchSize]);
+  }, [channelIdentity, showAsIcons, effectiveBatchSize, restoreChannelId]);
 
-  const visibleChannels = useMemo(() => {
-    return safeChannels.slice(0, visibleCount);
-  }, [safeChannels, visibleCount]);
+  useEffect(() => {
+    if (!restoreChannelId) return;
+    const index = safeChannels.findIndex((channel) => String(channel?.id || "") === restoreChannelId);
+    if (index < 0) return;
+    setVisibleCount((count) => Math.max(count, index + 1));
+  }, [restoreChannelId, channelIdentity, safeChannels]);
+
+  useEffect(() => {
+    if (!restoreChannelId) {
+      restoredForIdRef.current = null;
+      return;
+    }
+    if (restoredForIdRef.current === restoreChannelId) return;
+    const listEl = listRef.current;
+    if (!listEl) return;
+
+    const focusRestored = () => {
+      const matches = listEl.querySelectorAll<HTMLElement>("[data-channel-id]");
+      for (const node of matches) {
+        if (node.getAttribute("data-channel-id") !== restoreChannelId) continue;
+        const btn =
+          node instanceof HTMLButtonElement &&
+          (node.classList.contains("channel-icon-btn") ||
+            node.classList.contains("channel-select-btn") ||
+            node.classList.contains("channel-row-btn"))
+            ? node
+            : node.querySelector<HTMLButtonElement>(
+                ".channel-icon-btn:not([disabled]), .channel-select-btn, .channel-row-btn"
+              );
+        if (!btn || btn.disabled) continue;
+        try {
+          btn.focus({ preventScroll: true });
+          btn.scrollIntoView({ block: "center", inline: "nearest" });
+        } catch {
+          btn.focus();
+        }
+        restoredForIdRef.current = restoreChannelId;
+        return true;
+      }
+      return false;
+    };
+
+    if (focusRestored()) return;
+    const timer = window.setTimeout(() => {
+      focusRestored();
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [restoreChannelId, visibleCount, channelIdentity]);
 
   const hasMoreChannels = visibleCount < safeChannels.length;
 

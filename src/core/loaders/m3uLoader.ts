@@ -1,6 +1,7 @@
 import { Channel, ContentType } from "../channelStore";
 import { isWebOsRuntime } from "../player/platformDetection";
 import { fetchWebOsRemote } from "../webosStreamRelay";
+import { yieldToMain } from "../taskScheduler";
 
 function detectContentType(name: string, group: string): ContentType {
   const text = `${group} ${name}`.toLowerCase();
@@ -63,8 +64,11 @@ export async function loadM3U(url: string): Promise<Channel[]> {
   let current: any = {};
   let counter = 0;
 
-  for (let line of lines) {
-    line = line.trim();
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    if (lineIndex > 0 && lineIndex % 250 === 0) {
+      await yieldToMain();
+    }
+    let line = lines[lineIndex].trim();
 
     if (line.startsWith("#EXTINF")) {
       const nameMatch = line.match(/,(.*)$/);

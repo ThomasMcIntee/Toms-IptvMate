@@ -1,5 +1,6 @@
 import { setEPG, saveEPGCache, loadEPGCache, getIndexedEPGForChannel, hasStoredEPG } from "../epgStore";
 import { getAllChannels } from "../channelStore";
+import { isCapacitorRuntime } from "../player/platformDetection";
 import { parseXMLTV } from "./xmltvParser";
 import {
   loadXtreamEPG,
@@ -8,6 +9,7 @@ import {
   loadXtreamXmltv
 } from "./xtreamEPG";
 import { loadStalkerEPG } from "./stalkerEPG";
+import { getBackgroundConcurrency, waitForBackgroundSlot, yieldToMain } from "../taskScheduler";
 
 const inFlightEPGLoads = new Map<string, Promise<void>>();
 
@@ -165,6 +167,7 @@ export async function loadEPGForPlaylist(playlist: any, options: { forceRefresh?
   }
 
   const run = async () => {
+    await waitForBackgroundSlot();
     // Try loading cache first.
     const cacheLoaded = await loadEPGCache(playlist.id);
     if (cacheLoaded && !options.forceRefresh && hasSufficientGuideForLiveChannels()) {
@@ -194,20 +197,26 @@ export async function loadEPGForPlaylist(playlist: any, options: { forceRefresh?
     }
 
     if (playlist.type === "xtream") {
-      const epg = await loadXtreamEPG(
-        playlist.data.url,
-        playlist.data.user,
-        playlist.data.pass
-      );
+      const capacitorRuntime = isCapacitorRuntime();
+      const epg: Record<string, any[]> = capacitorRuntime
+        ? {}
+        : await loadXtreamEPG(
+            playlist.data.url,
+            playlist.data.user,
+            playlist.data.pass
+          );
 
-      Object.keys(epg).forEach((id) => {
-        const events = epg[id];
-        putEvents(id, events);
-        putEvents(`live_${id}`, events);
-        putEvents(`movie_${id}`, events);
-        putEvents(`series_${id}`, events);
-      });
+      if (!capacitorRuntime) {
+        Object.keys(epg).forEach((id) => {
+          const events = epg[id];
+          putEvents(id, events);
+          putEvents(`live_${id}`, events);
+          putEvents(`movie_${id}`, events);
+          putEvents(`series_${id}`, events);
+        });
+      }
 
+      if (!capacitorRuntime) {
       // Bridge provider stream keys to actual loaded channel IDs and names.
       const mappedLiveChannels = getAllChannels().filter(
         (channel) => String(channel?.contentType || "").toLowerCase() === "live"
@@ -244,7 +253,7 @@ export async function loadEPGForPlaylist(playlist: any, options: { forceRefresh?
         const liveChannels = [
           ...allLiveChannels.filter((channel) => cachedChannelIds.has(String(channel?.id || ""))),
           ...allLiveChannels.filter((channel) => !cachedChannelIds.has(String(channel?.id || "")))
-        ].slice(0, 320);
+        ].slice(0, capacitorRuntime ? 40 : 320);
 
         const missingLive = liveChannels.filter((channel) => {
           const channelId = String(channel?.id || "");
@@ -262,11 +271,12 @@ export async function loadEPGForPlaylist(playlist: any, options: { forceRefresh?
         });
 
         if (missingLive.length > 0) {
-          const workerCount = Math.min(8, missingLive.length);
+          const workerCount = Math.min(getBackgroundConcurrency(8), missingLive.length);
           let cursor = 0;
 
           const worker = async () => {
             while (cursor < missingLive.length) {
+              await yieldToMain();
               const index = cursor;
               cursor += 1;
               const channel = missingLive[index];
@@ -302,7 +312,7 @@ export async function loadEPGForPlaylist(playlist: any, options: { forceRefresh?
         }).length;
         const minimumCurrentCoverage = Math.max(3, Math.ceil(allLiveChannels.length * 0.1));
 
-        if (channelsWithCurrentGuide < minimumCurrentCoverage) {
+        if (!capacitorRuntime && channelsWithCurrentGuide < minimumCurrentCoverage) {
           try {
             const [xmltv, epgChannelIds] = await Promise.all([
               loadXtreamXmltv(playlist.data.url, playlist.data.user, playlist.data.pass),
@@ -329,6 +339,7 @@ export async function loadEPGForPlaylist(playlist: any, options: { forceRefresh?
             // Some Xtream providers do not expose an XMLTV endpoint.
           }
         }
+      }
     }
 
     if (playlist.type === "stalker") {

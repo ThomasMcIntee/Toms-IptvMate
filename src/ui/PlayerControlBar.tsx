@@ -8,20 +8,10 @@ import {
 import { getEPGForChannel, getEPGVersion, subscribeEPG } from "../core/epgStore";
 import { formatEpgTime } from "../core/epgTime";
 import { setNativePlayerGuide } from "../core/nativePlayerBridge";
+import { isWebOsRuntime } from "../core/player/platformDetection";
 import { normalizeRemoteNavKey } from "../core/remoteKeys";
 
 const CONTROLS_HIDE_MS = 3500;
-
-function LanguageGlobeIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        fill="currentColor"
-        d="M12.87 15.07 10.33 12.56l.03-.03A17.52 17.52 0 0 0 14.07 6H17V4.35h-6.5V2.5H8.85v1.85H2v1.65h11.17c-.71 2.13-1.76 3.83-3.3 5.19-.94-.83-1.72-1.77-2.32-2.84H5.9c.67 1.4 1.6 2.68 2.76 3.74l-5.05 5.02L5 18.5l5.11-5.07 3.11 3.11.65-.47zM18.5 10.5h-1.84L13.5 18.5h1.84l.75-2h3.82l.75 2H22.5L18.5 10.5zM16.74 15l1.34-3.56L19.42 15h-2.68z"
-      />
-    </svg>
-  );
-}
 
 type PlayerChannel = {
   id?: string;
@@ -30,28 +20,42 @@ type PlayerChannel = {
   epgChannelId?: string;
 } | null;
 
+function formatClock(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const total = Math.floor(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
 export function PlayerControlBar({
   channel,
   paused,
   muted,
   fullscreen,
   isFavorite = false,
+  mode = "live",
   onPlayPause,
   onMute,
   onFullscreen,
   onToggleFavorite,
-  showLiveBadge = true
+  onStop
 }: {
   channel: PlayerChannel;
   paused: boolean;
   muted: boolean;
   fullscreen: boolean;
   isFavorite?: boolean;
+  mode?: "live" | "vod";
   onPlayPause: () => void;
   onMute: () => void;
   onFullscreen: () => void;
   onToggleFavorite?: () => void;
-  showLiveBadge?: boolean;
+  onStop?: () => void;
 }) {
   useSyncExternalStore(subscribeEPG, getEPGVersion, getEPGVersion);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -66,11 +70,37 @@ export function PlayerControlBar({
     return () => window.clearInterval(timer);
   }, []);
 
+  const [vodTime, setVodTime] = useState({ current: 0, duration: 0 });
+  const isVod = mode === "vod";
+
   const currentProgram = useMemo(() => {
-    if (!channel) return null;
+    if (!channel || isVod) return null;
     const events = getEPGForChannel(channel);
     return events.find((event) => event.start <= nowMs && event.end >= nowMs) || null;
-  }, [channel, nowMs]);
+  }, [channel, nowMs, isVod]);
+
+  useEffect(() => {
+    if (!isVod) return;
+    const video = document.getElementById("player-main") as HTMLVideoElement | null;
+    if (!video) return;
+    const update = () => {
+      setVodTime({
+        current: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+        duration: Number.isFinite(video.duration) ? video.duration : 0
+      });
+    };
+    update();
+    video.addEventListener("timeupdate", update);
+    video.addEventListener("durationchange", update);
+    video.addEventListener("seeked", update);
+    const timer = window.setInterval(update, 500);
+    return () => {
+      video.removeEventListener("timeupdate", update);
+      video.removeEventListener("durationchange", update);
+      video.removeEventListener("seeked", update);
+      window.clearInterval(timer);
+    };
+  }, [isVod, channel?.id]);
 
   useEffect(() => {
     if (!channel) {
@@ -117,20 +147,30 @@ export function PlayerControlBar({
     const reveal = () => {
       ignoreFocusUntilRef.current = 0;
       setRevealed(true);
+      barRef.current?.classList.remove("player-control-bar-hidden");
+      if (barRef.current) barRef.current.inert = false;
       scheduleHide();
     };
 
     reveal();
 
     const shell =
-      barRef.current?.closest(".live-preview-shell") ??
-      document.querySelector(".live-preview-shell");
+      barRef.current?.closest(".live-preview-shell, .vod-playback-shell") ??
+      document.querySelector(".live-preview-shell, .vod-playback-shell");
     // webOS Magic Remote streams mousemove over the video; only clicks/taps
     // should keep the bar visible. Listen for mouse too — some webOS builds
     // never emit PointerEvents.
     const onPointer = () => reveal();
     shell?.addEventListener("pointerdown", onPointer);
     shell?.addEventListener("mousedown", onPointer);
+    if (isVod) {
+      document.addEventListener("pointerdown", onPointer);
+      document.addEventListener("mousedown", onPointer);
+      if (!isWebOsRuntime()) {
+        shell?.addEventListener("mousemove", onPointer);
+        document.addEventListener("mousemove", onPointer);
+      }
+    }
 
     const onPlayerReveal = () => reveal();
     window.addEventListener("playerRevealControls", onPlayerReveal);
@@ -139,21 +179,40 @@ export function PlayerControlBar({
       clearHideTimer();
       shell?.removeEventListener("pointerdown", onPointer);
       shell?.removeEventListener("mousedown", onPointer);
+      if (isVod) {
+        document.removeEventListener("pointerdown", onPointer);
+        document.removeEventListener("mousedown", onPointer);
+        if (!isWebOsRuntime()) {
+          shell?.removeEventListener("mousemove", onPointer);
+          document.removeEventListener("mousemove", onPointer);
+        }
+      }
       window.removeEventListener("playerRevealControls", onPlayerReveal);
     };
-  }, [channel?.id, fullscreen]);
+  }, [channel?.id, fullscreen, isVod]);
 
   if (!channel) return null;
 
-  const duration = currentProgram ? currentProgram.end - currentProgram.start : 0;
-  const progress =
-    currentProgram && duration > 0
+  const duration = isVod
+    ? vodTime.duration
+    : currentProgram
+      ? currentProgram.end - currentProgram.start
+      : 0;
+  const progress = isVod
+    ? vodTime.duration > 0
+      ? Math.max(0, Math.min(1, vodTime.current / vodTime.duration))
+      : 0
+    : currentProgram && duration > 0
       ? Math.max(0, Math.min(1, (nowMs - currentProgram.start) / duration))
       : 0;
-  const title = currentProgram?.title || String(channel.name || "Live TV");
-  const timeLabel = currentProgram
-    ? `${formatEpgTime(currentProgram.start)} – ${formatEpgTime(currentProgram.end)}`
-    : "Live";
+  const title = isVod
+    ? String(channel.name || "Movie")
+    : currentProgram?.title || String(channel.name || "Live TV");
+  const timeLabel = isVod
+    ? `${formatClock(vodTime.current)} / ${vodTime.duration > 0 ? formatClock(vodTime.duration) : "--:--"}`
+    : currentProgram
+      ? `${formatEpgTime(currentProgram.start)} – ${formatEpgTime(currentProgram.end)}`
+      : "Live";
 
   return (
     <div
@@ -161,13 +220,15 @@ export function PlayerControlBar({
       className={`player-control-bar${revealed ? "" : " player-control-bar-hidden"}`}
       role="group"
       aria-label="Player controls"
-      inert={!revealed || undefined}
       onFocusCapture={(event) => {
+        if (Date.now() < ignoreFocusUntilRef.current) {
+          return;
+        }
         if (
-          Date.now() < ignoreFocusUntilRef.current ||
-          barRef.current?.classList.contains("player-control-bar-hidden")
+          barRef.current?.classList.contains("player-control-bar-hidden") &&
+          event.target instanceof HTMLElement &&
+          !event.target.classList.contains("is-remote-focused")
         ) {
-          if (event.target instanceof HTMLElement) event.target.blur();
           return;
         }
         focusedRef.current = true;
@@ -203,7 +264,21 @@ export function PlayerControlBar({
       }}
     >
       <div className="player-control-bar-progress" aria-hidden="true">
-        <div className="player-control-bar-progress-track">
+        <div
+          className="player-control-bar-progress-track"
+          onClick={(event) => {
+            if (!isVod || vodTime.duration <= 0) return;
+            const video = document.getElementById("player-main") as HTMLVideoElement | null;
+            if (!video) return;
+            const rect = event.currentTarget.getBoundingClientRect();
+            const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+            try {
+              video.currentTime = ratio * vodTime.duration;
+            } catch {
+              // Ignore seek errors on unfinished buffers.
+            }
+          }}
+        >
           <div
             className="player-control-bar-progress-fill"
             style={{ width: `${Math.round(progress * 1000) / 10}%` }}
@@ -214,6 +289,7 @@ export function PlayerControlBar({
         <button
           type="button"
           className="player-control-bar-btn"
+          data-playbar-btn="play"
           tabIndex={revealed ? 0 : -1}
           onClick={onPlayPause}
           aria-label={paused ? "Play" : "Pause"}
@@ -228,13 +304,28 @@ export function PlayerControlBar({
             </svg>
           )}
         </button>
+        <PlayBarLanguageButton revealed={revealed} />
+        {onStop && (
+          <button
+            type="button"
+            className="player-control-bar-btn player-control-bar-stop"
+            data-playbar-btn="stop"
+            tabIndex={revealed ? 0 : -1}
+            onClick={onStop}
+            aria-label="Stop playback"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M6 6h12v12H6z" />
+            </svg>
+          </button>
+        )}
         <span className="player-control-bar-time">{timeLabel}</span>
         <span className="player-control-bar-title">{title}</span>
-        {showLiveBadge && <span className="player-control-bar-live">LIVE</span>}
-        <VodLanguageSelect visible={revealed} variant="bar" />
+        {!isVod && <span className="player-control-bar-live">LIVE</span>}
         <button
           type="button"
           className="player-control-bar-btn"
+          data-playbar-btn="mute"
           tabIndex={revealed ? 0 : -1}
           onClick={onMute}
           aria-label={muted ? "Unmute" : "Mute"}
@@ -259,14 +350,10 @@ export function PlayerControlBar({
           <button
             type="button"
             className={`player-control-bar-btn player-control-bar-favorite${isFavorite ? " is-favorite" : ""}`}
-            data-channel-id={String(channel?.id || "")}
+            data-playbar-btn="favorite"
             tabIndex={revealed ? 0 : -1}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              onToggleFavorite();
-            }}
-            aria-label={isFavorite ? "Remove Favorite" : "Add Favorite"}
+            onClick={onToggleFavorite}
+            aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
           >
             {isFavorite ? (
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -282,6 +369,7 @@ export function PlayerControlBar({
             )}
           </button>
         )}
+        {!isVod && (
         <button
           type="button"
           className="player-control-bar-btn"
@@ -299,6 +387,7 @@ export function PlayerControlBar({
             </svg>
           )}
         </button>
+        )}
       </div>
     </div>
   );
@@ -397,19 +486,146 @@ export function VodExitButton({
   );
 }
 
-export function VodLanguageSelect({
-  visible,
-  variant = "overlay"
-}: {
-  visible: boolean;
-  variant?: "bar" | "overlay";
-}) {
+function PlayBarLanguageButton({ revealed }: { revealed: boolean }) {
+  const tracks = useAudioTracks();
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    void refreshAudioTracks();
+    const refresh = () => {
+      void refreshAudioTracks();
+    };
+    window.addEventListener("playerAudioTracks", refresh);
+    window.addEventListener("playerPlaying", refresh);
+    const poll = window.setInterval(refresh, 1000);
+    const stopPoll = window.setTimeout(() => window.clearInterval(poll), 30000);
+    return () => {
+      window.clearInterval(poll);
+      window.clearTimeout(stopPoll);
+      window.removeEventListener("playerAudioTracks", refresh);
+      window.removeEventListener("playerPlaying", refresh);
+      setAudioLanguagePickerOpen(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    setAudioLanguagePickerOpen(open);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const root = document.querySelector(".play-bar-language");
+    const selected =
+      root?.querySelector<HTMLButtonElement>(".vod-language-option.is-selected") ||
+      root?.querySelector<HTMLButtonElement>(".vod-language-option");
+    if (selected) {
+      document.querySelectorAll(".player-control-bar-btn.is-remote-focused").forEach((el) => {
+        el.classList.remove("is-remote-focused");
+      });
+      selected.classList.add("is-remote-focused");
+      selected.focus();
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const key = normalizeRemoteNavKey(event);
+      const panel = document.querySelector(".play-bar-language");
+      const languageBtn = panel?.querySelector<HTMLButtonElement>(".vod-language-btn");
+      if (key === "Escape" || key === "Backspace") {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        if (languageBtn) {
+          document.querySelectorAll(".player-control-bar-btn.is-remote-focused").forEach((el) => {
+            el.classList.remove("is-remote-focused");
+          });
+          languageBtn.classList.add("is-remote-focused");
+          languageBtn.focus();
+        }
+        return;
+      }
+      const options = Array.from(panel?.querySelectorAll<HTMLButtonElement>(".vod-language-option") || []);
+      const index = options.findIndex((option) => option === document.activeElement || option.classList.contains("is-remote-focused"));
+      if (index < 0) return;
+      if (key === "ArrowDown" || key === "ArrowRight") {
+        event.preventDefault();
+        const next = options[Math.min(options.length - 1, index + 1)];
+        options.forEach((option) => option.classList.remove("is-remote-focused"));
+        next?.classList.add("is-remote-focused");
+        next?.focus();
+      } else if (key === "ArrowUp" || key === "ArrowLeft") {
+        event.preventDefault();
+        const next = options[Math.max(0, index - 1)];
+        options.forEach((option) => option.classList.remove("is-remote-focused"));
+        next?.classList.add("is-remote-focused");
+        next?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    const onClose = () => setOpen(false);
+    window.addEventListener("closeAudioLanguagePicker", onClose);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("closeAudioLanguagePicker", onClose);
+    };
+  }, [open]);
+
+  const selected = tracks.find((track) => track.selected) || tracks[0];
+  const selectedLabel = selected?.label || "Audio language";
+
+  return (
+    <span className="play-bar-language">
+      <button
+        type="button"
+        className="player-control-bar-btn vod-language-btn"
+        data-playbar-btn="language"
+        tabIndex={revealed ? 0 : -1}
+        aria-label={selectedLabel}
+        aria-expanded={open}
+        onClick={() => {
+          void refreshAudioTracks();
+          setOpen((current) => !current);
+        }}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4.35h-6.5V2.5H8.85V4.35H2v1.65h11.17C12.46 8.13 11.41 9.83 9.87 11.19c-.94-.83-1.72-1.77-2.32-2.84H5.9c.67 1.4 1.6 2.68 2.76 3.74l-5.05 5.02L5 18.5l5.11-5.07 3.11 3.11.03-.04zM18.5 10.5h-1.84L13.5 18.5h1.84l.75-2h3.82l.75 2H22.5l-4-8zM16.74 15l1.34-3.56L19.42 15h-2.68z"
+          />
+        </svg>
+        <span className="play-bar-language-label">Audio</span>
+      </button>
+      {open && (
+        <div className="vod-language-panel play-bar-language-panel" role="listbox" aria-label="Audio language">
+          {tracks.length === 0 && (
+            <div className="vod-language-empty">Looking for audio tracks…</div>
+          )}
+          {tracks.map((track) => (
+            <button
+              key={track.id}
+              type="button"
+              role="option"
+              aria-selected={track.selected}
+              className={`player-control-bar-btn vod-language-option${track.selected ? " is-selected" : ""}`}
+              onClick={() => {
+                void selectAudioTrack(track.id).then(() => setOpen(false));
+              }}
+            >
+              {track.label}
+              {track.selected ? "  ✓" : ""}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+export function VodLanguageSelect({ visible }: { visible: boolean }) {
   const tracks = useAudioTracks();
   const [open, setOpen] = useState(false);
   const [revealed, setRevealed] = useState(true);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const hideTimerRef = useRef<number | null>(null);
-  const inBar = variant === "bar";
 
   useEffect(() => {
     if (!visible) {
@@ -423,7 +639,11 @@ export function VodLanguageSelect({
     };
     window.addEventListener("playerAudioTracks", refresh);
     window.addEventListener("playerPlaying", refresh);
+    const poll = window.setInterval(refresh, 1000);
+    const stopPoll = window.setTimeout(() => window.clearInterval(poll), 30000);
     return () => {
+      window.clearInterval(poll);
+      window.clearTimeout(stopPoll);
       window.removeEventListener("playerAudioTracks", refresh);
       window.removeEventListener("playerPlaying", refresh);
       setAudioLanguagePickerOpen(false);
@@ -479,6 +699,13 @@ export function VodLanguageSelect({
 
     const onKeyDown = (event: KeyboardEvent) => {
       const key = normalizeRemoteNavKey(event);
+      if (key === "Escape" || key === "Backspace") {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        rootRef.current?.querySelector<HTMLButtonElement>(".vod-language-btn")?.focus();
+        return;
+      }
       const options = Array.from(rootRef.current?.querySelectorAll<HTMLButtonElement>(".vod-language-option") || []);
       const index = options.findIndex((option) => option === document.activeElement);
       if (index < 0) return;
@@ -507,25 +734,27 @@ export function VodLanguageSelect({
   return (
     <div
       ref={rootRef}
-      className={`vod-language-select vod-language-select-${variant}${revealed || open || inBar ? "" : " vod-language-select-hidden"}`}
+      className="vod-language-select"
     >
       <button
         type="button"
-        className={inBar ? "player-control-bar-btn player-control-bar-language" : "vod-language-btn"}
-        tabIndex={visible ? 0 : -1}
+        className="vod-language-btn"
+        data-playbar-btn="language-select"
         aria-label={`Audio language: ${selectedLabel}`}
         aria-expanded={open}
         onClick={() => {
-          if (tracks.length < 2) return;
+          void refreshAudioTracks();
           setOpen((current) => !current);
         }}
         onFocus={() => setRevealed(true)}
       >
-        <LanguageGlobeIcon />
-        {!inBar && <span className="vod-language-btn-label">{selectedLabel}</span>}
+        {selectedLabel}
       </button>
-      {open && tracks.length >= 2 && (
+      {open && (
         <div className="vod-language-panel" role="listbox" aria-label="Audio language">
+          {tracks.length === 0 && (
+            <div className="vod-language-empty">Looking for audio tracks…</div>
+          )}
           {tracks.map((track) => (
             <button
               key={track.id}
