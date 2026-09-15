@@ -1,10 +1,42 @@
 import { PlaylistEntry } from "../playlistStore";
-import { capCapacitorCatalogList } from "../channelStore";
+import { capCapacitorCatalogList, type CatalogCategoryEntry, type Channel, type ContentType } from "../channelStore";
 import { loadM3U } from "./m3uLoader";
-import { loadXtream } from "./xtreamLoader";
+import { loadXtream, loadXtreamCategoryIndex, loadXtreamChannelsForCategory } from "./xtreamLoader";
 import { loadStalker } from "./stalkerLoader";
 
 export type PlaylistLoadScope = "all" | "live" | "movies" | "series";
+
+function scopeToContentType(scope: "live" | "movies" | "series"): ContentType {
+  if (scope === "live") return "live";
+  if (scope === "movies") return "movie";
+  return "series";
+}
+
+export async function loadCategoryIndexForPlaylist(
+  playlist: PlaylistEntry,
+  scope: "live" | "movies" | "series"
+): Promise<CatalogCategoryEntry[]> {
+  if (playlist.type !== "xtream") return [];
+  return loadXtreamCategoryIndex(
+    playlist.data.url,
+    playlist.data.user,
+    playlist.data.pass,
+    scopeToContentType(scope)
+  );
+}
+
+export async function loadCategoryChannelsForPlaylist(
+  playlist: PlaylistEntry,
+  entry: CatalogCategoryEntry
+): Promise<Channel[]> {
+  if (playlist.type !== "xtream") return [];
+  return loadXtreamChannelsForCategory(
+    playlist.data.url,
+    playlist.data.user,
+    playlist.data.pass,
+    entry
+  );
+}
 
 function filterChannelsForScope(channels: any[], scope: PlaylistLoadScope) {
   if (scope === "all") return channels;
