@@ -14,6 +14,7 @@ const exo = fs.readFileSync(
 
 assert.ok(app.includes("nativeBackKey"));
 assert.ok(app.includes("capacitorBackKey"));
+assert.ok(app.includes("isWebOsKeyboardOpen"));
 assert.ok(app.includes('key === "Return" && isWebOsRuntime()'));
 assert.ok(app.includes("dismissActiveTextEntry"));
 assert.ok(!/key === "Backspace" \|\| key === "Return"/.test(app));

@@ -24,6 +24,7 @@ assert.ok(store.includes('contentType === "movie"'));
 assert.ok(!/favoriteEntries\s*=\s*restored/.test(store));
 assert.ok(app.includes("lastFavoriteToggleAtByIdRef"));
 assert.ok(app.includes("nativeBackKey"));
+assert.ok(app.includes("activateFocusedFavoriteControl"));
 assert.ok(app.includes("onToggleFavorite={() => toggleFavoriteChannel(currentChannel)}"));
 
 assert.ok(!platform.includes("return isCap || isAndroidRuntime()"));

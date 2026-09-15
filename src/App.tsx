@@ -252,6 +252,10 @@ function isTextEraseKey(event: KeyboardEvent): boolean {
   return keyCode === 8 || keyCode === 46 || keyCode === 67;
 }
 
+function isWebOsKeyboardOpen(): boolean {
+  return isWebOsRuntime() && document.body?.dataset?.webosKeyboard === "open";
+}
+
 function isHardwareBackKeyEvent(event: KeyboardEvent): boolean {
   const key = String(event.key || "");
   if (
@@ -263,6 +267,7 @@ function isHardwareBackKeyEvent(event: KeyboardEvent): boolean {
   ) {
     return true;
   }
+  // webOS remotes report Back as Return. Elsewhere Return is Enter.
   if (key === "Return" && isWebOsRuntime()) {
     return true;
   }
@@ -433,7 +438,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   const liveReconnectTimerRef = useRef<number | null>(null);
   const liveReconnectAttemptRef = useRef(0);
   const hadLivePlayingRef = useRef(false);
-  const lastFavoriteToggleAtByIdRef = useRef<Map<string, number>>(new Map());
+  const lastFavoriteToggleAtByIdRef = useRef(new Map<string, number>());
   const lastBackHandledAtRef = useRef(0);
   const [posterRestoreId, setPosterRestoreId] = useState<string | null>(null);
   const [seriesPickerFocusEpisodeId, setSeriesPickerFocusEpisodeId] = useState<string | null>(null);
@@ -2397,6 +2402,17 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       const now = Date.now();
       if (now - lastBackHandledAtRef.current < 200) return true;
       lastBackHandledAtRef.current = now;
+
+      if (isWebOsKeyboardOpen()) {
+        return true;
+      }
+
+      const activeField = document.activeElement;
+      if (isTextEntryTarget(activeField)) {
+        activeField.blur();
+        document.body?.focus();
+        return true;
+      }
       
       // Handle Back navigation
       if (vodResumePrompt) {
@@ -2569,6 +2585,10 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return;
       }
 
+      if (isBack && isWebOsKeyboardOpen()) {
+        return;
+      }
+
       if (isBack && isTextEntryActive(e.target)) {
         e.preventDefault();
         dismissActiveTextEntry();
@@ -2587,10 +2607,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
       if (document.querySelector(".series-search-composer") || isRemoteTextComposerOpen()) return;
 
       const navKey = normalizeRemoteNavKey(e);
-      if (navKey === "Enter" && isFavoriteFocusTarget(document.activeElement)) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!e.repeat) activateFocusedRemoteControl(document.activeElement);
+      if (navKey === "Enter" && activateFocusedFavoriteControl(e)) {
         return;
       }
 
@@ -3768,8 +3785,8 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     if (!channel) return;
     const channelId = String(channel.id || "");
     const now = Date.now();
-    const lastAt = lastFavoriteToggleAtByIdRef.current.get(channelId) || 0;
-    if (now - lastAt < 400) return;
+    const lastToggleAt = lastFavoriteToggleAtByIdRef.current.get(channelId) || 0;
+    if (now - lastToggleAt < 400) return;
     lastFavoriteToggleAtByIdRef.current.set(channelId, now);
     setChannelFavoriteRecord(channel, !isFavoriteChannelRecord(channel));
     window.setTimeout(() => {
@@ -6210,6 +6227,17 @@ function isFavoriteFocusTarget(el: Element | null): el is HTMLButtonElement {
       el.classList.contains("series-picker-favorite") ||
       el.classList.contains("movie-details-favorite"))
   );
+}
+
+function activateFocusedFavoriteControl(e: KeyboardEvent): boolean {
+  if (e.defaultPrevented) return false;
+  const el = document.activeElement;
+  if (!isFavoriteFocusTarget(el)) return false;
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+  el.click();
+  return true;
 }
 
 function isSeriesEpisodeSelection(channel: any): boolean {
