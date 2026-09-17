@@ -267,12 +267,10 @@ function isHardwareBackKeyEvent(event: KeyboardEvent): boolean {
   ) {
     return true;
   }
-
   // webOS remotes report Back as Return. Elsewhere Return is Enter.
   if (key === "Return" && isWebOsRuntime()) {
     return true;
   }
-
   const keyCode = Number((event as unknown as { keyCode?: number }).keyCode || 0);
   return keyCode === 4 || keyCode === 27 || keyCode === 461 || keyCode === 10009;
 }
@@ -281,6 +279,7 @@ function isBackKeyEvent(event: KeyboardEvent): boolean {
   if (isHardwareBackKeyEvent(event)) return true;
   const key = String(event.key || "");
   if (key === "Backspace") return true;
+  if (key === "Return" && isWebOsRuntime()) return true;
   const keyCode = Number((event as unknown as { keyCode?: number }).keyCode || 0);
   return keyCode === 8;
 }
@@ -441,7 +440,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
   const hadLivePlayingRef = useRef(false);
   const lastFavoriteToggleAtByIdRef = useRef(new Map<string, number>());
   const lastBackHandledAtRef = useRef(0);
-  const handleBackNavigationRef = useRef<() => boolean>(() => false);
   const [posterRestoreId, setPosterRestoreId] = useState<string | null>(null);
   const [seriesPickerFocusEpisodeId, setSeriesPickerFocusEpisodeId] = useState<string | null>(null);
   const [isMovieDetailsVisible, setIsMovieDetailsVisible] = useState(false);
@@ -2402,7 +2400,7 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
     // Helper to handle Back navigation (shared by webosBackKey and keydown)
     const handleBackNavigation = () => {
       const now = Date.now();
-      if (now - lastBackHandledAtRef.current < 350) return true;
+      if (now - lastBackHandledAtRef.current < 200) return true;
       lastBackHandledAtRef.current = now;
 
       if (isWebOsKeyboardOpen()) {
@@ -2524,7 +2522,6 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         return true;
       }
     };
-    handleBackNavigationRef.current = handleBackNavigation;
 
     // Listen for custom webosBackKey event (dispatched by webOS SDK)
     const handleWebosBack = () => {
@@ -3801,17 +3798,13 @@ export function App({ bootAction = null }: { bootAction?: string | null } = {}) 
         document.querySelector<HTMLButtonElement>(".series-picker-favorite")?.focus();
         return;
       }
-      const match = channelId
-        ? Array.from(
-            document.querySelectorAll<HTMLButtonElement>(
-              ".channel-list-favorite, .channel-icon-favorite, .player-control-bar-favorite"
-            )
-          ).find((btn) => btn.dataset.channelId === channelId)
-        : null;
-      const fallback = document.querySelector<HTMLButtonElement>(
-        ".channel-list-favorite, .channel-icon-favorite, .player-control-bar-favorite, .channel-select-btn, .channel-icon-btn:not([disabled])"
-      );
-      (match || fallback)?.focus();
+      if (!channelId) return;
+      const match = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(
+          ".channel-list-favorite, .channel-icon-favorite, .player-control-bar-favorite, .movie-details-favorite"
+        )
+      ).find((btn) => btn.dataset.channelId === channelId);
+      match?.focus();
     }, 40);
   }
 

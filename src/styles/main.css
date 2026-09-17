@@ -1586,7 +1586,9 @@ body.is-webos select:focus,
 body.is-webos .opening-btn:focus,
 body.is-webos .channel-select-btn:focus,
 body.is-webos .group-select-btn:focus,
-body.is-webos .channel-icon-btn:focus {
+body.is-webos .channel-icon-btn:focus,
+body.is-webos .player-control-bar-language:focus,
+body.is-webos .player-control-bar-btn:focus {
   outline: 3px solid #4da3ff !important;
   outline-offset: 2px;
   box-shadow: 0 0 0 2px rgba(77, 163, 255, 0.35);
@@ -2396,6 +2398,18 @@ body.is-capacitor .opening-btn-quick {
 .channel-icon-favorite.active {
   background: rgba(255, 193, 7, 0.2);
   border-color: rgba(255, 224, 130, 0.5);
+}
+
+.channel-icon-favorite-label {
+  width: auto;
+  min-width: 32px;
+  height: auto;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 .channel-icon-favorite:hover,
